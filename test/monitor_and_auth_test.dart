@@ -1,0 +1,84 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:rail_automation/models/auth_session.dart';
+import 'package:rail_automation/services/monitor_service.dart';
+import 'package:rail_automation/services/pro_service.dart';
+import 'package:rail_automation/services/theme_service.dart';
+import 'package:rail_automation/views/monitor_dashboard_screen.dart';
+
+void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
+  group('AuthSession tests', () {
+    test('Dummy token is identified and rejected by isValid', () {
+      const dummyToken =
+          'eyJhbGciOiJSUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJuYmYiOjE3ODk4ODI4MDYsImV4cCI6MTc4OTkyNjAwNiwiaXNzIjoiaHR0cDovL3RyYWluLWlhbS5zaG9ob3ouY29tIn0.VQjKASL57tJCcHIIwY8BPk5du-ltBjvdHg7TgA6i7GeWw4pWJN8ecmEkvIe1XgCYXYJE1w-Japj9IX8PxKa243_rlFD5E6mP4IL_ad9TcQQcovBSRB6dCU93_JBiGNNa0zOulKAfGGiHZI5iOPN2bQ5wi6WfJ978wBV9gWrsN23jtDUMqvNz4jBs2oqnVuP3eAnxg_lMdx9tGQXc4vfXUhkAUCdGjLCWZkp5HkbCLyo0t7Cd4sl2OOTxe0H-8DYDYEM0u26wKoaEBqC7HvVBtHC2XxYLkdPxGyjfxxGX1Z3wfY6Por_wNqonrh3ybszy85gPxD-y8xXO8wT08S5hZg';
+
+      expect(AuthSession.isDummyToken(dummyToken), true);
+
+      final session = AuthSession(
+        token: dummyToken,
+        deviceId: 'dev123',
+        deviceKey: 'key123',
+      );
+
+      expect(session.isValid, false);
+    });
+
+    test('AuthSession.load() automatically clears dummy token', () async {
+      const dummyToken =
+          'eyJhbGciOiJSUzI1NiIsInR5cCI6ImF0K2p3dCJ9.eyJuYmYiOjE3ODk4ODI4MDYsImV4cCI6MTc4OTkyNjAwNiwiaXNzIjoiaHR0cDovL3RyYWluLWlhbS5zaG9ob3ouY29tIn0.VQjKASL57tJCcHIIwY8BPk5du-ltBjvdHg7TgA6i7GeWw4pWJN8ecmEkvIe1XgCYXYJE1w-Japj9IX8PxKa243_rlFD5E6mP4IL_ad9TcQQcovBSRB6dCU93_JBiGNNa0zOulKAfGGiHZI5iOPN2bQ5wi6WfJ978wBV9gWrsN23jtDUMqvNz4jBs2oqnVuP3eAnxg_lMdx9tGQXc4vfXUhkAUCdGjLCWZkp5HkbCLyo0t7Cd4sl2OOTxe0H-8DYDYEM0u26wKoaEBqC7HvVBtHC2XxYLkdPxGyjfxxGX1Z3wfY6Por_wNqonrh3ybszy85gPxD-y8xXO8wT08S5hZg';
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'br_auth_session',
+        '{"token":"$dummyToken","deviceId":"d","deviceKey":"k","isLoggedIn":true}',
+      );
+
+      final loaded = await AuthSession.load();
+      expect(loaded, isNull);
+
+      final cleared = prefs.getString('br_auth_session');
+      expect(cleared, isNull);
+    });
+  });
+
+  group('Monitor Dashboard and Slider tests', () {
+    testWidgets('MonitorDashboardScreen renders with default interval (120s) without Slider assertion error',
+        (WidgetTester tester) async {
+      final proService = ProService();
+      final themeService = ThemeService();
+      final monitorService = MonitorService(proService: proService);
+
+      // Verify default interval is 120s
+      expect(monitorService.intervalSeconds, 120);
+
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: proService),
+            ChangeNotifierProvider.value(value: themeService),
+            ChangeNotifierProvider.value(value: monitorService),
+          ],
+          child: const MaterialApp(
+            home: MonitorDashboardScreen(),
+          ),
+        ),
+      );
+
+      // Verify the dashboard rendered successfully without assertion crash
+      expect(find.text('টিকেট নোটিফায়ার'), findsOneWidget);
+      expect(find.text('লাইভ নোটিফিকেশন হিস্ট্রি'), findsOneWidget);
+      expect(find.byType(Slider), findsOneWidget);
+
+      final slider = tester.widget<Slider>(find.byType(Slider));
+      expect(slider.value, 120.0);
+      expect(slider.min, 10.0);
+      expect(slider.max, 300.0);
+    });
+  });
+}
