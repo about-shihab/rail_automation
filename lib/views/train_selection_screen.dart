@@ -4,6 +4,7 @@ import '../models/auth_session.dart';
 import '../models/train_trip.dart';
 import '../models/seat_type.dart';
 import '../services/monitor_service.dart';
+import '../services/language_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/seat_badge.dart';
 import 'monitor_dashboard_screen.dart';
@@ -25,30 +26,31 @@ class TrainSelectionScreen extends StatelessWidget {
     this.initialClass,
   });
 
-  void _startMonitoring(
+  Future<void> _startMonitoring(
     BuildContext context, {
     String? trainName,
     String? seatClass,
   }) async {
+    // Capture dependencies before any async gap
+    final nav = Navigator.of(context);
+    final monitor = Provider.of<MonitorService>(context, listen: false);
+    final lang = LanguageService.of(context, listen: false);
+
     final session = await AuthSession.load();
+
     if (session == null || !session.isValid) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             backgroundColor: Colors.redAccent,
-            content: Text('অনুগ্রহ করে প্রথমে লগইন করুন।'),
+            content: Text(lang.t('login_required')),
           ),
         );
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
-        );
+        nav.push(MaterialPageRoute(builder: (_) => const WebviewLoginScreen()));
       }
       return;
     }
 
-    if (!context.mounted) return;
-    final monitor = Provider.of<MonitorService>(context, listen: false);
     monitor.startMonitoring(
       fromCity: fromCity,
       toCity: toCity,
@@ -57,15 +59,13 @@ class TrainSelectionScreen extends StatelessWidget {
       targetSeatClass: seatClass,
     );
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-    );
+    nav.push(MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()));
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final langService = LanguageService.of(context);
     final trains = searchResponse.trains;
 
     return Scaffold(
@@ -76,7 +76,7 @@ class TrainSelectionScreen extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              '$fromCity ➔ $toCity',
+              '$fromCity → $toCity',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -84,30 +84,52 @@ class TrainSelectionScreen extends StatelessWidget {
               ),
             ),
             Text(
-              '$dateOfJourney  •  টিকেট আছে',
+              dateOfJourney,
               style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
           ],
         ),
         actions: [
+          // Language toggle
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+            ),
+            onPressed: langService.toggleLanguage,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                langService.isBangla ? 'EN' : 'বাং',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ),
+          ),
           IconButton(
-            tooltip: 'টিকেট আসলে জানানোর ড্যাশবোর্ড',
+            tooltip: langService.t('radar_dashboard'),
             icon: const Icon(Icons.radar, color: Colors.tealAccent),
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-              );
-            },
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
+            ),
           ),
         ],
       ),
       body: Column(
         children: [
-          // Route & Global Alert banner
+          // ── Summary Banner ────────────────────────────────────────────────
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            color: AppColors.cardBg(isDark),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: AppColors.cardBg(isDark),
+              border: Border(
+                bottom: BorderSide(color: AppColors.cardBorder(isDark)),
+              ),
+            ),
             child: Row(
               children: [
                 Expanded(
@@ -115,53 +137,63 @@ class TrainSelectionScreen extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${trains.length} টি ট্রেন পাওয়া গেছে',
+                        '${trains.length} ${langService.t('trains_found')}',
                         style: TextStyle(
                           color: AppColors.textPrimary(isDark),
                           fontWeight: FontWeight.bold,
-                          fontSize: 14,
+                          fontSize: 15,
                         ),
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        'টিকেট ছাড়ার সাথে সাথে নোটিফিকেশন পেতে আসন নির্বাচন করুন বা সবগুলোর জন্য জানান।',
-                        style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 11),
+                        langService.t('notify_hint'),
+                        style: TextStyle(
+                          color: AppColors.textSecondary(isDark),
+                          fontSize: 11,
+                        ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(width: 12),
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF059669),
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
-                  icon: const Icon(Icons.notifications_active, size: 16, color: Colors.white),
-                  label: const Text(
-                    'সব ট্রেনের জন্য জানান',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                  icon: const Icon(Icons.notifications_active_rounded, size: 16, color: Colors.white),
+                  label: Text(
+                    langService.t('notify_all_trains'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
                   ),
                   onPressed: () => _startMonitoring(context),
                 ),
               ],
             ),
           ),
-          const Divider(height: 1, thickness: 1, color: Color(0xFFE2E8F0)),
-          // Train Cards List
+
+          // ── Train Cards List ──────────────────────────────────────────────
           Expanded(
             child: trains.isEmpty
                 ? Center(
-                    child: Text(
-                      'নির্বাচিত রুটে কোনো ট্রেন পাওয়া যায়নি।',
-                      style: TextStyle(color: AppColors.textMuted(isDark)),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.train_outlined, size: 48, color: AppColors.textMuted(isDark)),
+                        const SizedBox(height: 12),
+                        Text(
+                          langService.t('no_trains_found'),
+                          style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 14),
+                        ),
+                      ],
                     ),
                   )
                 : ListView.builder(
                     padding: const EdgeInsets.all(12),
                     itemCount: trains.length,
                     itemBuilder: (context, index) {
-                      final train = trains[index];
-                      return _buildTrainCard(context, train, isDark);
+                      return _buildTrainCard(context, trains[index], isDark, langService);
                     },
                   ),
           ),
@@ -170,48 +202,57 @@ class TrainSelectionScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTrainCard(BuildContext context, TrainTrip train, bool isDark) {
+  Widget _buildTrainCard(
+    BuildContext context,
+    TrainTrip train,
+    bool isDark,
+    LanguageService lang,
+  ) {
     final hasSeats = train.hasAnyOnlineSeats;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: AppColors.cardBg(isDark),
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: hasSeats
-              ? const Color(0xFF10B981)
-              : AppColors.cardBorder(isDark),
+          color: hasSeats ? const Color(0xFF10B981) : AppColors.cardBorder(isDark),
           width: hasSeats ? 1.5 : 1,
         ),
         boxShadow: isDark
             ? null
             : [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.03),
+                  color: Colors.black.withValues(alpha: 0.04),
                   blurRadius: 8,
-                  offset: const Offset(0, 2),
+                  offset: const Offset(0, 3),
                 ),
               ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Train Header & Times
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        children: [
+          // ── Train Header ──────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+            child: Row(
               children: [
+                // Train icon
                 Container(
-                  padding: const EdgeInsets.all(8),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF0F172A) : const Color(0xFFECFDF5),
-                    borderRadius: BorderRadius.circular(8),
+                    color: hasSeats
+                        ? const Color(0xFFECFDF5)
+                        : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  child: Icon(Icons.train, color: isDark ? Colors.tealAccent : const Color(0xFF059669), size: 24),
+                  child: Icon(
+                    Icons.train_rounded,
+                    color: hasSeats ? const Color(0xFF059669) : AppColors.textMuted(isDark),
+                    size: 22,
+                  ),
                 ),
                 const SizedBox(width: 12),
+                // Train name & times
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -224,23 +265,29 @@ class TrainSelectionScreen extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 3),
                       Row(
                         children: [
                           Text(
                             train.departureDateTime,
-                            style: TextStyle(
-                              color: isDark ? Colors.tealAccent : const Color(0xFF059669),
+                            style: const TextStyle(
+                              color: Color(0xFF059669),
                               fontWeight: FontWeight.w600,
                               fontSize: 13,
                             ),
                           ),
-                          Text(' ➔ ', style: TextStyle(color: AppColors.textMuted(isDark))),
+                          Text(
+                            '  →  ',
+                            style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 12),
+                          ),
                           Text(
                             train.arrivalDateTime,
-                            style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 13),
+                            style: TextStyle(
+                              color: AppColors.textSecondary(isDark),
+                              fontSize: 13,
+                            ),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Text(
                             '(${train.travelTime})',
                             style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11),
@@ -250,24 +297,26 @@ class TrainSelectionScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                // Total seats badge
+                // Seat count badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: hasSeats
-                        ? (isDark ? const Color(0xFF065F46) : const Color(0xFFECFDF5))
-                        : (isDark ? Colors.red.withValues(alpha: 0.15) : const Color(0xFFFEE2E2)),
-                    borderRadius: BorderRadius.circular(6),
+                        ? const Color(0xFFECFDF5)
+                        : (isDark ? Colors.red.withValues(alpha: 0.1) : const Color(0xFFFEE2E2)),
+                    borderRadius: BorderRadius.circular(8),
                     border: Border.all(
-                      color: hasSeats ? const Color(0xFF10B981) : Colors.redAccent.withValues(alpha: 0.3),
+                      color: hasSeats
+                          ? const Color(0xFF10B981)
+                          : Colors.redAccent.withValues(alpha: 0.4),
                     ),
                   ),
                   child: Text(
-                    hasSeats ? '${train.totalOnlineSeats} টি আসন আছে' : 'আসন খালি নেই',
+                    hasSeats
+                        ? '${train.totalOnlineSeats} ${lang.t('seats_available')}'
+                        : lang.t('no_seats'),
                     style: TextStyle(
-                      color: hasSeats
-                          ? (isDark ? const Color(0xFF6EE7B7) : const Color(0xFF047857))
-                          : Colors.redAccent,
+                      color: hasSeats ? const Color(0xFF047857) : Colors.redAccent,
                       fontWeight: FontWeight.bold,
                       fontSize: 11,
                     ),
@@ -275,66 +324,79 @@ class TrainSelectionScreen extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Divider(color: AppColors.cardBorder(isDark), height: 1),
-            const SizedBox(height: 10),
-            // Coach / Seat Classes list
-            Wrap(
+          ),
+
+          // ── Seat Badges ───────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Wrap(
               spacing: 8,
               runSpacing: 8,
               children: train.seatTypes.map((seat) {
                 return SeatBadge(
                   seat: seat,
-                  onTap: () {
-                    _showMonitorOptionSheet(context, train, seat);
-                  },
+                  onTap: () => _showMonitorOptionSheet(context, train, seat, lang),
                 );
               }).toList(),
             ),
-            const SizedBox(height: 12),
-            // Action Buttons Row
-            Row(
+          ),
+          const SizedBox(height: 10),
+
+          // ── Action Button ─────────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: isDark ? Colors.tealAccent : const Color(0xFF059669),
-                    side: BorderSide(color: isDark ? Colors.tealAccent : const Color(0xFF059669)),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    foregroundColor: const Color(0xFF059669),
+                    side: const BorderSide(color: Color(0xFF059669)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                   icon: const Icon(Icons.notifications_active_outlined, size: 16),
-                  label: const Text('টিকেট আসলে জানান', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  label: Text(
+                    lang.t('notify_this_train'),
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
                   onPressed: () => _startMonitoring(context, trainName: train.tripNumber),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  void _showMonitorOptionSheet(BuildContext context, TrainTrip train, SeatType seat) {
+  void _showMonitorOptionSheet(
+    BuildContext context,
+    TrainTrip train,
+    SeatType seat,
+    LanguageService lang,
+  ) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.cardBg(isDark),
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(22),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Sheet title
             Row(
               children: [
-                const Icon(Icons.notifications_active, color: Color(0xFF059669)),
-                const SizedBox(width: 8),
+                const Icon(Icons.notifications_active_rounded, color: Color(0xFF059669)),
+                const SizedBox(width: 10),
                 Text(
-                  'টিকেট আসলে জানান',
+                  lang.t('monitor_sheet_title'),
                   style: TextStyle(
                     color: AppColors.textPrimary(isDark),
                     fontSize: 18,
@@ -343,31 +405,54 @@ class TrainSelectionScreen extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 14),
+
+            // Info card
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(12),
                 border: Border.all(color: AppColors.cardBorder(isDark)),
               ),
-              child: Text(
-                'ট্রেন: ${train.tripNumber}\nশ্রেণি: ${seat.displayName} (${seat.type})\nভাড়া: ৳${seat.fare} | বর্তমান আসন: ${seat.seatCounts.online}\n\nসিট খালি হওয়ার সাথে সাথে ফোনে অডিবল অ্যালার্ম ও নোটিফিকেশন দেওয়া হবে।',
-                style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 13, height: 1.4),
+              child: Column(
+                children: [
+                  _buildInfoRow(lang.t('train_label'), train.tripNumber, isDark),
+                  const SizedBox(height: 6),
+                  _buildInfoRow(lang.t('class_label'), '${seat.displayName} (${seat.type})', isDark),
+                  const SizedBox(height: 6),
+                  _buildInfoRow(lang.t('fare_label'), '৳${seat.fare}', isDark),
+                  const SizedBox(height: 6),
+                  _buildInfoRow(
+                    lang.t('current_seats'),
+                    seat.seatCounts.online.toString(),
+                    isDark,
+                    valueColor: seat.seatCounts.online > 0 ? const Color(0xFF059669) : Colors.redAccent,
+                  ),
+                ],
               ),
             ),
+            const SizedBox(height: 8),
+            Text(
+              lang.t('monitor_sheet_desc'),
+              style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12, height: 1.4),
+            ),
             const SizedBox(height: 20),
+
+            // Start Alert button
             SizedBox(
               width: double.infinity,
+              height: 50,
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   backgroundColor: const Color(0xFF059669),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  elevation: 2,
                 ),
-                icon: const Icon(Icons.alarm_on, color: Colors.white),
+                icon: const Icon(Icons.alarm_on_rounded, color: Colors.white),
                 label: Text(
-                  'এই ট্রেনের ${seat.type} আসন আসলে জানান',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                  '${lang.t('start_alert_for')}: ${seat.type}',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14),
                 ),
                 onPressed: () {
                   Navigator.pop(ctx);
@@ -380,16 +465,19 @@ class TrainSelectionScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 10),
+
+            // Cancel button
             SizedBox(
               width: double.infinity,
+              height: 44,
               child: OutlinedButton(
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppColors.textSecondary(isDark),
                   side: BorderSide(color: AppColors.cardBorder(isDark)),
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
-                child: const Text('বাতিল'),
                 onPressed: () => Navigator.pop(ctx),
+                child: Text(lang.t('cancel')),
               ),
             ),
           ],
@@ -397,4 +485,22 @@ class TrainSelectionScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildInfoRow(String label, String value, bool isDark, {Color? valueColor}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(label, style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 12)),
+        Text(
+          value,
+          style: TextStyle(
+            color: valueColor ?? AppColors.textPrimary(isDark),
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+      ],
+    );
+  }
 }
+

@@ -1,406 +1,505 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
-import '../services/pro_service.dart';
 import '../services/theme_service.dart';
+import '../services/language_service.dart';
 import '../utils/app_theme.dart';
+import 'booking_screen.dart';
+import 'search_screen.dart';
 import 'webview_login_screen.dart';
 
-class MonitorDashboardScreen extends StatelessWidget {
+class MonitorDashboardScreen extends StatefulWidget {
   const MonitorDashboardScreen({super.key});
 
   @override
+  State<MonitorDashboardScreen> createState() => _MonitorDashboardScreenState();
+}
+
+class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
+    with TickerProviderStateMixin {
+  late final AnimationController _pulseController = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2200),
+  )..repeat();
+
+  late final AnimationController _radarController = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  )..repeat();
+
+  bool _isSoundEnabled = true;
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _radarController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final proService = Provider.of<ProService>(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final themeService = Provider.of<ThemeService>(context);
+    final langService = LanguageService.of(context);
+    final monitor = context.watch<MonitorService>();
 
-    return Consumer<MonitorService>(
-      builder: (context, monitor, child) {
-        return Scaffold(
-          backgroundColor: AppColors.scaffoldBg(isDark),
-          appBar: AppBar(
-            backgroundColor: AppColors.appBarGreen,
-            elevation: 2,
-            title: const Text(
-              'টিকেট নোটিফায়ার',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.bold,
+    final active = monitor.isMonitoring;
+    final hasSearch = monitor.dateOfJourney.isNotEmpty;
+    final authError = monitor.lastError != null &&
+        RegExp('login|logged|auth|401|session', caseSensitive: false)
+            .hasMatch(monitor.lastError!);
+
+    final results = monitor.lastTrains.where(
+      (train) =>
+          monitor.targetTrain == null || train.tripNumber == monitor.targetTrain,
+    );
+
+    int totalAvailableOnline = 0;
+    for (final train in results) {
+      for (final seat in train.seatTypes) {
+        if (monitor.targetSeatClass == null || monitor.targetSeatClass == seat.type) {
+          totalAvailableOnline += seat.seatCounts.online;
+        }
+      }
+    }
+
+    return Scaffold(
+      backgroundColor: AppColors.scaffoldBg(isDark),
+      appBar: AppBar(
+        backgroundColor: AppColors.appBarGreen,
+        elevation: 2,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(6),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(8),
               ),
+              child: const Icon(Icons.radar, color: Colors.tealAccent, size: 20),
             ),
-            actions: [
-              IconButton(
-                tooltip: isDark ? 'লাইট মোড চালু করুন' : 'ডার্ক মোড চালু করুন',
-                icon: Icon(
-                  isDark ? Icons.light_mode : Icons.dark_mode,
-                  color: Colors.white,
-                ),
-                onPressed: themeService.toggleTheme,
-              ),
-              IconButton(
-                tooltip: 'লগ মুছুন',
-                icon: const Icon(Icons.delete_outline, color: Colors.white70),
-                onPressed: monitor.clearLogs,
-              ),
-              IconButton(
-                tooltip: 'টেস্ট নোটিফিকেশন',
-                icon: const Icon(Icons.notifications_active, color: Colors.amberAccent),
-                onPressed: () {
-                  NotificationService().testNotification();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('টেস্ট এলার্ট পাঠানো হয়েছে! নোটিফিকেশন বার চেক করুন।'),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-          body: Column(
-            children: [
-              // 1-Hour Free Limit vs Pro Cloud Timer Banner
-              _buildTimerBanner(context, monitor, proService, isDark),
-
-              // Active Status Header Card
-              _buildStatusCard(context, monitor, proService, isDark),
-
-              // Polling Interval & Control Bar
-              _buildIntervalControl(context, monitor, isDark),
-
-              // Error Banner (if any)
-              _buildErrorBanner(context, monitor, isDark),
-
-              // Activity Log Header
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'লাইভ নোটিফিকেশন হিস্ট্রি',
-                      style: TextStyle(
-                        color: AppColors.textSecondary(isDark),
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    Text(
-                      '${monitor.logs.length} ইভেন্ট',
-                      style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Logs List
-              Expanded(
-                child: monitor.logs.isEmpty
-                    ? Center(
-                        child: Text(
-                          'এখনো কোনো অনুসন্ধান কার্যক্রম শুরু হয়নি। নিচের বাটনে চাপুন।',
-                          style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 13),
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        itemCount: monitor.logs.length,
-                        itemBuilder: (context, index) {
-                          final log = monitor.logs[index];
-                          return _buildLogItem(log, isDark);
-                        },
-                      ),
-              ),
-            ],
-          ),
-          bottomNavigationBar: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.cardBg(isDark),
-              border: Border(top: BorderSide(color: AppColors.cardBorder(isDark))),
-            ),
-            child: Row(
+            const SizedBox(width: 10),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: monitor.isMonitoring
-                          ? const Color(0xFFDC2626)
-                          : const Color(0xFF059669),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
+                Text(
+                  langService.t('ticket_radar'),
+                  style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+                Text(
+                  active ? langService.t('searching_active') : langService.t('radar_paused'),
+                  style: TextStyle(
+                    color: active ? const Color(0xFF6EE7B7) : Colors.white70,
+                    fontSize: 11,
+                    fontWeight: active ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          // Language toggle
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+            ),
+            onPressed: langService.toggleLanguage,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                langService.isBangla ? 'EN' : 'বাং',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ),
+          ),
+          // Audio Mute Toggle
+          IconButton(
+            tooltip: _isSoundEnabled ? langService.t('sound_alert') : 'Muted',
+            icon: Icon(
+              _isSoundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+              color: _isSoundEnabled ? Colors.amberAccent : Colors.white60,
+            ),
+            onPressed: () {
+              setState(() => _isSoundEnabled = !_isSoundEnabled);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  duration: const Duration(seconds: 1),
+                  content: Text(
+                    _isSoundEnabled
+                        ? (langService.isBangla ? 'শব্দ এলার্ট সক্রিয়' : 'Sound alert enabled')
+                        : (langService.isBangla ? 'শব্দ এলার্ট বন্ধ' : 'Sound alert muted'),
+                  ),
+                ),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: themeService.isDarkMode ? 'লাইট মোড' : 'ডার্ক মোড',
+            icon: Icon(
+              themeService.isDarkMode ? Icons.light_mode : Icons.dark_mode,
+              color: Colors.white,
+            ),
+            onPressed: themeService.toggleTheme,
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          children: [
+            // 1. Radar Command Center Card
+            _buildRadarHeroCard(
+              context: context,
+              active: active,
+              authError: authError,
+              monitor: monitor,
+              langService: langService,
+              isDark: isDark,
+              totalSeats: totalAvailableOnline,
+            ),
+            const SizedBox(height: 16),
+
+            // 2. Active Route & Target Train HUD
+            if (hasSearch)
+              _buildJourneyHUD(
+                context: context,
+                monitor: monitor,
+                langService: langService,
+                isDark: isDark,
+              ),
+
+            // 3. Auth error banner if any
+            if (authError) ...[
+              const SizedBox(height: 14),
+              _buildAuthErrorBanner(context, langService),
+            ],
+
+            const SizedBox(height: 18),
+
+            // 4. Live Availability Matrix & Train Cards
+            _buildLiveResultsSection(
+              context: context,
+              monitor: monitor,
+              results: results,
+              langService: langService,
+              isDark: isDark,
+              totalSeats: totalAvailableOnline,
+            ),
+
+            const SizedBox(height: 16),
+
+            // 6. Quick Radar Controls Strip
+            _buildControlsStrip(
+              context: context,
+              active: active,
+              hasSearch: hasSearch,
+              monitor: monitor,
+              langService: langService,
+              isDark: isDark,
+            ),
+
+            const SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRadarHeroCard({
+    required BuildContext context,
+    required bool active,
+    required bool authError,
+    required MonitorService monitor,
+    required LanguageService langService,
+    required bool isDark,
+    required int totalSeats,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF064E3B), const Color(0xFF0F766E), const Color(0xFF134E4A)]
+              : [const Color(0xFF047857), const Color(0xFF059669), const Color(0xFF0D9488)],
+        ),
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withValues(alpha: isDark ? 0.2 : 0.25),
+            blurRadius: 28,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 22),
+      child: Column(
+        children: [
+          // Radar Visual
+          SizedBox(
+            height: 140,
+            width: double.infinity,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Animated Radar sweep & ripples
+                AnimatedBuilder(
+                  animation: _radarController,
+                  builder: (_, child) {
+                    return CustomPaint(
+                      size: const Size(140, 140),
+                      painter: _RadarSweepPainter(
+                        progress: _radarController.value,
+                        active: active,
                       ),
-                      elevation: 2,
-                    ),
-                    icon: Icon(
-                      monitor.isMonitoring ? Icons.stop : Icons.notifications_active,
-                      color: Colors.white,
-                    ),
-                    label: Text(
-                      monitor.isMonitoring
-                          ? 'এলার্ট বন্ধ করুন'
-                          : 'টিকেট আসলে জানাবেন (চালু করুন)',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontWeight: FontWeight.bold,
+                    );
+                  },
+                ),
+                // Center train badge with pulsing ring
+                AnimatedBuilder(
+                  animation: _pulseController,
+                  builder: (_, child) {
+                    final scale = active ? 1.0 + 0.08 * math.sin(_pulseController.value * 2 * math.pi) : 1.0;
+                    return Transform.scale(
+                      scale: scale,
+                      child: Container(
+                        width: 68,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: totalSeats > 0
+                              ? const Color(0xFFFDE68A)
+                              : (active ? const Color(0xFFD1FAE5) : const Color(0xFFE2E8F0)),
+                          boxShadow: [
+                            BoxShadow(
+                              color: (totalSeats > 0 ? Colors.amber : const Color(0xFF10B981))
+                                  .withValues(alpha: active ? 0.6 : 0.2),
+                              blurRadius: active ? 16 : 4,
+                              spreadRadius: active ? 3 : 0,
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          totalSeats > 0 ? Icons.celebration_rounded : Icons.train_rounded,
+                          size: 34,
+                          color: totalSeats > 0
+                              ? const Color(0xFFB45309)
+                              : (active ? const Color(0xFF065F46) : const Color(0xFF475569)),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+                // Status Chip on Radar
+                Positioned(
+                  bottom: 0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: active ? const Color(0xFF34D399) : Colors.white24,
+                        width: 1.2,
                       ),
                     ),
-                    onPressed: () {
-                      if (monitor.isMonitoring) {
-                        monitor.stopMonitoring();
-                      } else {
-                        if (monitor.isLimitReached && !proService.isPro) {
-                          _showProUpgradeModal(context, proService, isDark);
-                          return;
-                        }
-                        monitor.startMonitoring(
-                          fromCity: monitor.fromCity,
-                          toCity: monitor.toCity,
-                          dateOfJourney: monitor.dateOfJourney,
-                          targetTrain: monitor.targetTrain,
-                          targetSeatClass: monitor.targetSeatClass,
-                        );
-                      }
-                    },
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: active ? const Color(0xFF34D399) : Colors.amber,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          active
+                              ? (langService.isBangla ? 'রাডার সচল' : 'RADAR ACTIVE')
+                              : (langService.isBangla ? 'রাডার স্থগিত' : 'RADAR PAUSED'),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
             ),
           ),
-        );
-      },
-    );
-  }
+          const SizedBox(height: 18),
 
-  Widget _buildTimerBanner(
-    BuildContext context,
-    MonitorService monitor,
-    ProService proService,
-    bool isDark,
-  ) {
-    final isPro = proService.isPro;
-    final isExpired = monitor.isLimitReached;
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isPro
-            ? (isDark ? const Color(0xFF78350F).withValues(alpha: 0.3) : const Color(0xFFFEF3C7))
-            : (isExpired
-                ? (isDark ? Colors.red.withValues(alpha: 0.2) : const Color(0xFFFEE2E2))
-                : (isDark ? AppColors.cardBg(true) : const Color(0xFFF0FDF4))),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isPro
-              ? Colors.amber
-              : (isExpired ? Colors.redAccent : const Color(0xFF059669).withValues(alpha: 0.3)),
-        ),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              Icon(
-                isPro
-                    ? Icons.cloud_done
-                    : (isExpired ? Icons.timer_off : Icons.timer),
-                color: isPro
-                    ? Colors.amber
-                    : (isExpired ? Colors.redAccent : const Color(0xFF059669)),
-                size: 20,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isPro
-                          ? '২৪/৭ ক্লাউড সার্ভার নোটিফিকেশন (প্রো)'
-                          : (isExpired
-                              ? '১ ঘণ্টার ফ্রি লিমিট শেষ হয়েছে!'
-                              : 'ফ্রি টিয়ার: ১ ঘণ্টার নোটিফিকেশন লিমিট'),
-                      style: TextStyle(
-                        color: isPro
-                            ? (isDark ? Colors.amber : const Color(0xFFB45309))
-                            : (isExpired ? Colors.redAccent : (isDark ? Colors.white : const Color(0xFF0F172A))),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                    Text(
-                      isPro
-                          ? 'মোবাইল বন্ধ থাকলেও ব্যাকগ্রাউন্ডে চেক করবে'
-                          : monitor.remainingTimeFormatted,
-                      style: TextStyle(
-                        color: isDark ? Colors.white70 : const Color(0xFF475569),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isPro)
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: isExpired ? Colors.redAccent : Colors.amber,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-                  ),
-                  onPressed: () => _showProUpgradeModal(context, proService, isDark),
-                  child: Text(
-                    isExpired ? 'আনলক প্রো' : 'গো প্রো',
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                  ),
-                ),
-            ],
-          ),
-          if (!isPro) ...[
-            const SizedBox(height: 8),
-            LinearProgressIndicator(
-              value: monitor.freeProgressFraction,
-              backgroundColor: isDark ? Colors.white12 : const Color(0xFFE2E8F0),
-              color: isExpired ? Colors.redAccent : const Color(0xFF10B981),
-              minHeight: 4,
+          // Title & Status
+          Text(
+            totalSeats > 0
+                ? (langService.isBangla ? '🎉 টিকিট পাওয়া গেছে!' : '🎉 Tickets Available Now!')
+                : authError
+                    ? langService.t('auth_expired')
+                    : active
+                        ? (langService.isBangla ? 'সার্ভারে টিকিট খোঁজা হচ্ছে' : 'Scanning Railway Servers...')
+                        : (langService.isBangla ? 'অনুসন্ধান বিরতিতে রয়েছে' : 'Radar is Paused'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
             ),
-          ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            totalSeats > 0
+                ? (langService.isBangla
+                    ? 'মোট $totalSeats টি আসন খালি পাওয়া গেছে। দ্রুত বুকিং করুন!'
+                    : 'Total $totalSeats seats found vacant. Book immediately!')
+                : (langService.isBangla
+                    ? 'আসন খালি হওয়ামাত্র আপনার ফোনে শব্দ ও নোটিফিকেশন আসবে।'
+                    : 'Instant alarm and notification will ring the moment a seat opens.'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xFFD1FAE5),
+              fontSize: 13,
+              height: 1.4,
+            ),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildStatusCard(
-    BuildContext context,
-    MonitorService monitor,
-    ProService proService,
-    bool isDark,
-  ) {
-    final isActive = monitor.isMonitoring;
-
+  Widget _buildJourneyHUD({
+    required BuildContext context,
+    required MonitorService monitor,
+    required LanguageService langService,
+    required bool isDark,
+  }) {
     return Container(
-      margin: const EdgeInsets.all(14),
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: AppColors.cardBg(isDark),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isActive ? const Color(0xFF10B981) : AppColors.cardBorder(isDark),
-          width: isActive ? 1.5 : 1,
-        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Container(
-                width: 12,
-                height: 12,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isActive ? const Color(0xFF10B981) : Colors.grey,
-                  boxShadow: isActive
-                      ? [
-                          BoxShadow(
-                            color: const Color(0xFF10B981).withValues(alpha: 0.6),
-                            blurRadius: 10,
-                            spreadRadius: 2,
-                          ),
-                        ]
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Text(
-                isActive ? 'টিকেট খোঁজ করা হচ্ছে' : 'এলার্ট সাময়িক বন্ধ',
-                style: TextStyle(
-                  color: isActive
-                      ? (isDark ? const Color(0xFF34D399) : const Color(0xFF059669))
-                      : AppColors.textMuted(isDark),
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                  fontSize: 13,
-                ),
-              ),
-              const Spacer(),
-              if (monitor.lastCheckedAt != null)
-                Text(
-                  'সর্বশেষ: ${_formatTime(monitor.lastCheckedAt!)}',
-                  style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Divider(color: AppColors.cardBorder(isDark), height: 1),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              const Icon(Icons.route, color: Color(0xFF059669), size: 18),
+              const Icon(Icons.route_rounded, color: AppColors.primary, size: 20),
               const SizedBox(width: 8),
               Text(
-                '${monitor.fromCity} ➔ ${monitor.toCity}',
+                langService.t('active_route'),
                 style: TextStyle(
                   color: AppColors.textPrimary(isDark),
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
               ),
-              const SizedBox(width: 8),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF059669).withValues(alpha: isDark ? 0.2 : 0.1),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  monitor.dateOfJourney.isNotEmpty ? monitor.dateOfJourney : 'সেট করা নেই',
-                  style: const TextStyle(color: Color(0xFF059669), fontSize: 11, fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Text(
-                'উদ্দিষ্ট ট্রেন: ',
-                style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12),
-              ),
-              Text(
-                monitor.targetTrain ?? 'সব ট্রেন',
-                style: const TextStyle(
-                  color: Color(0xFFD97706),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
-                ),
-              ),
               const Spacer(),
-              Text(
-                'শ্রেণী: ',
-                style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12),
-              ),
-              Text(
-                monitor.targetSeatClass ?? 'যে কোনো',
-                style: const TextStyle(
-                  color: Color(0xFFD97706),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.timer_outlined, size: 14, color: AppColors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${langService.t('check_interval')}: 15s',
+                      style: const TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
+
+          // Route display with arrow
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildStatMetric('মোট চেক', '${monitor.totalChecksCount}', isDark: isDark),
-              _buildStatMetric('আসন পাওয়া গেছে', '${monitor.seatsFoundCount}', isAccent: true, isDark: isDark),
-              _buildStatMetric('অটো-চেক', '২ মি (${monitor.secondsUntilNextCheck}s)', isDark: isDark),
+              Expanded(
+                child: Text(
+                  monitor.fromCity,
+                  style: TextStyle(
+                    color: AppColors.textPrimary(isDark),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.arrow_forward_rounded, color: AppColors.primary, size: 20),
+              ),
+              Expanded(
+                child: Text(
+                  monitor.toCity,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    color: AppColors.textPrimary(isDark),
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+
+          // Detail Chips
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildHUDChip(
+                icon: Icons.calendar_today_rounded,
+                text: monitor.dateOfJourney,
+                isDark: isDark,
+              ),
+              _buildHUDChip(
+                icon: Icons.train_rounded,
+                text: monitor.targetTrain ?? langService.t('all_trains'),
+                isDark: isDark,
+              ),
+              _buildHUDChip(
+                icon: Icons.airline_seat_recline_extra_rounded,
+                text: monitor.targetSeatClass ?? (langService.isBangla ? 'যেকোনো আসন' : 'Any Class'),
+                isDark: isDark,
+              ),
             ],
           ),
         ],
@@ -408,256 +507,463 @@ class MonitorDashboardScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildStatMetric(String label, String value, {bool isAccent = false, required bool isDark}) {
+
+  Widget _buildHUDChip({required IconData icon, required String text, required bool isDark}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.inputFill(isDark),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.inputBorder(isDark)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: AppColors.primary),
+          const SizedBox(width: 6),
+          Text(
+            text,
+            style: TextStyle(
+              color: AppColors.textPrimary(isDark),
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAuthErrorBanner(BuildContext context, LanguageService langService) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.redAccent),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.redAccent),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              langService.t('auth_expired'),
+              style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600, fontSize: 13),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const WebviewLoginScreen(clearSession: true)),
+            ),
+            child: Text(
+              langService.t('relogin'),
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLiveResultsSection({
+    required BuildContext context,
+    required MonitorService monitor,
+    required Iterable results,
+    required LanguageService langService,
+    required bool isDark,
+    required int totalSeats,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.event_seat_rounded, color: AppColors.primary, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              langService.t('available_seats'),
+              style: TextStyle(
+                color: AppColors.textPrimary(isDark),
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const Spacer(),
+            if (totalSeats > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF059669),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  '$totalSeats ${langService.isBangla ? "টি আসন" : "seats"}',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+
+        if (totalSeats == 0)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: AppColors.cardBg(isDark),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppColors.cardBorder(isDark)),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.radar_rounded, size: 36, color: AppColors.primary),
+                const SizedBox(height: 12),
+                Text(
+                  langService.t('no_seats_yet'),
+                  style: TextStyle(
+                    color: AppColors.textPrimary(isDark),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  langService.isBangla
+                      ? 'রাডার প্রতি ১৫ সেকেন্ড পর পর স্বয়ংক্রিয়ভাবে নতুন আসন খুঁজছে...'
+                      : 'Radar is auto-scanning every 15s for cancellations...',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+
+        for (final train in results)
+          for (final seat in train.seatTypes)
+            if (seat.seatCounts.online > 0 &&
+                (monitor.targetSeatClass == null || monitor.targetSeatClass == seat.type))
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.cardBg(isDark),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: const Color(0xFF10B981), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0xFFD1FAE5),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.confirmation_number_rounded, color: Color(0xFF047857), size: 24),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            train.tripNumber,
+                            style: TextStyle(
+                              color: AppColors.textPrimary(isDark),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${seat.displayName} • ${seat.seatCounts.online} ${langService.isBangla ? "আসন বাকি" : "seats left"}',
+                            style: const TextStyle(
+                              color: Color(0xFF059669),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF059669),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      ),
+                      icon: const Icon(Icons.shopping_bag_outlined, color: Colors.white, size: 16),
+                      label: Text(
+                        langService.t('book_now'),
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => BookingScreen(
+                            url: NotificationService.bookingUrl(
+                              monitor.fromCity,
+                              monitor.toCity,
+                              monitor.dateOfJourney,
+                              seat.type,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+      ],
+    );
+  }
+
+  Widget _buildControlsStrip({
+    required BuildContext context,
+    required bool active,
+    required bool hasSearch,
+    required MonitorService monitor,
+    required LanguageService langService,
+    required bool isDark,
+  }) {
     return Column(
       children: [
-        Text(
-          value,
-          style: TextStyle(
-            color: isAccent
-                ? const Color(0xFF10B981)
-                : AppColors.textPrimary(isDark),
-            fontWeight: FontWeight.bold,
-            fontSize: 17,
+        // ── Active Notifier Warning Banner ───────────────────────────────────
+        if (active)
+          Container(
+            margin: const EdgeInsets.only(bottom: 14),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFEF3C7),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: const Color(0xFFF59E0B), width: 1.4),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, color: Color(0xFFD97706), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    langService.isBangla
+                        ? 'নতুন রুট খুঁজলে এই নোটিফায়ার বন্ধ হয়ে যাবে।'
+                        : 'Starting a new search will stop the current notifier.',
+                    style: const TextStyle(
+                      color: Color(0xFF92400E),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          label,
-          style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11),
+        // ── Stop Button ──────────────────────────────────────────────────────
+        if (active)
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.amberAccent, width: 1.5),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              icon: const Icon(Icons.stop_circle_outlined, color: Colors.amberAccent),
+              label: Text(
+                langService.t('stop_monitoring'),
+                style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              onPressed: monitor.stopMonitoring,
+            ),
+          ),
+        // ── Resume Button ────────────────────────────────────────────────────
+        if (!active && hasSearch)
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF059669),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                elevation: 3,
+              ),
+              icon: const Icon(Icons.play_circle_outline, color: Colors.white),
+              label: Text(
+                langService.t('resume_monitoring'),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              onPressed: () => monitor.startMonitoring(
+                fromCity: monitor.fromCity,
+                toCity: monitor.toCity,
+                dateOfJourney: monitor.dateOfJourney,
+                targetTrain: monitor.targetTrain,
+                targetSeatClass: monitor.targetSeatClass,
+              ),
+            ),
+          ),
+        const SizedBox(height: 10),
+        // ── New Search Button (with confirmation when active) ─────────────
+        SizedBox(
+          width: double.infinity,
+          height: 46,
+          child: TextButton.icon(
+            style: TextButton.styleFrom(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: BorderSide(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                ),
+              ),
+            ),
+            icon: const Icon(Icons.search_rounded, size: 18),
+            label: Text(
+              langService.isBangla ? 'নতুন যাত্রা অনুসন্ধান করুন' : 'Search Another Route',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            onPressed: () => active
+                ? _showNewSearchConfirmDialog(context, monitor, langService)
+                : Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SearchScreen()),
+                  ),
+          ),
         ),
       ],
     );
   }
 
-  Widget _buildIntervalControl(BuildContext context, MonitorService monitor, bool isDark) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 14),
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.cardBg(isDark),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.cardBorder(isDark)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.timer, color: Color(0xFF059669), size: 20),
-          const SizedBox(width: 8),
-          Text(
-            'চেক ব্যবধান: ${monitor.intervalSeconds}s',
-            style: TextStyle(color: AppColors.textPrimary(isDark), fontSize: 13),
-          ),
-          Expanded(
-            child: Slider(
-              value: monitor.intervalSeconds.toDouble().clamp(10.0, 300.0),
-              min: 10,
-              max: 300,
-              divisions: 29,
-              activeColor: const Color(0xFF059669),
-              inactiveColor: isDark ? Colors.white24 : const Color(0xFFCBD5E1),
-              onChanged: (val) {
-                monitor.setInterval(val.round());
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildErrorBanner(BuildContext context, MonitorService monitor, bool isDark) {
-    if (monitor.lastError == null || monitor.lastError!.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    final isAuthError = monitor.lastError!.toLowerCase().contains('login') ||
-        monitor.lastError!.toLowerCase().contains('auth') ||
-        monitor.lastError!.contains('401');
-
-    return Container(
-      margin: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.red.withValues(alpha: 0.15) : const Color(0xFFFEE2E2),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 20),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              monitor.lastError!,
-              style: const TextStyle(color: Colors.redAccent, fontSize: 12),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          if (isAuthError)
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF059669),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              ),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
-                );
-              },
-              child: const Text('লগইন করুন', style: TextStyle(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold)),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLogItem(MonitorLog log, bool isDark) {
-    final color = log.isAlert
-        ? const Color(0xFF10B981)
-        : (log.isError
-            ? Colors.redAccent
-            : AppColors.textPrimary(isDark));
-    final bgColor = log.isAlert
-        ? const Color(0xFF059669).withValues(alpha: isDark ? 0.25 : 0.1)
-        : (log.isError
-            ? Colors.red.withValues(alpha: isDark ? 0.1 : 0.05)
-            : (isDark ? Colors.transparent : Colors.white));
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 6),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: log.isAlert
-              ? const Color(0xFF10B981)
-              : (log.isError ? Colors.redAccent.withValues(alpha: 0.3) : AppColors.cardBorder(isDark)),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _formatTime(log.time),
-            style: TextStyle(
-              color: AppColors.textMuted(isDark),
-              fontSize: 11,
-              fontFamily: 'monospace',
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              log.message,
-              style: TextStyle(
-                color: color,
-                fontSize: 12,
-                fontWeight: log.isAlert ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showProUpgradeModal(BuildContext context, ProService proService, bool isDark) {
-    showModalBottomSheet(
+  Future<void> _showNewSearchConfirmDialog(
+    BuildContext context,
+    MonitorService monitor,
+    LanguageService langService,
+  ) async {
+    final isBangla = langService.isBangla;
+    // Capture navigator BEFORE any async gap.
+    final nav = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
       context: context,
-      backgroundColor: AppColors.cardBg(isDark),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
           children: [
-            Row(
-              children: [
-                const Icon(Icons.workspace_premium, color: Colors.amberAccent, size: 28),
-                const SizedBox(width: 10),
-                Text(
-                  'প্রো টিয়ার সুবিধা',
-                  style: TextStyle(
-                    color: AppColors.textPrimary(isDark),
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
+            const Icon(Icons.warning_amber_rounded, color: Color(0xFFF59E0B)),
+            const SizedBox(width: 10),
             Text(
-              'ফ্রি এলার্ট সেবা ১ ঘণ্টার জন্য সীমাবদ্ধ। প্রো টিয়ারে ডেডিকেটেড ক্লাউড সার্ভার ২৪/৭ ট্রেনের টিকিট চেক করবে এবং টিকিট পাওয়ামাত্র ইনস্ট্যান্ট অ্যালার্ম বাজিয়ে জানাবে।',
-              style: TextStyle(
-                color: AppColors.textSecondary(isDark),
-                fontSize: 13,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 16),
-            _buildBenefitRow(Icons.cloud_sync, 'ডেডিকেটেড সার্ভারে ২৪/৭ অটোমেটিক চেক', isDark),
-            _buildBenefitRow(Icons.timer_off, 'আনলিমিটেড সময়সীমা (১ ঘণ্টার কোনো সীমাবদ্ধতা নেই)', isDark),
-            _buildBenefitRow(Icons.battery_charging_full, 'মোবাইলে কোনো চার্জ বা ডাটা অপচয় হবে না', isDark),
-            _buildBenefitRow(Icons.notifications_active, 'ইনস্ট্যান্ট হাই-প্রায়োরিটি রিংটোন নোটিফিকেশন', isDark),
-            const SizedBox(height: 20),
-            SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFD97706),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  elevation: 2,
-                ),
-                icon: const Icon(Icons.bolt, color: Colors.white),
-                label: const Text(
-                  'প্রো সক্রিয় করুন (২৪/৭ অটোমেটিক এলার্ট)',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-                onPressed: () async {
-                  await proService.setProStatus(true);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('🎉 প্রো আনলক হয়েছে! ২৪/৭ সার্ভার এলার্ট সক্রিয়।'),
-                      ),
-                    );
-                  }
-                },
-              ),
+              isBangla ? 'নোটিফায়ার বন্ধ হবে' : 'Notifier Will Stop',
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildBenefitRow(IconData icon, String text, bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Row(
-        children: [
-          Icon(icon, color: Colors.amber, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
+        content: Text(
+          isBangla
+              ? 'আপনার সক্রিয় টিকেট নোটিফায়ার বন্ধ হয়ে যাবে এবং নতুন রুট খোঁজা শুরু হবে। চালিয়ে যেতে চান?'
+              : 'Your active ticket notifier will be stopped and a new route search will begin. Each user can only have one active notifier. Continue?',
+          style: const TextStyle(fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
             child: Text(
-              text,
-              style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12),
+              isBangla ? 'না, থাকুক' : 'Keep Active',
+              style: const TextStyle(color: AppColors.primary, fontWeight: FontWeight.bold),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              isBangla ? 'হ্যাঁ, নতুন খুঁজুন' : 'Yes, New Search',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
             ),
           ),
         ],
       ),
     );
+
+    if (confirmed == true) {
+      monitor.stopMonitoring();
+      if (!mounted) return;
+      await nav.push(
+        MaterialPageRoute(builder: (_) => const SearchScreen()),
+      );
+    }
+  }
+}
+
+class _RadarSweepPainter extends CustomPainter {
+  final double progress;
+  final bool active;
+
+  _RadarSweepPainter({required this.progress, required this.active});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
+
+    // Rings
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0
+      ..color = Colors.white.withValues(alpha: active ? 0.18 : 0.08);
+
+    canvas.drawCircle(center, radius * 0.45, ringPaint);
+    canvas.drawCircle(center, radius * 0.72, ringPaint);
+    canvas.drawCircle(center, radius * 0.98, ringPaint);
+
+    // Crosshairs
+    final linePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.8
+      ..color = Colors.white.withValues(alpha: active ? 0.12 : 0.05);
+
+    canvas.drawLine(Offset(center.dx - radius, center.dy), Offset(center.dx + radius, center.dy), linePaint);
+    canvas.drawLine(Offset(center.dx, center.dy - radius), Offset(center.dx, center.dy + radius), linePaint);
+
+    if (!active) return;
+
+    // Sweeping Radar Cone
+    final sweepAngle = progress * 2 * math.pi;
+    final sweepPaint = Paint()
+      ..shader = SweepGradient(
+        center: Alignment.center,
+        startAngle: 0.0,
+        endAngle: math.pi / 2,
+        colors: [
+          const Color(0xFF34D399).withValues(alpha: 0.45),
+          const Color(0xFF10B981).withValues(alpha: 0.15),
+          Colors.transparent,
+        ],
+        transform: GradientRotation(sweepAngle),
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
+
+    canvas.drawCircle(center, radius * 0.98, sweepPaint);
+
+    // Leading scan line
+    final scanLinePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..color = const Color(0xFF6EE7B7).withValues(alpha: 0.7);
+
+    final endX = center.dx + radius * 0.98 * math.cos(sweepAngle + math.pi / 2);
+    final endY = center.dy + radius * 0.98 * math.sin(sweepAngle + math.pi / 2);
+    canvas.drawLine(center, Offset(endX, endY), scanLinePaint);
   }
 
-  static String _formatTime(DateTime dt) {
-    return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}';
+  @override
+  bool shouldRepaint(covariant _RadarSweepPainter oldDelegate) {
+    return oldDelegate.progress != progress || oldDelegate.active != active;
   }
 }

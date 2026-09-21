@@ -6,6 +6,7 @@ import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
+import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 
 void main() {
@@ -47,38 +48,41 @@ void main() {
     });
   });
 
-  group('Monitor Dashboard and Slider tests', () {
-    testWidgets('MonitorDashboardScreen renders with default interval (120s) without Slider assertion error',
-        (WidgetTester tester) async {
-      final proService = ProService();
-      final themeService = ThemeService();
-      final monitorService = MonitorService(proService: proService);
+  group('Ticket search dashboard', () {
+    testWidgets(
+      'Dashboard shows bilingual journey UI without polling controls',
+      (WidgetTester tester) async {
+        final proService = ProService();
+        final themeService = ThemeService();
+        final monitorService = MonitorService(proService: proService);
 
-      // Verify default interval is 120s
-      expect(monitorService.intervalSeconds, 120);
+        // Verify default interval is 120s
+        expect(monitorService.intervalSeconds, 120);
 
-      await tester.pumpWidget(
-        MultiProvider(
-          providers: [
-            ChangeNotifierProvider.value(value: proService),
-            ChangeNotifierProvider.value(value: themeService),
-            ChangeNotifierProvider.value(value: monitorService),
-          ],
-          child: const MaterialApp(
-            home: MonitorDashboardScreen(),
+        final languageService = LanguageService();
+
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider.value(value: proService),
+              ChangeNotifierProvider.value(value: themeService),
+              ChangeNotifierProvider.value(value: languageService),
+              ChangeNotifierProvider.value(value: monitorService),
+            ],
+            child: const MaterialApp(home: MonitorDashboardScreen()),
           ),
-        ),
-      );
+        );
 
-      // Verify the dashboard rendered successfully without assertion crash
-      expect(find.text('টিকেট নোটিফায়ার'), findsOneWidget);
-      expect(find.text('লাইভ নোটিফিকেশন হিস্ট্রি'), findsOneWidget);
-      expect(find.byType(Slider), findsOneWidget);
-
-      final slider = tester.widget<Slider>(find.byType(Slider));
-      expect(slider.value, 120.0);
-      expect(slider.min, 10.0);
-      expect(slider.max, 300.0);
-    });
+        // Verify the dashboard rendered successfully
+        expect(find.text(languageService.t('ticket_radar')), findsOneWidget);
+        // Verify Live Stats Strip is NOT shown
+        expect(find.text('Total Checks'), findsNothing);
+        expect(find.text('মোট চেক'), findsNothing);
+        expect(find.byType(Slider), findsNothing);
+        expect(find.textContaining('120s'), findsNothing);
+        await tester.pumpWidget(const SizedBox.shrink());
+        monitorService.dispose();
+      },
+    );
   });
 }

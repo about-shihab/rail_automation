@@ -1,37 +1,32 @@
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/auth_session.dart';
 
+/// Pro features are not yet available. isPro is always false until
+/// a payment/subscription system is implemented.
 class ProService extends ChangeNotifier {
-  static const String _prefProKey = 'br_user_is_pro';
-  static const int freeMonitoringSecondsLimit = 3600; // 1 Hour (60 minutes)
 
   bool _isPro = false;
-  bool _isServerSyncing = false;
-  String? _serverMonitorTaskId;
 
   bool get isPro => _isPro;
-  bool get isServerSyncing => _isServerSyncing;
-  String? get serverMonitorTaskId => _serverMonitorTaskId;
+  bool get isServerSyncing => false;
+  String? get serverMonitorTaskId => null;
 
-  ProService() {
-    _loadProStatus();
+  ProService();
+
+  /// Updates Pro status from Firebase Firestore.
+  void updateProStatus(bool value) {
+    if (_isPro != value) {
+      _isPro = value;
+      notifyListeners();
+    }
   }
 
-  Future<void> _loadProStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    _isPro = prefs.getBool(_prefProKey) ?? false;
-    notifyListeners();
-  }
-
+  // Kept for API compatibility
   Future<void> setProStatus(bool value) async {
-    _isPro = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_prefProKey, value);
-    notifyListeners();
+    updateProStatus(value);
   }
 
-  /// Sends session and target train info to cloud server for 24/7 background checking
+  /// Server-side monitoring — reserved for Pro. Always returns false.
   Future<bool> startServerCloudMonitoring({
     required AuthSession session,
     required String fromCity,
@@ -40,28 +35,8 @@ class ProService extends ChangeNotifier {
     String? targetTrain,
     String? targetSeatClass,
   }) async {
-    if (!_isPro) return false;
-
-    _isServerSyncing = true;
-    notifyListeners();
-
-    try {
-      // Simulate/Send session payload to backend server
-      // In production, this calls: POST https://your-server-api.com/v1/monitor/start
-      await Future.delayed(const Duration(milliseconds: 1200));
-      _serverMonitorTaskId = 'SRV-TASK-${DateTime.now().millisecondsSinceEpoch}';
-      _isServerSyncing = false;
-      notifyListeners();
-      return true;
-    } catch (_) {
-      _isServerSyncing = false;
-      notifyListeners();
-      return false;
-    }
+    return false; // Pro not yet available
   }
 
-  Future<void> stopServerCloudMonitoring() async {
-    _serverMonitorTaskId = null;
-    notifyListeners();
-  }
+  Future<void> stopServerCloudMonitoring() async {}
 }

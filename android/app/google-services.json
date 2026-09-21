@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "161962645432",
+    "project_id": "railautomation-1993",
+    "storage_bucket": "railautomation-1993.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:161962645432:android:afe9a0a8756151df96214d",
+        "android_client_info": {
+          "package_name": "com.example.rail_automation"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC_RgzCBaymHWY-RfhGwDyDICGw_kX7ywQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

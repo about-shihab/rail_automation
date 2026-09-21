@@ -1,9 +1,18 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
+
 import '../models/auth_session.dart';
 import '../models/train_trip.dart';
 
 class ApiService {
+  static String requestSeatClass(String? value) {
+    final normalized = value?.trim().toUpperCase();
+    return normalized == null || normalized.isEmpty || normalized == 'ALL'
+        ? 'SNIGDHA'
+        : normalized;
+  }
+
   static const String baseUrl = 'https://railspaapi.shohoz.com/v1.0/web';
 
   /// Searches trips on Bangladesh Railway via Shohoz API.
@@ -20,21 +29,17 @@ class ApiService {
       'to_city': toCity.trim(),
       'date_of_journey': dateOfJourney.trim(),
     };
-    if (seatClass != null && seatClass.isNotEmpty && seatClass != 'ALL') {
-      queryParams['seat_class'] = seatClass.trim();
-    }
+    queryParams['seat_class'] = requestSeatClass(seatClass);
 
-    final uri = Uri.parse('$baseUrl/bookings/search-trips-v2').replace(
-      queryParameters: queryParams,
-    );
+    final uri = Uri.parse('$baseUrl/bookings/search-trips-v2')
+        .replace(queryParameters: queryParams);
 
     final headers = <String, String>{
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       'Origin': 'https://eticket.railway.gov.bd',
       'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'X-Requested-With': 'XMLHttpRequest',
       'sec-ch-ua-platform': '"Windows"',
       'sec-ch-ua-mobile': '?0',
@@ -61,18 +66,25 @@ class ApiService {
       headers['Cookie'] = authSession.cookie!;
     }
 
-    final response = await http.get(uri, headers: headers).timeout(
-      const Duration(seconds: 15),
-      onTimeout: () => throw Exception('Connection timed out. Shohoz server is slow.'),
-    );
+    final response = await http
+        .get(uri, headers: headers)
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () =>
+              throw Exception('Connection timed out. Shohoz server is slow.'),
+        );
 
     if (response.statusCode == 200) {
       final decoded = jsonDecode(response.body) as Map<String, dynamic>;
       return TripSearchResponse.fromJson(decoded);
     } else if (response.statusCode == 401) {
-      throw Exception('Session expired (401). Please re-login via Railway Webview.');
+      throw Exception(
+        'Session expired (401). Please re-login via Railway Webview.',
+      );
     } else if (response.statusCode == 403) {
-      throw Exception('Access Denied (403). Cloudflare/Device integrity check required.');
+      throw Exception(
+        'Access Denied (403). Cloudflare/Device integrity check required.',
+      );
     } else {
       throw Exception(
         'Server returned code ${response.statusCode}: ${response.body.isNotEmpty ? response.body : "Unknown error"}',
@@ -107,7 +119,7 @@ class ApiService {
                 "vat_amount": 0,
                 "origin_city_seq": 1,
                 "destination_city_seq": 11,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 5,
@@ -120,7 +132,7 @@ class ApiService {
                 "vat_amount": 90,
                 "origin_city_seq": 1,
                 "destination_city_seq": 11,
-                "seat_counts": {"online": 1, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 1, "offline": 0, "is_divided": true},
               },
               {
                 "key": 2,
@@ -133,7 +145,7 @@ class ApiService {
                 "vat_amount": 135,
                 "origin_city_seq": 1,
                 "destination_city_seq": 11,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 3,
@@ -146,8 +158,8 @@ class ApiService {
                 "vat_amount": 112,
                 "origin_city_seq": 1,
                 "destination_city_seq": 11,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
-              }
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
+              },
             ],
             "train_model": "704",
             "is_open_for_all": true,
@@ -158,9 +170,9 @@ class ApiService {
                 "location_id": 2719,
                 "location_name": "Kamalapur Station",
                 "location_time": "07:45 AM",
-                "location_date": "23 Sep 2026"
-              }
-            ]
+                "location_date": "23 Sep 2026",
+              },
+            ],
           },
           {
             "trip_number": "CHATTALA EXPRESS (802)",
@@ -183,7 +195,11 @@ class ApiService {
                 "vat_amount": 112,
                 "origin_city_seq": 1,
                 "destination_city_seq": 16,
-                "seat_counts": {"online": 22, "offline": 22, "is_divided": true}
+                "seat_counts": {
+                  "online": 22,
+                  "offline": 22,
+                  "is_divided": true,
+                },
               },
               {
                 "key": 2,
@@ -196,7 +212,7 @@ class ApiService {
                 "vat_amount": 135,
                 "origin_city_seq": 1,
                 "destination_city_seq": 16,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 7,
@@ -209,8 +225,12 @@ class ApiService {
                 "vat_amount": 0,
                 "origin_city_seq": 1,
                 "destination_city_seq": 16,
-                "seat_counts": {"online": 21, "offline": 20, "is_divided": true}
-              }
+                "seat_counts": {
+                  "online": 21,
+                  "offline": 20,
+                  "is_divided": true,
+                },
+              },
             ],
             "train_model": "802",
             "is_open_for_all": true,
@@ -221,9 +241,9 @@ class ApiService {
                 "location_id": 2719,
                 "location_name": "Kamalapur Station",
                 "location_time": "02:15 PM",
-                "location_date": "23 Sep 2026"
-              }
-            ]
+                "location_date": "23 Sep 2026",
+              },
+            ],
           },
           {
             "trip_number": "SUBORNO EXPRESS (702)",
@@ -246,7 +266,7 @@ class ApiService {
                 "vat_amount": 99,
                 "origin_city_seq": 1,
                 "destination_city_seq": 3,
-                "seat_counts": {"online": 1, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 1, "offline": 0, "is_divided": true},
               },
               {
                 "key": 2,
@@ -259,7 +279,7 @@ class ApiService {
                 "vat_amount": 148,
                 "origin_city_seq": 1,
                 "destination_city_seq": 3,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 7,
@@ -272,7 +292,7 @@ class ApiService {
                 "vat_amount": 0,
                 "origin_city_seq": 1,
                 "destination_city_seq": 3,
-                "seat_counts": {"online": 3, "offline": 3, "is_divided": true}
+                "seat_counts": {"online": 3, "offline": 3, "is_divided": true},
               },
               {
                 "key": 3,
@@ -285,8 +305,8 @@ class ApiService {
                 "vat_amount": 123,
                 "origin_city_seq": 1,
                 "destination_city_seq": 3,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
-              }
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
+              },
             ],
             "train_model": "702",
             "is_open_for_all": true,
@@ -297,9 +317,9 @@ class ApiService {
                 "location_id": 2719,
                 "location_name": "Kamalapur Station",
                 "location_time": "04:30 PM",
-                "location_date": "23 Sep 2026"
-              }
-            ]
+                "location_date": "23 Sep 2026",
+              },
+            ],
           },
           {
             "trip_number": "TURNA (742)",
@@ -322,7 +342,7 @@ class ApiService {
                 "vat_amount": 0,
                 "origin_city_seq": 1,
                 "destination_city_seq": 9,
-                "seat_counts": {"online": 1, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 1, "offline": 0, "is_divided": true},
               },
               {
                 "key": 4,
@@ -335,7 +355,7 @@ class ApiService {
                 "vat_amount": 135,
                 "origin_city_seq": 1,
                 "destination_city_seq": 9,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 1,
@@ -348,7 +368,7 @@ class ApiService {
                 "vat_amount": 201,
                 "origin_city_seq": 1,
                 "destination_city_seq": 9,
-                "seat_counts": {"online": 0, "offline": 0, "is_divided": true}
+                "seat_counts": {"online": 0, "offline": 0, "is_divided": true},
               },
               {
                 "key": 3,
@@ -361,8 +381,8 @@ class ApiService {
                 "vat_amount": 112,
                 "origin_city_seq": 1,
                 "destination_city_seq": 9,
-                "seat_counts": {"online": 1, "offline": 0, "is_divided": true}
-              }
+                "seat_counts": {"online": 1, "offline": 0, "is_divided": true},
+              },
             ],
             "train_model": "742",
             "is_open_for_all": true,
@@ -373,12 +393,12 @@ class ApiService {
                 "location_id": 2719,
                 "location_name": "Kamalapur Station",
                 "location_time": "11:15 PM",
-                "location_date": "23 Sep 2026"
-              }
-            ]
-          }
-        ]
-      }
+                "location_date": "23 Sep 2026",
+              },
+            ],
+          },
+        ],
+      },
     });
   }
 }

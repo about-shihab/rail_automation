@@ -1,14 +1,31 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../models/auth_session.dart';
 import '../services/theme_service.dart';
+import '../services/language_service.dart';
+import '../services/monitor_service.dart';
+import '../services/firebase_user_service.dart';
+import '../widgets/fancy_train_loader.dart';
+import 'monitor_dashboard_screen.dart';
 import '../utils/app_theme.dart';
 import 'search_screen.dart';
 
 class WebviewLoginScreen extends StatefulWidget {
-  const WebviewLoginScreen({super.key});
+  /// Set [clearSession] to true when navigating here after a session expiry
+  /// so that WebView cookies and localStorage are wiped before loading.
+  final bool clearSession;
+  final String? initialPhone;
+  final String? initialPassword;
+
+  const WebviewLoginScreen({
+    super.key,
+    this.clearSession = false,
+    this.initialPhone,
+    this.initialPassword,
+  });
 
   @override
   State<WebviewLoginScreen> createState() => _WebviewLoginScreenState();
@@ -17,13 +34,24 @@ class WebviewLoginScreen extends StatefulWidget {
 class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   WebViewController? _controller;
   bool _isLoading = true;
-  final String _savedPhone = '01813570430';
-  final String _savedPassword = r'7nL*2!fk@sNCfxC';
+  String _savedPhone = '';
+  String _savedPassword = '';
 
   @override
   void initState() {
     super.initState();
+    _loadSavedCredentials();
     _initWebView();
+  }
+
+  Future<void> _loadSavedCredentials() async {
+    final creds = await AuthSession.getSavedUserCredentials();
+    if (mounted) {
+      setState(() {
+        _savedPhone = widget.initialPhone ?? creds['phone'] ?? '';
+        _savedPassword = widget.initialPassword ?? creds['password'] ?? '';
+      });
+    }
   }
 
   void _initWebView() {
@@ -54,8 +82,17 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
               if (mounted) setState(() => _isLoading = false);
             },
           ),
-        )
-        ..loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
+        );
+
+      if (widget.clearSession) {
+        // Clear cookies first, then load the login page
+        WebViewCookieManager().clearCookies().whenComplete(() {
+          _controller!.runJavaScript('localStorage.clear(); sessionStorage.clear();').catchError((_) {});
+          _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
+        });
+      } else {
+        _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
+      }
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -305,6 +342,14 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     final name = displayName ?? payload?['display_name']?.toString();
     final mail = email ?? payload?['email']?.toString();
 
+    // Persist user's own phone for future autofill
+    if (phone.isNotEmpty) {
+      await AuthSession.saveUserCredentials(
+        phone,
+        _savedPassword.isNotEmpty ? _savedPassword : null,
+      );
+    }
+
     final session = AuthSession(
       token: token,
       deviceId: deviceId,
@@ -316,11 +361,86 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       isLoggedIn: true,
     );
     await AuthSession.save(session);
+    unawaited(FirebaseUserService().syncUserOnLogin(session));
     _navigateToSearch();
+  }
+
+  Future<void> _showSaveCredentialsDialog() async {
+    final phoneController = TextEditingController(text: _savedPhone);
+    final passController = TextEditingController(text: _savedPassword);
+    final lang = Provider.of<LanguageService>(context, listen: false);
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(lang.t('save_credentials')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              lang.t('saved_credentials_msg'),
+              style: const TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: phoneController,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: lang.t('mobile_number'),
+                prefixIcon: const Icon(Icons.phone),
+                hintText: '01XXXXXXXXX',
+              ),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: passController,
+              obscureText: true,
+              decoration: InputDecoration(
+                labelText: lang.t('password'),
+                prefixIcon: const Icon(Icons.lock),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text(lang.isBangla ? 'বাতিল' : 'Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669)),
+            onPressed: () async {
+              final p = phoneController.text.trim();
+              final pwd = passController.text.trim();
+              if (p.isNotEmpty) {
+                await AuthSession.saveUserCredentials(p, pwd);
+                setState(() {
+                  _savedPhone = p;
+                  _savedPassword = pwd;
+                });
+                if (ctx.mounted) Navigator.pop(ctx);
+                _insertSavedCredentials(silent: false);
+              }
+            },
+            child: Text(
+              lang.isBangla ? 'সংরক্ষণ ও পূরণ' : 'Save & Fill',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _insertSavedCredentials({bool silent = false}) async {
     if (_controller == null) return;
+    if (_savedPhone.trim().isEmpty) {
+      if (!silent && mounted) {
+        _showSaveCredentialsDialog();
+      }
+      return;
+    }
+
     try {
       final jsCode = '''
         (function() {
@@ -362,10 +482,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       await _controller!.runJavaScript(jsCode);
 
       if (!silent && mounted) {
+        final lang = Provider.of<LanguageService>(context, listen: false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF059669),
-            content: Text('স্বয়ংক্রিয় তথ্য পূরণ সম্পন্ন: $_savedPhone'),
+            content: Text('${lang.t('autofill_done')}: $_savedPhone'),
             duration: const Duration(seconds: 2),
           ),
         );
@@ -375,9 +496,12 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
 
   void _navigateToSearch() {
     if (!mounted) return;
+    final monitorService = context.read<MonitorService>();
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const SearchScreen()),
+      MaterialPageRoute(builder: (_) =>
+        monitorService.dateOfJourney.isNotEmpty
+          ? const MonitorDashboardScreen() : const SearchScreen()),
     );
   }
 
@@ -385,6 +509,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final themeService = Provider.of<ThemeService>(context);
+    final langService = Provider.of<LanguageService>(context);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -401,20 +526,39 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
+          children: [
             Text(
-              'টিকেট আছে',
-              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+              langService.t('app_name'),
+              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
             ),
             Text(
-              'বাংলাদেশ রেলওয়ে লগইন',
-              style: TextStyle(color: Colors.white70, fontSize: 11),
+              langService.t('app_subtitle'),
+              style: const TextStyle(color: Colors.white70, fontSize: 11),
             ),
           ],
         ),
         actions: [
+          // Language switcher
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            onPressed: langService.toggleLanguage,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                langService.isBangla ? 'EN' : 'বাং',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+              ),
+            ),
+          ),
           IconButton(
-            tooltip: isDark ? 'লাইট মোড চালু করুন' : 'ডার্ক মোড চালু করুন',
+            tooltip: isDark ? 'লাইট মোড' : 'ডার্ক মোড',
             icon: Icon(
               isDark ? Icons.light_mode : Icons.dark_mode,
               color: Colors.white,
@@ -422,7 +566,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             onPressed: themeService.toggleTheme,
           ),
           IconButton(
-            tooltip: 'স্বয়ংক্রিয় তথ্য পূরণ',
+            tooltip: langService.t('autofill_btn'),
             icon: const Icon(Icons.edit_note, color: Colors.white),
             onPressed: () => _insertSavedCredentials(silent: false),
           ),
@@ -440,13 +584,13 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           else
             const Center(child: CircularProgressIndicator(color: Color(0xFF10B981))),
           if (_isLoading)
-            const Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: LinearProgressIndicator(
-                backgroundColor: Colors.transparent,
-                color: Color(0xFF34D399),
+            Positioned.fill(
+              child: Container(
+                color: isDark ? const Color(0xFF0F172A).withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.85),
+                child: FancyTrainLoader(
+                  message: langService.t('loading_tickets'),
+                  showCard: true,
+                ),
               ),
             ),
         ],

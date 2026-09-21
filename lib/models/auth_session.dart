@@ -77,7 +77,7 @@ class AuthSession {
     }
   }
 
-  bool get isValid => isLoggedIn && token.trim().isNotEmpty && !isDummyToken(token);
+  bool get isValid => isLoggedIn && token.trim().isNotEmpty && !isDummyToken(token) && !isJwtExpired(token);
 
   Map<String, dynamic> toJson() => {
         'token': token,
@@ -110,10 +110,39 @@ class AuthSession {
       );
 
   static const String _prefKey = 'br_auth_session';
+  static const String _prefPhoneKey = 'br_saved_phone';
+  static const String _prefPasswordKey = 'br_saved_password';
 
   static Future<void> save(AuthSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefKey, jsonEncode(session.toJson()));
+    if (session.phoneNumber != null && session.phoneNumber!.isNotEmpty) {
+      await prefs.setString(_prefPhoneKey, session.phoneNumber!);
+    }
+  }
+
+  static Future<void> saveUserCredentials(String phone, [String? password]) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (phone.isNotEmpty) {
+      await prefs.setString(_prefPhoneKey, phone.trim());
+    }
+    if (password != null && password.isNotEmpty) {
+      await prefs.setString(_prefPasswordKey, password);
+    }
+  }
+
+  static Future<Map<String, String>> getSavedUserCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      'phone': prefs.getString(_prefPhoneKey) ?? '',
+      'password': prefs.getString(_prefPasswordKey) ?? '',
+    };
+  }
+
+  static Future<void> clearSavedUserCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefPhoneKey);
+    await prefs.remove(_prefPasswordKey);
   }
 
   static Future<AuthSession?> load() async {
