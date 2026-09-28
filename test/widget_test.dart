@@ -6,13 +6,15 @@ import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
 import 'package:rail_automation/services/language_service.dart';
+import 'package:rail_automation/services/credit_service.dart';
 
 void main() {
-  testWidgets('App renders SearchScreen with টিকেট আছে header',
+  testWidgets('App renders SearchScreen with Rail sheba pro header',
       (WidgetTester tester) async {
     final proService = ProService();
     final themeService = ThemeService();
     final languageService = LanguageService();
+    final creditService = CreditService();
 
     await tester.pumpWidget(
       MultiProvider(
@@ -20,6 +22,7 @@ void main() {
           ChangeNotifierProvider.value(value: proService),
           ChangeNotifierProvider.value(value: themeService),
           ChangeNotifierProvider.value(value: languageService),
+          ChangeNotifierProvider.value(value: creditService),
           ChangeNotifierProvider(
             create: (_) => MonitorService(proService: proService),
           ),
@@ -30,8 +33,9 @@ void main() {
       ),
     );
 
-    expect(find.text('টিকেট আছে'), findsOneWidget);
-    expect(find.text(languageService.t('to_station')), findsOneWidget);
-    expect(find.text(languageService.t('seat_class')), findsOneWidget);
+    expect(find.text('Rail Sheba Pro'), findsOneWidget);
+    expect(find.text('To'), findsOneWidget);
+    expect(find.text('Class'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

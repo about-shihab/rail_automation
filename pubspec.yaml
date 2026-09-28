@@ -8,6 +8,8 @@ environment:
   sdk: ^3.13.1
 
 dependencies:
+  rail_sms:
+    path: packages/rail_sms
   flutter:
     sdk: flutter
 
@@ -22,14 +24,24 @@ dependencies:
   audioplayers: ^6.8.1
   firebase_core: ^4.15.0
   cloud_firestore: ^6.10.0
+  flutter_secure_storage: ^11.2.0
+  flutter_background_service: ^5.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/app_icon.jpg"
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
 
   assets:
     - assets/icons/
+

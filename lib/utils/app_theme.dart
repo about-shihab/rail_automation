@@ -1,91 +1,431 @@
 import 'package:flutter/material.dart';
 
+// ─── Design Tokens ──────────────────────────────────────────────────────────
+
 class AppColors {
-  static const Color primary = Color(0xFF059669); // Bangladesh Railway emerald green
-  static const Color appBarGreen = Color(0xFF065F46); // Deep emerald for app bar
-  static const Color accentCyan = Color(0xFF0D9488);
-  static const Color amberWarning = Color(0xFFD97706);
+  // Brand palette
+  static const primary = Color(0xFF00C896);
+  static const primaryDark = Color(0xFF00A07A);
+  static const primaryGlow = Color(0x3300C896);
+  static const accent = Color(0xFF3DEFE9);
+  static const gold = Color(0xFFFBBF24);
 
-  static Color scaffoldBg(bool isDark) =>
-      isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
+  // Dark mode surfaces
+  static const darkBg = Color(0xFF060D1A);
+  static const darkSurface = Color(0xFF0B1628);
+  static const darkCard = Color(0xFF0F1F35);
+  static const darkCardBorder = Color(0xFF1E3A55);
+  static const darkInput = Color(0xFF0A1728);
+  static const darkInputBorder = Color(0xFF1A3048);
 
-  static Color cardBg(bool isDark) =>
-      isDark ? const Color(0xFF1E293B) : Colors.white;
+  // Light mode surfaces
+  static const lightBg = Color(0xFFF0F5FF);
+  static const lightSurface = Color(0xFFFFFFFF);
+  static const lightCard = Color(0xFFFFFFFF);
+  static const lightCardBorder = Color(0xFFDDE8F5);
+  static const lightInput = Color(0xFFF5F9FF);
+  static const lightInputBorder = Color(0xFFCBDCF0);
 
-  static Color cardBorder(bool isDark) =>
-      isDark ? Colors.white12 : const Color(0xFFE2E8F0);
+  // Text
+  static const darkTextPrimary = Color(0xFFEDF2FF);
+  static const darkTextSecondary = Color(0xFF8AA4C0);
+  static const darkTextMuted = Color(0xFF91A5BC);
+  static const lightTextPrimary = Color(0xFF0A1628);
+  static const lightTextSecondary = Color(0xFF3A5270);
+  static const lightTextMuted = Color(0xFF53677F);
 
-  static Color textPrimary(bool isDark) =>
-      isDark ? Colors.white : const Color(0xFF0F172A);
+  // Status
+  static const success = Color(0xFF00C896);
+  static const warning = Color(0xFFFBBF24);
+  static const error = Color(0xFFFF4757);
+  static const info = Color(0xFF60A5FA);
 
-  static Color textSecondary(bool isDark) =>
-      isDark ? Colors.white70 : const Color(0xFF475569);
+  // AppBar
+  static const appBarGradientStart = Color(0xFF003D2B);
+  static const appBarGradientEnd = Color(0xFF006649);
 
-  static Color textMuted(bool isDark) =>
-      isDark ? Colors.white38 : const Color(0xFF94A3B8);
+  // Helpers
+  static Color scaffoldBg(bool isDark) => isDark ? darkBg : lightBg;
+  static Color surface(bool isDark) => isDark ? darkSurface : lightSurface;
+  static Color cardBg(bool isDark) => isDark ? darkCard : lightCard;
+  static Color cardBorder(bool isDark) => isDark ? darkCardBorder : lightCardBorder;
+  static Color textPrimary(bool isDark) => isDark ? darkTextPrimary : lightTextPrimary;
+  static Color textSecondary(bool isDark) => isDark ? darkTextSecondary : lightTextSecondary;
+  static Color textMuted(bool isDark) => isDark ? darkTextMuted : lightTextMuted;
+  static Color inputFill(bool isDark) => isDark ? darkInput : lightInput;
+  static Color inputBorder(bool isDark) => isDark ? darkInputBorder : lightInputBorder;
 
-  static Color inputFill(bool isDark) =>
-      isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
-
-  static Color inputBorder(bool isDark) =>
-      isDark ? Colors.white12 : const Color(0xFFCBD5E1);
-
-  static Color bannerBg(bool isDark) =>
-      isDark ? const Color(0xFF1E293B) : Colors.white;
+  // Legacy
+  static const appBarGreen = Color(0xFF006649);
 }
 
+// ─── Theme Data ─────────────────────────────────────────────────────────────
+
 class AppThemes {
-  static final ThemeData lightTheme = ThemeData(
-    brightness: Brightness.light,
-    scaffoldBackgroundColor: const Color(0xFFF1F5F9),
-    colorScheme: const ColorScheme.light(
-      primary: Color(0xFF059669),
-      secondary: Color(0xFF0D9488),
-      surface: Colors.white,
-      onPrimary: Colors.white,
-      onSurface: Color(0xFF0F172A),
+  static ThemeData get darkTheme => ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.dark,
+    colorScheme: const ColorScheme.dark(
+      primary: AppColors.primary,
+      secondary: AppColors.accent,
+      surface: AppColors.darkSurface,
+      error: AppColors.error,
+      onPrimary: Colors.black,
+      onSecondary: Colors.black,
+      onSurface: AppColors.darkTextPrimary,
     ),
+    scaffoldBackgroundColor: AppColors.darkBg,
+    fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
-      backgroundColor: Color(0xFF065F46),
-      foregroundColor: Colors.white,
+      backgroundColor: AppColors.darkSurface,
       elevation: 0,
       centerTitle: false,
-    ),
-    cardTheme: CardThemeData(
-      color: Colors.white,
-      elevation: 1,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: Color(0xFFE2E8F0)),
+      iconTheme: IconThemeData(color: AppColors.darkTextPrimary),
+      titleTextStyle: TextStyle(
+        color: AppColors.darkTextPrimary,
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
       ),
     ),
-    useMaterial3: true,
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.black,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.primary,
+        side: const BorderSide(color: AppColors.primary),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: AppColors.darkInput,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.darkInputBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.darkInputBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primary, width: 2),
+      ),
+      labelStyle: const TextStyle(color: AppColors.darkTextSecondary),
+    ),
+    cardTheme: CardThemeData(
+      color: AppColors.darkCard,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: const BorderSide(color: AppColors.darkCardBorder),
+      ),
+    ),
   );
 
-  static final ThemeData darkTheme = ThemeData(
-    brightness: Brightness.dark,
-    scaffoldBackgroundColor: const Color(0xFF0F172A),
-    colorScheme: const ColorScheme.dark(
-      primary: Color(0xFF10B981),
-      secondary: Color(0xFF06B6D4),
-      surface: Color(0xFF1E293B),
+  static ThemeData get lightTheme => ThemeData(
+    useMaterial3: true,
+    brightness: Brightness.light,
+    colorScheme: const ColorScheme.light(
+      primary: AppColors.primaryDark,
+      secondary: AppColors.accent,
+      surface: AppColors.lightSurface,
+      error: AppColors.error,
       onPrimary: Colors.white,
-      onSurface: Colors.white,
+      onSurface: AppColors.lightTextPrimary,
     ),
+    scaffoldBackgroundColor: AppColors.lightBg,
+    fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
-      backgroundColor: Color(0xFF065F46),
-      foregroundColor: Colors.white,
+      backgroundColor: AppColors.lightSurface,
       elevation: 0,
       centerTitle: false,
-    ),
-    cardTheme: CardThemeData(
-      color: const Color(0xFF1E293B),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(14),
-        side: const BorderSide(color: Colors.white12),
+      iconTheme: IconThemeData(color: AppColors.lightTextPrimary),
+      titleTextStyle: TextStyle(
+        color: AppColors.lightTextPrimary,
+        fontSize: 18,
+        fontWeight: FontWeight.bold,
       ),
     ),
-    useMaterial3: true,
+    elevatedButtonTheme: ElevatedButtonThemeData(
+      style: ElevatedButton.styleFrom(
+        backgroundColor: AppColors.primaryDark,
+        foregroundColor: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+    ),
+    outlinedButtonTheme: OutlinedButtonThemeData(
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.primaryDark,
+        side: const BorderSide(color: AppColors.primaryDark),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        textStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: AppColors.lightInput,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.lightInputBorder),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.lightInputBorder),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.primaryDark, width: 2),
+      ),
+      labelStyle: const TextStyle(color: AppColors.lightTextSecondary),
+    ),
+    cardTheme: CardThemeData(
+      color: AppColors.lightCard,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: const BorderSide(color: AppColors.lightCardBorder),
+      ),
+    ),
   );
+}
+
+// ─── Reusable Widgets ────────────────────────────────────────────────────────
+
+/// Gradient primary button
+class PrimaryButton extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final VoidCallback? onPressed;
+  final bool loading;
+  final double height;
+
+  const PrimaryButton({
+    super.key,
+    required this.label,
+    this.icon,
+    this.onPressed,
+    this.loading = false,
+    this.height = 52,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return SizedBox(
+      width: double.infinity,
+      height: height,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: onPressed == null || loading
+                ? [Colors.grey.shade600, Colors.grey.shade700]
+                : [AppColors.primary, AppColors.primaryDark],
+          ),
+          borderRadius: BorderRadius.circular(14),
+          boxShadow: onPressed != null && !loading
+              ? [
+                  BoxShadow(
+                    color: AppColors.primary.withValues(alpha: isDark ? 0.35 : 0.25),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  )
+                ]
+              : null,
+        ),
+        child: ElevatedButton(
+          onPressed: loading ? null : onPressed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          ),
+          child: loading
+              ? const SizedBox(
+                  width: 22,
+                  height: 22,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                  ),
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (icon != null) ...[
+                      Icon(icon, size: 18, color: Colors.black87),
+                      const SizedBox(width: 8),
+                    ],
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.black87,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ],
+                ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Standard card container
+class AppCard extends StatelessWidget {
+  final Widget child;
+  final EdgeInsetsGeometry? padding;
+  final Color? borderColor;
+  final VoidCallback? onTap;
+
+  const AppCard({
+    super.key,
+    required this.child,
+    this.padding,
+    this.borderColor,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: padding ?? const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.cardBg(isDark),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: borderColor ?? AppColors.cardBorder(isDark)),
+            boxShadow: isDark
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    )
+                  ],
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+}
+
+/// Status badge chip
+class StatusBadge extends StatelessWidget {
+  final String label;
+  final Color color;
+  final IconData? icon;
+
+  const StatusBadge({
+    super.key,
+    required this.label,
+    required this.color,
+    this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontWeight: FontWeight.bold,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Gradient app bar
+class GradientAppBar extends StatelessWidget implements PreferredSizeWidget {
+  final String title;
+  final String? subtitle;
+  final List<Widget>? actions;
+  final Widget? leading;
+
+  const GradientAppBar({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.actions,
+    this.leading,
+  });
+
+  @override
+  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+
+  @override
+  Widget build(BuildContext context) {
+    return AppBar(
+      backgroundColor: Colors.transparent,
+      flexibleSpace: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppColors.appBarGradientStart, AppColors.appBarGradientEnd],
+          ),
+        ),
+      ),
+      elevation: 0,
+      leading: leading,
+      title: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (subtitle != null)
+            Text(
+              subtitle!,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.75),
+                fontSize: 11,
+              ),
+            ),
+        ],
+      ),
+      actions: actions,
+    );
+  }
 }

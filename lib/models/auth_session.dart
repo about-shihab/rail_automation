@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:math' as math;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../services/secure_store.dart';
 
 class AuthSession {
   final String token;
@@ -31,7 +31,7 @@ class AuthSession {
         savedAt = savedAt ?? DateTime.now();
 
   static String generateUuid() {
-    final rnd = math.Random();
+    final rnd = math.Random.secure();
     final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
     bytes[6] = (bytes[6] & 0x0f) | 0x40; // Version 4
     bytes[8] = (bytes[8] & 0x3f) | 0x80; // Variant RFC4122
@@ -70,8 +70,7 @@ class AuthSession {
       if (map == null || !map.containsKey('exp')) return false;
       final expSeconds = map['exp'] as num;
       final expDate = DateTime.fromMillisecondsSinceEpoch(expSeconds.toInt() * 1000);
-      // Give a 1-day grace period to absorb any timezone or device clock skew
-      return DateTime.now().isAfter(expDate.add(const Duration(days: 1)));
+      return !DateTime.now().isBefore(expDate);
     } catch (_) {
       return false;
     }
@@ -84,7 +83,6 @@ class AuthSession {
         'deviceId': deviceId,
         'deviceKey': deviceKey,
         'phoneNumber': phoneNumber,
-        'password': password,
         'displayName': displayName,
         'email': email,
         'cookie': cookie,
@@ -114,40 +112,35 @@ class AuthSession {
   static const String _prefPasswordKey = 'br_saved_password';
 
   static Future<void> save(AuthSession session) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_prefKey, jsonEncode(session.toJson()));
+    await SecureStore.write(_prefKey, jsonEncode(session.toJson()));
     if (session.phoneNumber != null && session.phoneNumber!.isNotEmpty) {
-      await prefs.setString(_prefPhoneKey, session.phoneNumber!);
+      await SecureStore.write(_prefPhoneKey, session.phoneNumber!);
     }
   }
 
   static Future<void> saveUserCredentials(String phone, [String? password]) async {
-    final prefs = await SharedPreferences.getInstance();
     if (phone.isNotEmpty) {
-      await prefs.setString(_prefPhoneKey, phone.trim());
+      await SecureStore.write(_prefPhoneKey, phone.trim());
     }
     if (password != null && password.isNotEmpty) {
-      await prefs.setString(_prefPasswordKey, password);
+      await SecureStore.write(_prefPasswordKey, password);
     }
   }
 
   static Future<Map<String, String>> getSavedUserCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
     return {
-      'phone': prefs.getString(_prefPhoneKey) ?? '',
-      'password': prefs.getString(_prefPasswordKey) ?? '',
+      'phone': await SecureStore.read(_prefPhoneKey) ?? '',
+      'password': await SecureStore.read(_prefPasswordKey) ?? '',
     };
   }
 
   static Future<void> clearSavedUserCredentials() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefPhoneKey);
-    await prefs.remove(_prefPasswordKey);
+    await SecureStore.delete(_prefPhoneKey);
+    await SecureStore.delete(_prefPasswordKey);
   }
 
   static Future<AuthSession?> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_prefKey);
+    final raw = await SecureStore.read(_prefKey);
     if (raw == null) return null;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
@@ -163,7 +156,6 @@ class AuthSession {
   }
 
   static Future<void> clear() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_prefKey);
+    await SecureStore.delete(_prefKey);
   }
 }

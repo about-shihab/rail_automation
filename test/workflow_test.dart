@@ -1,0 +1,414 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:rail_automation/views/watch_options_dialog.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:rail_automation/models/auth_session.dart';
+import 'package:rail_automation/models/booking_intent.dart';
+import 'package:rail_automation/services/api_service.dart';
+import 'package:rail_automation/services/app_config.dart';
+import 'package:rail_automation/services/booking_service.dart';
+import 'package:rail_automation/services/secure_store.dart';
+import 'package:rail_automation/services/sms_service.dart';
+import 'package:rail_automation/services/web_session_service.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    FlutterSecureStorage.setMockInitialValues({});
+  });
+  final auth = AuthSession(
+    token: 'real-shaped-test-session',
+    deviceId: 'device',
+    deviceKey: 'key',
+  );
+  final train = ApiService.getMockResponse().trains[1];
+  final seat = train.seatTypes.first;
+
+  testWidgets('auto-reserve starts without entering a fare', (tester) async {
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('com.example.rail_automation/sms'),
+      (_) async => false,
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        const MethodChannel('com.example.rail_automation/sms'),
+        null,
+      ),
+    );
+    BookingIntent? result;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () async {
+                result = await showWatchOptions(context);
+              },
+              child: const Text('Watch'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Watch'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TextField), findsNothing);
+    await tester.ensureVisible(find.text('Start auto-booking'));
+    await tester.tap(find.text('Start auto-booking'));
+    await tester.pumpAndSettle();
+    expect(result?.autoReserve, isTrue);
+    expect(result?.maxFare, isNull);
+    expect(result?.quantity, 1);
+  });
+
+  test('operational settings reject invalid database values', () {
+    final config = AppConfig.validate({
+      'poll_interval_seconds': 0,
+      'max_seats': 99,
+      'otp_length': '6',
+      'stations': [null],
+    });
+    expect(config['poll_interval_seconds'], 120);
+    expect(config['max_seats'], 4);
+    expect(config['otp_length'], 6);
+    expect(
+      AppConfig.validate({
+        'poll_interval_seconds': 180,
+      })['poll_interval_seconds'],
+      180,
+    );
+  });
+  test(
+    'credential migration removes plaintext and preserves special characters',
+    () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('br_saved_password', "a'\\b\npassword ");
+      expect(
+        (await AuthSession.getSavedUserCredentials())['password'],
+        "a'\\b\npassword ",
+      );
+      expect(prefs.containsKey('br_saved_password'), isFalse);
+      await AuthSession.saveUserCredentials('01700000000', ' new secret ');
+      expect(
+        (await AuthSession.getSavedUserCredentials())['password'],
+        ' new secret ',
+      );
+    },
+  );
+  test('JWT exp has no one-day grace period', () {
+    final payload = base64Url.encode(
+      utf8.encode(
+        jsonEncode({
+          'exp':
+              DateTime.now()
+                  .subtract(const Duration(seconds: 1))
+                  .millisecondsSinceEpoch ~/
+              1000,
+        }),
+      ),
+    );
+    expect(AuthSession.isJwtExpired('header.$payload.signature'), isTrue);
+  });
+  test('random selection obeys quantity, class and fare constraints', () {
+    const intent = BookingIntent(autoReserve: true, quantity: 4, maxFare: 500);
+    final chosen = intent.choose(
+      ApiService.getMockResponse().trains,
+      random: Random(7),
+    );
+    expect(chosen?.$2.type, 'S_CHAIR');
+    expect(chosen?.$1.tripNumber, 'CHATTALA EXPRESS (802)');
+    expect(intent.choose([train], seatClass: 'SNIGDHA'), isNull);
+  });
+  test('SMS parser ignores unrelated senders and non-OTP messages', () {
+    expect(SmsService.extractOtp('BANK', 'OTP 123456', ['RAILWAY'], 6), isNull);
+    expect(
+      SmsService.extractOtp('RAILWAY', 'Ticket 123456', ['RAILWAY'], 6),
+      isNull,
+    );
+    expect(
+      SmsService.extractOtp('railway', 'OTP: 012345', ['RAILWAY'], 6),
+      '012345',
+    );
+  });
+  test('credential injection only allows the exact HTTPS railway origin', () {
+    expect(
+      WebSessionService.isRailwayUrl('https://eticket.railway.gov.bd/login'),
+      isTrue,
+    );
+    expect(
+      WebSessionService.isRailwayUrl(
+        'https://eticket.railway.gov.bd.evil.test',
+      ),
+      isFalse,
+    );
+    expect(
+      WebSessionService.isRailwayUrl('http://eticket.railway.gov.bd'),
+      isFalse,
+    );
+  });
+  test('failed seat layout never falls back to mock inventory', () async {
+    await http.runWithClient(
+      () => expectLater(
+        ApiService.fetchSeatLayout(
+          tripId: 1,
+          tripRouteId: 2,
+          authSession: auth,
+        ),
+        throwsStateOrException,
+      ),
+      () => MockClient((_) async => http.Response('{}', 403)),
+    );
+  });
+  test(
+    'seat layout sends single device headers and uses server availability',
+    () async {
+      await http.runWithClient(
+        () async {
+          final result = await ApiService.fetchSeatLayout(
+            tripId: 8608105,
+            tripRouteId: 59340076,
+            authSession: auth,
+            cftResponse: 'fresh-verification',
+          );
+          expect(result.totalAvailableSeats, 1);
+          expect(
+            result.coaches.single.layout.single.single.seatNumber,
+            'DA-26',
+          );
+          expect(await SecureStore.read('rail_action_token'), 'next-token');
+        },
+        () => MockClient((request) async {
+          expect(request.url.queryParameters, {
+            'trip_id': '8608105',
+            'trip_route_id': '59340076',
+            'cft_response': 'fresh-verification',
+          });
+          expect(request.headers['X-Device-Id'], 'device');
+          expect(request.headers['X-Device-Key'], 'key');
+          return http.Response(
+            jsonEncode({
+              'data': {
+                'seatLayout': [
+                  {
+                    'floor_name': 'DA',
+                    'seat_fare': '450.00',
+                    'layout': [
+                      [
+                        {
+                          'isHidden': false,
+                          'seat_availability': 1,
+                          'seat_number': 'DA-26',
+                          'ticket_id': 626102685,
+                          'ticket_type': 1,
+                        },
+                      ],
+                    ],
+                  },
+                ],
+              },
+            }),
+            200,
+            headers: {'x-action-token': 'next-token'},
+          );
+        }),
+      );
+    },
+  );
+  test('verification responses do not overwrite the action token', () async {
+    await SecureStore.write('rail_action_token', 'existing');
+    await http.runWithClient(
+      () => expectLater(
+        ApiService.fetchSeatLayout(
+          tripId: 1,
+          tripRouteId: 2,
+          authSession: auth,
+        ),
+        throwsA(
+          predicate((e) => e.toString().contains('official booking page')),
+        ),
+      ),
+      () => MockClient(
+        (_) async => http.Response(
+          '<html>Verify</html>',
+          200,
+          headers: {'x-action-token': 'invalid'},
+        ),
+      ),
+    );
+    expect(await SecureStore.read('rail_action_token'), 'existing');
+  });
+
+  Map<String, dynamic> layout() => {
+    'data': {
+      'seatLayout': [
+        {
+          'floor_name': 'KA',
+          'seat_floor': 1,
+          'seat_fare': '400',
+          'seat_availability': true,
+          'layout': [
+            [
+              {'seat_number': 'KA-1', 'ticket_id': 101, 'seat_availability': 1},
+              {'seat_number': 'KA-2', 'ticket_id': 102, 'seat_availability': 1},
+            ],
+          ],
+        },
+      ],
+    },
+  };
+  Future<Map<String, dynamic>> reserve() => BookingService.reserve(
+    train: train,
+    seat: seat,
+    from: 'Dhaka',
+    to: 'Chattogram',
+    date: '30-Sep-2026',
+    auth: auth,
+    quantity: 2,
+    maxFare: 600,
+  );
+
+  test('cancellation after layout prevents reservation mutations', () async {
+    await http.runWithClient(
+      () async {
+        await expectLater(
+          BookingService.reserve(
+            train: train,
+            seat: seat,
+            from: 'Dhaka',
+            to: 'Chattogram',
+            date: '30-Sep-2026',
+            auth: auth,
+            canReserve: () async => false,
+          ),
+          throwsStateError,
+        );
+        expect(await BookingService.pending(), isNull);
+      },
+      () => MockClient((request) async {
+        if (request.url.path.endsWith('/handshake'))
+          return http.Response(
+            '{"data":{"release_time_interval_in_minutes":300}}',
+            200,
+          );
+        if (request.url.path.endsWith('/seat-layout'))
+          return http.Response(jsonEncode(layout()), 200);
+        fail('Cancelled search sent a booking mutation');
+      }),
+    );
+  });
+
+  test(
+    'reservation requires server acknowledgements and verified OTP',
+    () async {
+      final paths = <String>[];
+      await http.runWithClient(
+        () async {
+          final state = await reserve();
+          expect(state['status'], 'awaitingOtp');
+          expect(state['confirmedTicketIds'], hasLength(2));
+          expect(
+            DateTime.parse(state['expiresAt']).isAfter(DateTime.now()),
+            isTrue,
+          );
+          final verified = await BookingService.verifyOtp('012345', auth);
+          expect(verified['status'], 'readyForPayment');
+          final storage = BookingService.webStorage(verified, '01700000000');
+          expect(storage['continue_booking_otp_verified'], '1');
+          expect(storage['confirm_booking_otp'], '012345');
+          await expectLater(reserve(), throwsStateError);
+        },
+        () => MockClient((request) async {
+          paths.add(request.url.path);
+          final path = request.url.path;
+          if (path.endsWith('/handshake'))
+            return http.Response(
+              jsonEncode({
+                'data': {'release_time_interval_in_minutes': 300},
+              }),
+              200,
+            );
+          if (path.endsWith('/seat-layout'))
+            return http.Response(
+              jsonEncode(layout()),
+              200,
+              headers: {'x-action-token': 'token-a'},
+            );
+          if (path.endsWith('/reserve-seat')) {
+            expect(request.method, 'PATCH');
+            expect(request.headers['X-Action-Token'], isNotEmpty);
+            return http.Response(
+              '{"data":{"ack":1}}',
+              200,
+              headers: {'x-action-token': 'token-b'},
+            );
+          }
+          if (path.endsWith('/verify-otp'))
+            expect(jsonDecode(request.body)['otp'], '012345');
+          return http.Response('{"data":{"success":true}}', 200);
+        }),
+      );
+      expect(paths.where((p) => p.endsWith('/reserve-seat')), hasLength(2));
+      expect(paths.where((p) => p.endsWith('/verify-otp')), hasLength(1));
+    },
+  );
+  test(
+    'unknown mutation outcome persists and blocks duplicate booking',
+    () async {
+      await http.runWithClient(
+        () async {
+          await expectLater(reserve(), throwsStateError);
+          expect((await BookingService.pending())?['status'], 'needsReview');
+          await expectLater(reserve(), throwsStateError);
+        },
+        () => MockClient((request) async {
+          if (request.url.path.endsWith('/handshake'))
+            return http.Response(
+              '{"data":{"release_time_interval_in_minutes":300}}',
+              200,
+            );
+          if (request.url.path.endsWith('/seat-layout'))
+            return http.Response(jsonEncode(layout()), 200);
+          return http.Response('{}', 503);
+        }),
+      );
+    },
+  );
+  test(
+    'failed OTP never enables payment or stores the rejected code',
+    () async {
+      await BookingService.save({
+        'status': 'awaitingOtp',
+        'seatClass': {'trip_id': 1, 'trip_route_id': 2},
+        'seats': [
+          {'ticket_id': 101},
+        ],
+      });
+      await http.runWithClient(
+        () => expectLater(
+          BookingService.verifyOtp('123456', auth),
+          throwsStateError,
+        ),
+        () => MockClient(
+          (_) async => http.Response('{"data":{"success":false}}', 200),
+        ),
+      );
+      expect((await BookingService.pending())?['status'], 'awaitingOtp');
+      expect(
+        await SecureStore.read(BookingService.storageKey),
+        isNot(contains('123456')),
+      );
+    },
+  );
+}
+
+final throwsStateOrException = throwsA(
+  anyOf(isA<StateError>(), isA<Exception>()),
+);

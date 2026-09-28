@@ -12,6 +12,8 @@ import 'services/background_monitor.dart';
 import 'services/firebase_user_service.dart';
 import 'views/monitor_dashboard_screen.dart';
 import 'utils/app_theme.dart';
+import 'services/credit_service.dart';
+import 'services/app_config.dart';
 import 'views/search_screen.dart';
 import 'views/webview_login_screen.dart';
 
@@ -30,10 +32,13 @@ void main() async {
   final themeService = ThemeService();
   final languageService = LanguageService();
   final monitor = MonitorService(proService: proService);
+  final creditService = CreditService();
+  await creditService.initialize();
 
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
   await firebaseUserService.initialize(proService: proService);
+  await AppConfig.instance.initialize();
   if (isLoggedIn) {
     unawaited(firebaseUserService.syncUserOnLogin(session));
   }
@@ -53,6 +58,7 @@ void main() async {
         ChangeNotifierProvider.value(value: themeService),
         ChangeNotifierProvider.value(value: languageService),
         ChangeNotifierProvider.value(value: monitor),
+        ChangeNotifierProvider.value(value: creditService),
         ChangeNotifierProvider.value(value: firebaseUserService),
       ],
       child: BangladeshRailApp(startLoggedIn: isLoggedIn),
@@ -107,7 +113,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     });
 
     return MaterialApp(
-      title: 'টিকেট আছে',
+      title: 'Rail sheba pro',
       navigatorKey: NotificationService.navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: AppThemes.lightTheme,

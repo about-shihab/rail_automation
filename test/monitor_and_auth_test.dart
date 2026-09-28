@@ -1,3 +1,4 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -7,10 +8,12 @@ import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
 import 'package:rail_automation/services/language_service.dart';
+import 'package:rail_automation/services/credit_service.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 
 void main() {
   setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
   });
 
@@ -50,11 +53,12 @@ void main() {
 
   group('Ticket search dashboard', () {
     testWidgets(
-      'Dashboard shows bilingual journey UI without polling controls',
+      'Dashboard shows journey UI without logs or polling controls',
       (WidgetTester tester) async {
         final proService = ProService();
         final themeService = ThemeService();
         final monitorService = MonitorService(proService: proService);
+        final creditService = CreditService();
 
         // Verify default interval is 120s
         expect(monitorService.intervalSeconds, 120);
@@ -67,14 +71,16 @@ void main() {
               ChangeNotifierProvider.value(value: proService),
               ChangeNotifierProvider.value(value: themeService),
               ChangeNotifierProvider.value(value: languageService),
+              ChangeNotifierProvider.value(value: creditService),
               ChangeNotifierProvider.value(value: monitorService),
             ],
             child: const MaterialApp(home: MonitorDashboardScreen()),
           ),
         );
 
-        // Verify the dashboard rendered successfully
-        expect(find.text(languageService.t('ticket_radar')), findsOneWidget);
+        // Verify the dashboard rendered successfully with Rail sheba pro header
+        expect(find.text('Your journey'), findsOneWidget);
+        expect(find.text('Where will you go next?'), findsOneWidget);
         // Verify Live Stats Strip is NOT shown
         expect(find.text('Total Checks'), findsNothing);
         expect(find.text('মোট চেক'), findsNothing);

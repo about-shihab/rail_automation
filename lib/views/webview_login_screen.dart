@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../models/auth_session.dart';
+import '../services/web_session_service.dart';
+import '../services/secure_store.dart';
 import '../services/theme_service.dart';
 import '../services/language_service.dart';
 import '../services/monitor_service.dart';
@@ -40,8 +42,17 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSavedCredentials();
-    _initWebView();
+    _prepareWebView();
+  }
+
+  Future<void> _prepareWebView() async {
+    try {
+      await _loadSavedCredentials();
+      if (widget.clearSession) await WebSessionService.clear();
+      if (mounted) _initWebView();
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _loadSavedCredentials() async {
@@ -69,11 +80,14 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         )
         ..setNavigationDelegate(
           NavigationDelegate(
+            onNavigationRequest: (request) => WebSessionService.isRailwayUrl(request.url)
+                ? NavigationDecision.navigate : NavigationDecision.prevent,
             onPageStarted: (url) {
               if (mounted) setState(() => _isLoading = true);
             },
             onPageFinished: (url) async {
               if (mounted) setState(() => _isLoading = false);
+              if (!WebSessionService.isRailwayUrl(url)) return;
               await _installInterceptors();
               await _insertSavedCredentials(silent: true);
               await _checkLiveSession();
@@ -84,15 +98,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           ),
         );
 
-      if (widget.clearSession) {
-        // Clear cookies first, then load the login page
-        WebViewCookieManager().clearCookies().whenComplete(() {
-          _controller!.runJavaScript('localStorage.clear(); sessionStorage.clear();').catchError((_) {});
-          _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
-        });
-      } else {
-        _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
-      }
+      _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -105,6 +111,22 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         (function() {
           if (window.__railInterceptorActive) return;
           window.__railInterceptorActive = true;
+          try {
+            var handshake = JSON.parse(localStorage.getItem('handshake_data') || '{}');
+            var cfg = handshake.data || handshake;
+            var hold = cfg.release_time_interval_in_minutes;
+            if (hold > 0) window.RailBridge.postMessage(JSON.stringify({type: 'HOLD_CONFIG', seconds: Math.ceil(hold / 60) * 60}));
+          } catch (_) {}
+
+          function captureCredentials() {
+            var phone = document.querySelector('input[name="mobile_number"], input[type="tel"], #mobile_number');
+            var pass = document.querySelector('input[type="password"]');
+            if (phone && pass && phone.value && pass.value) {
+              window.RailBridge.postMessage(JSON.stringify({type: 'CREDENTIALS', phone: phone.value, password: pass.value}));
+            }
+          }
+          document.addEventListener('input', captureCredentials, true);
+          document.addEventListener('submit', captureCredentials, true);
 
           function getDeviceId() {
             return localStorage.getItem('x-device-id') ||
@@ -128,6 +150,20 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             return localStorage.getItem('token') ||
                    localStorage.getItem('user_token') ||
                    localStorage.getItem('access_token') || '';
+          }
+
+          function getTurnstileToken() {
+            try {
+              var el = document.querySelector('input[name="cf-turnstile-response"]') ||
+                       document.querySelector('input[name="cft_response"]') ||
+                       document.querySelector('[name*="turnstile"]');
+              if (el && el.value && el.value.length > 20) return el.value;
+              if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+                var resp = window.turnstile.getResponse();
+                if (resp && resp.length > 20) return resp;
+              }
+            } catch (_) {}
+            return '';
           }
 
           // XHR Interception
@@ -158,6 +194,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                   var devId = h['x-device-id'] || h['X-Device-Id'] || getDeviceId();
                   var devKey = h['x-device-key'] || h['X-Device-Key'] || getDeviceKey();
                   var usr = (res && res.data && res.data.user) || (res && res.user) || localStorage.getItem('user') || '{}';
+                  var cft = getTurnstileToken();
                   if (t && window.RailBridge) {
                     window.RailBridge.postMessage(JSON.stringify({
                       type: 'AUTH_SUCCESS',
@@ -165,7 +202,8 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                       deviceId: devId,
                       deviceKey: devKey,
                       user: usr,
-                      cookie: document.cookie || ''
+                      cookie: document.cookie || '',
+                      cftToken: cft
                     }));
                   }
                 }
@@ -190,6 +228,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                 var devId = h['x-device-id'] || h['X-Device-Id'] || getDeviceId();
                 var devKey = h['x-device-key'] || h['X-Device-Key'] || getDeviceKey();
                 var usr = (json && json.data && json.data.user) || (json && json.user) || localStorage.getItem('user') || '{}';
+                var cft = getTurnstileToken();
                 if (t && window.RailBridge) {
                   window.RailBridge.postMessage(JSON.stringify({
                     type: 'AUTH_SUCCESS',
@@ -197,7 +236,8 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                     deviceId: devId,
                     deviceKey: devKey,
                     user: usr,
-                    cookie: document.cookie || ''
+                    cookie: document.cookie || '',
+                    cftToken: cft
                   }));
                 }
               }
@@ -214,6 +254,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                 var devId = getDeviceId();
                 var devKey = getDeviceKey();
                 var usr = localStorage.getItem('user') || '{}';
+                var cft = getTurnstileToken();
                 if (window.RailBridge) {
                   window.RailBridge.postMessage(JSON.stringify({
                     type: 'STORAGE_TOKEN',
@@ -222,11 +263,28 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                     deviceKey: devKey,
                     user: usr,
                     cookie: document.cookie || '',
-                    currentPath: pathname
+                    currentPath: pathname,
+                    cftToken: cft
                   }));
                 }
               }
             } catch(e) {}
+          }, 1500);
+
+          // Dedicated Turnstile token watcher
+          setInterval(function() {
+            try {
+              var cft = getTurnstileToken();
+              if (cft && cft.length > 20 && cft !== window.__lastSentCft) {
+                window.__lastSentCft = cft;
+                if (window.RailBridge) {
+                  window.RailBridge.postMessage(JSON.stringify({
+                    type: 'CFT_TOKEN',
+                    token: cft
+                  }));
+                }
+              }
+            } catch (_) {}
           }, 1500);
         })();
       ''';
@@ -236,10 +294,30 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
 
   bool _hasNavigated = false;
 
-  void _handleBridgeMessage(String raw) {
+  Future<void> _handleBridgeMessage(String raw) async {
+    if (!WebSessionService.isRailwayUrl(await _controller?.currentUrl())) return;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       final type = map['type']?.toString();
+      if (type == 'HOLD_CONFIG') {
+        final seconds = map['seconds'];
+        if (seconds is int && seconds > 0 && seconds <= 3600) await SecureStore.write('rail_hold_seconds', '$seconds');
+        return;
+      }
+      if (type == 'CREDENTIALS') {
+        _savedPhone = map['phone']?.toString() ?? '';
+        _savedPassword = map['password']?.toString() ?? '';
+        return;
+      }
+
+      if (type == 'CFT_TOKEN') {
+        final cft = map['token']?.toString() ?? '';
+        if (cft.isNotEmpty && cft.length > 20) {
+          await SecureStore.write('rail_cft_token', cft);
+          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
+        }
+        return;
+      }
 
       if (type == 'AUTH_SUCCESS' || type == 'STORAGE_TOKEN') {
         final token = map['token']?.toString() ?? '';
@@ -247,6 +325,12 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         final deviceKey = map['deviceKey']?.toString() ?? '';
         final cookie = map['cookie']?.toString() ?? '';
         final currentPath = map['currentPath']?.toString() ?? '';
+        final cftToken = map['cftToken']?.toString() ?? '';
+
+        if (cftToken.isNotEmpty && cftToken.length > 20) {
+          await SecureStore.write('rail_cft_token', cftToken);
+          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
+        }
 
         // Avoid premature auto-navigation from background storage while user is still on the login page
         if (type == 'STORAGE_TOKEN' && currentPath.contains('login')) {
@@ -263,6 +347,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           user = userRaw;
         }
 
+        if (user.isNotEmpty) await SecureStore.write('rail_user', jsonEncode(user));
         if (token.isNotEmpty && !AuthSession.isDummyToken(token)) {
           _saveAndNavigate(
             token: token,
@@ -294,12 +379,23 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           var devKey = localStorage.getItem('x-device-key') || localStorage.getItem('ss') || localStorage.getItem('ssdk') || '';
           var usr = localStorage.getItem('user') || '{}';
           var cookie = document.cookie || '';
+          var cft = '';
+          try {
+            var el = document.querySelector('input[name="cf-turnstile-response"]') ||
+                     document.querySelector('input[name="cft_response"]') ||
+                     document.querySelector('[name*="turnstile"]');
+            if (el && el.value && el.value.length > 20) cft = el.value;
+            if (!cft && window.turnstile && typeof window.turnstile.getResponse === 'function') {
+              cft = window.turnstile.getResponse() || '';
+            }
+          } catch (_) {}
           return JSON.stringify({
             token: t,
             deviceId: devId,
             deviceKey: devKey,
             user: usr,
-            cookie: cookie
+            cookie: cookie,
+            cftToken: cft
           });
         })()
       ''');
@@ -312,11 +408,36 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       final rawToken = map['token']?.toString() ?? '';
 
       if (rawToken.isNotEmpty && !AuthSession.isDummyToken(rawToken)) {
+        final userRaw = map['user'];
+        Map<String, dynamic> user = {};
+        if (userRaw is String && userRaw.isNotEmpty) {
+          try {
+            user = jsonDecode(userRaw) as Map<String, dynamic>;
+          } catch (_) {}
+        } else if (userRaw is Map<String, dynamic>) {
+          user = userRaw;
+        }
+
+        final cftToken = map['cftToken']?.toString() ?? '';
+        if (cftToken.isNotEmpty && cftToken.length > 20) {
+          await SecureStore.write('rail_cft_token', cftToken);
+          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
+        }
+
         _saveAndNavigate(
           token: rawToken,
           deviceId: map['deviceId']?.toString() ?? '',
           deviceKey: map['deviceKey']?.toString() ?? '',
           cookie: map['cookie']?.toString() ?? '',
+          phoneNumber: user['mobile_number']?.toString() ??
+              user['phone_number']?.toString() ??
+              user['mobile']?.toString() ??
+              user['phone']?.toString() ??
+              user['username']?.toString(),
+          displayName: user['display_name']?.toString() ??
+              user['name']?.toString() ??
+              user['passenger_name']?.toString(),
+          email: user['email']?.toString(),
         );
       }
     } catch (_) {}
@@ -335,12 +456,22 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     _hasNavigated = true;
 
     final payload = AuthSession.decodeJwtPayload(token);
-    final phone = phoneNumber ??
-        payload?['phone_number']?.toString() ??
-        payload?['username']?.toString() ??
-        _savedPhone;
-    final name = displayName ?? payload?['display_name']?.toString();
-    final mail = email ?? payload?['email']?.toString();
+    final phone = (phoneNumber != null && phoneNumber.isNotEmpty)
+        ? phoneNumber
+        : (payload?['mobile_number']?.toString() ??
+            payload?['phone_number']?.toString() ??
+            payload?['mobile']?.toString() ??
+            payload?['phone']?.toString() ??
+            payload?['username']?.toString() ??
+            _savedPhone);
+    final name = (displayName != null && displayName.isNotEmpty)
+        ? displayName
+        : (payload?['display_name']?.toString() ??
+            payload?['name']?.toString() ??
+            payload?['passenger_name']?.toString());
+    final mail = (email != null && email.isNotEmpty)
+        ? email
+        : payload?['email']?.toString();
 
     // Persist user's own phone for future autofill
     if (phone.isNotEmpty) {
@@ -411,7 +542,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669)),
             onPressed: () async {
               final p = phoneController.text.trim();
-              final pwd = passController.text.trim();
+              final pwd = passController.text;
               if (p.isNotEmpty) {
                 await AuthSession.saveUserCredentials(p, pwd);
                 setState(() {
@@ -433,7 +564,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   }
 
   Future<void> _insertSavedCredentials({bool silent = false}) async {
-    if (_controller == null) return;
+    if (_controller == null || !WebSessionService.isRailwayUrl(await _controller!.currentUrl())) return;
     if (_savedPhone.trim().isEmpty) {
       if (!silent && mounted) {
         _showSaveCredentialsDialog();
@@ -464,7 +595,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             'input[placeholder*="Mobile"]'
           ];
           for (var i = 0; i < pSelectors.length; i++) {
-            if (fill(pSelectors[i], '$_savedPhone')) break;
+            if (fill(pSelectors[i], ${jsonEncode(_savedPhone)})) break;
           }
 
           var passSelectors = [
@@ -474,7 +605,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             'input[type="password"]'
           ];
           for (var j = 0; j < passSelectors.length; j++) {
-            if (fill(passSelectors[j], '$_savedPassword')) break;
+            if (fill(passSelectors[j], ${jsonEncode(_savedPassword)})) break;
           }
         })();
       ''';
@@ -514,15 +645,24 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
       appBar: AppBar(
-        backgroundColor: AppColors.appBarGreen,
-        elevation: 2,
-        leading: Container(
-          margin: const EdgeInsets.all(8),
+        backgroundColor: Colors.transparent,
+        flexibleSpace: Container(
           decoration: const BoxDecoration(
-            color: Colors.white24,
-            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.appBarGradientStart, AppColors.appBarGradientEnd],
+            ),
           ),
-          child: const Icon(Icons.confirmation_number, color: Colors.white, size: 20),
+        ),
+        elevation: 0,
+        leading: Container(
+          margin: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Icon(Icons.train_rounded, color: Colors.white, size: 20),
         ),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -533,46 +673,41 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             ),
             Text(
               langService.t('app_subtitle'),
-              style: const TextStyle(color: Colors.white70, fontSize: 11),
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 11),
             ),
           ],
         ),
         actions: [
           // Language switcher
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-            ),
-            onPressed: langService.toggleLanguage,
+          GestureDetector(
+            onTap: langService.toggleLanguage,
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(12),
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
                 langService.isBangla ? 'EN' : 'বাং',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
               ),
             ),
           ),
           IconButton(
-            tooltip: isDark ? 'লাইট মোড' : 'ডার্ক মোড',
             icon: Icon(
-              isDark ? Icons.light_mode : Icons.dark_mode,
+              isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
               color: Colors.white,
             ),
             onPressed: themeService.toggleTheme,
           ),
           IconButton(
             tooltip: langService.t('autofill_btn'),
-            icon: const Icon(Icons.edit_note, color: Colors.white),
+            icon: const Icon(Icons.edit_note_rounded, color: Colors.white),
             onPressed: () => _insertSavedCredentials(silent: false),
           ),
           IconButton(
-            tooltip: 'রিফ্রেশ',
-            icon: const Icon(Icons.refresh, color: Colors.white),
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
             onPressed: () => _controller?.reload(),
           ),
         ],
@@ -582,11 +717,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           if (_controller != null)
             WebViewWidget(controller: _controller!)
           else
-            const Center(child: CircularProgressIndicator(color: Color(0xFF10B981))),
+            const Center(child: CircularProgressIndicator(color: AppColors.primary)),
           if (_isLoading)
             Positioned.fill(
               child: Container(
-                color: isDark ? const Color(0xFF0F172A).withValues(alpha: 0.85) : Colors.white.withValues(alpha: 0.85),
+                color: (isDark ? AppColors.darkBg : Colors.white).withValues(alpha: 0.88),
                 child: FancyTrainLoader(
                   message: langService.t('loading_tickets'),
                   showCard: true,

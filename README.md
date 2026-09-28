@@ -1,44 +1,65 @@
-# rail_automation
+# Rail Sheba Pro
 
-A new Flutter project.
+Flutter app for finding Railway journeys, selecting a class and seat quantity,
+watching availability, attempting a reservation, and handing payment back to the user.
 
-## Ticket notifications
+## User flow
 
-The latest route/train watch is saved locally and becomes the home screen on
-relaunch. Whole-route and whole-train requests send `seat_class=SNIGDHA`, then
-evaluate every returned seat class. A specific class watch filters the result.
-Unchanged availability does not repeatedly notify; new or changed availability
-does. Alerts include Bangla and English and open the official booking search in
-an in-app webview, including after a cold launch. Booking may require login.
+1. Sign in to Railway and search a route and date.
+2. Choose a train and class, then select Auto-book and the number of seats.
+3. Optionally allow Railway SMS verification. Without permission, OTP is entered manually.
+4. View a simple journey card; diagnostic logs are not displayed.
+5. Review the held reservation and complete payment with Railway.
 
-Foreground searches run immediately and periodically. Android WorkManager and
-iOS BGTaskScheduler perform network checks after the app is backgrounded or
-normally closed. Background work is requested every 15 minutes, but delivery is
-controlled by the OS and can be delayed by battery/network restrictions. Force
-stop, iOS force quit, or powering off the phone prevents reliable delivery.
-This is not continuous server monitoring. See the
-[Workmanager setup and platform limitations](https://github.com/fluttercommunity/flutter_workmanager/blob/main/docs/quickstart.mdx).
-Free watches expire one hour after creation, including time spent closed; Pro
-watches retain the existing unlimited-duration policy. Starting a new watch
-replaces the previous watch. Desktop/web monitoring requires the app to stay open.
+Search preferences survive restarts. Pause stops future reservation attempts; it
+cannot undo a request already accepted by Railway. Pending or uncertain bookings
+block further automatic attempts until reviewed. No payment is submitted automatically.
 
-Validation: `flutter analyze`, `flutter test`, `flutter build apk --debug`.
-On physical Android and iOS devices, verify notification permission granted and
-denied, background delivery after normal close, tap from both a running and
-terminated app, pause cancellation, expired login, and the complete official
-booking flow. iOS builds require macOS/Xcode. Live seat availability is not
-guaranteed until booking completes.
+## Background operation
 
-## Getting Started
+Android uses the existing foreground service and a persistent notification. The
+configured polling interval defaults to 120 seconds. A saved active search starts
+its service again when restored in the foreground. If service startup fails, the
+app tells the user to keep it open. iOS uses scheduled background tasks rather than
+continuous polling. Desktop and web require the app to remain open.
 
-This project is a starting point for a Flutter application.
+The current implementation bounds Android service sessions at five hours, and
+free searches expire after the configured free duration (default one hour).
+The operating system, connectivity, force-stop, and Railway authentication can
+interrupt processing. Continuous unattended operation is not guaranteed.
 
-A few resources to get you started if this is your first Flutter project:
+Railway can require a fresh verification challenge (`cft_response`). The app does
+not currently obtain that challenge automatically. In that case users must
+continue on the official booking page. Live seat reservation and SMS verification
+must be validated on a physical device before release.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Validation
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```sh
+flutter analyze --no-pub
+flutter test --no-pub
+flutter build apk --debug --no-pub
+```
+
+Mobile dashboard layout tests render previews under `build/design-preview`.
+Tests cover seat availability parsing, cancellation before mutation, uncertain
+booking outcomes, OTP acknowledgements, and fare-free automatic booking setup.
+
+## Release configuration
+
+Release builds require an upload keystore; debug signing is never used for release.
+Copy `android/key.properties.example` to `android/key.properties` and supply your
+own values. Keep the properties file and keystore private. The keystore path is
+relative to the Android project directory, or can be absolute.
+
+Before publishing, choose the final application ID (currently
+`com.example.rail_automation`) and update the matching Firebase/platform
+configuration. Verify production Firebase access rules and the existing credit
+and account configuration in their deployed environment. Those external settings
+are not validated by local tests.
+
+Physical-device acceptance still required: notification and SMS permission granted
+and denied, background/foreground transitions, service restart, force-stop recovery,
+session expiry, Railway challenge, seats disappearing during booking, OTP timeout,
+reservation expiry, and payment handoff. iOS signing and background behavior must
+be validated using Xcode on macOS. The repository is not yet a certified production release.

@@ -1,0 +1,14 @@
+name: rail_sms
+description: Permission-aware incoming SMS bridge for railway OTP verification.
+version: 1.0.0
+environment:
+  sdk: ^3.13.1
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.example.rail_sms
+        pluginClass: RailSmsPlugin

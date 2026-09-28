@@ -1,20 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import '../models/auth_session.dart';
 import '../models/train_trip.dart';
 import '../models/seat_type.dart';
 import '../services/monitor_service.dart';
-import '../services/language_service.dart';
+import '../services/booking_service.dart';
+import '../services/credit_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/seat_badge.dart';
+import '../services/app_config.dart';
 import 'monitor_dashboard_screen.dart';
 import 'webview_login_screen.dart';
+import 'seat_booking_screen.dart';
+import 'recharge_credit_dialog.dart';
+import 'watch_options_dialog.dart';
+import 'reservation_screen.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
   final TripSearchResponse searchResponse;
-  final String fromCity;
-  final String toCity;
-  final String dateOfJourney;
+  final String fromCity, toCity, dateOfJourney;
   final String? initialClass;
 
   const TrainSelectionScreen({
@@ -26,233 +31,449 @@ class TrainSelectionScreen extends StatelessWidget {
     this.initialClass,
   });
 
-  Future<void> _startMonitoring(
+  Future<void> _watch(
     BuildContext context, {
-    String? trainName,
+    required String train,
     String? seatClass,
   }) async {
-    // Capture dependencies before any async gap
-    final nav = Navigator.of(context);
-    final monitor = Provider.of<MonitorService>(context, listen: false);
-    final lang = LanguageService.of(context, listen: false);
-
-    final session = await AuthSession.load();
-
-    if (session == null || !session.isValid) {
+    final monitor = context.read<MonitorService>();
+    if (await BookingService.pending() != null) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: Colors.redAccent,
-            content: Text(lang.t('login_required')),
-          ),
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ReservationScreen()),
         );
-        nav.push(MaterialPageRoute(builder: (_) => const WebviewLoginScreen()));
       }
       return;
     }
+    final session = await AuthSession.load();
+    if (!context.mounted) return;
+    if (session == null || !session.isValid) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
+      );
+      return;
+    }
 
+    if (train.isEmpty) {
+      return;
+    }
+
+    // Single action check: if already monitoring, user must stop current search first
+    if (monitor.isMonitoring) {
+      final currentTrain = monitor.targetTrain;
+      final isSameTrain = currentTrain != null && currentTrain.toLowerCase() == train.toLowerCase();
+
+      if (isSameTrain) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
+        );
+        return;
+      }
+
+      final stopAndProceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF0F172A),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 22),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Stop Current Search First',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'Auto-booking is already active for "${currentTrain ?? 'another train'}".\n\nYou can only perform one action at a time. Please stop the current search before starting another.',
+            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep Current', style: TextStyle(color: Colors.white60)),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.error,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Stop & Switch'),
+            ),
+          ],
+        ),
+      );
+
+      if (stopAndProceed != true || !context.mounted) return;
+      monitor.stopMonitoring();
+      await monitor.clearSearch();
+      if (!context.mounted) return;
+    }
+    if (seatClass == null) {
+      final selectedTrain = searchResponse.trains.firstWhere(
+        (t) => t.tripNumber == train,
+      );
+      if (selectedTrain.seatTypes.isEmpty) return;
+      final selected = await showModalBottomSheet<SeatType>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        builder: (_) => _ClassSheet(seatTypes: selectedTrain.seatTypes),
+      );
+      if (selected == null || !context.mounted) return;
+      seatClass = selected.type;
+    }
+    final effectiveClass = seatClass;
+    final intent = await showWatchOptions(
+      context,
+      seatClass: effectiveClass,
+    );
+    if (intent == null || !context.mounted) return;
     monitor.startMonitoring(
+      intent: intent,
       fromCity: fromCity,
       toCity: toCity,
       dateOfJourney: dateOfJourney,
-      targetTrain: trainName,
-      targetSeatClass: seatClass,
+      targetTrain: train,
+      targetSeatClass: effectiveClass,
     );
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
+    );
+  }
 
-    nav.push(MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()));
+  Future<void> _book(BuildContext context, TrainTrip train) async {
+    final session = await AuthSession.load();
+    if (!context.mounted) return;
+    if (session == null || !session.isValid) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const WebviewLoginScreen(clearSession: true),
+        ),
+      );
+      return;
+    }
+    final available = train.seatTypes.where((s) => s.isAvailable).toList();
+    if (available.isEmpty) return;
+
+    final seatType = available.length == 1
+        ? available.first
+        : await showModalBottomSheet<SeatType>(
+            context: context,
+            backgroundColor: Colors.transparent,
+            isScrollControlled: true,
+            builder: (_) => _ClassSheet(seatTypes: available),
+          );
+    if (seatType == null || !context.mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatBookingScreen(
+          train: train,
+          seatType: seatType,
+          fromCity: fromCity,
+          toCity: toCity,
+          dateOfJourney: dateOfJourney,
+          authSession: session,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final langService = LanguageService.of(context);
     final trains = searchResponse.trains;
+    final totalSeats = trains.fold<int>(0, (s, t) => s + t.totalOnlineSeats);
+    final credit = context.watch<CreditService>();
+    final monitor = context.watch<MonitorService>();
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
-      appBar: AppBar(
-        backgroundColor: AppColors.appBarGreen,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '$fromCity → $toCity',
-              style: const TextStyle(
+      body: CustomScrollView(
+        slivers: [
+          // ── Header ──────────────────────────────────────────────────────
+          SliverAppBar(
+            pinned: true,
+            backgroundColor: AppColors.appBarGradientStart,
+            flexibleSpace: FlexibleSpaceBar(
+              background: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.appBarGradientStart,
+                      AppColors.appBarGradientEnd,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            leading: IconButton(
+              icon: const Icon(
+                Icons.arrow_back_ios_new_rounded,
                 color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
+                size: 20,
               ),
+              onPressed: () => Navigator.pop(context),
             ),
-            Text(
-              dateOfJourney,
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
-            ),
-          ],
-        ),
-        actions: [
-          // Language toggle
-          TextButton(
-            style: TextButton.styleFrom(
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-            ),
-            onPressed: langService.toggleLanguage,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                langService.isBangla ? 'EN' : 'বাং',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-              ),
-            ),
-          ),
-          IconButton(
-            tooltip: langService.t('radar_dashboard'),
-            icon: const Icon(Icons.radar, color: Colors.tealAccent),
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-            ),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // ── Summary Banner ────────────────────────────────────────────────
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-            decoration: BoxDecoration(
-              color: AppColors.cardBg(isDark),
-              border: Border(
-                bottom: BorderSide(color: AppColors.cardBorder(isDark)),
-              ),
-            ),
-            child: Row(
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                Text(
+                  '$fromCity  →  $toCity',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                Text(
+                  dateOfJourney,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.7),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              GestureDetector(
+                onTap: () => RechargeCreditDialog.show(context),
+                child: Container(
+                  margin: const EdgeInsets.symmetric(
+                    vertical: 12,
+                    horizontal: 4,
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        '${trains.length} ${langService.t('trains_found')}',
-                        style: TextStyle(
-                          color: AppColors.textPrimary(isDark),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
+                      const Icon(
+                        Icons.bolt_rounded,
+                        color: AppColors.gold,
+                        size: 14,
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(width: 3),
                       Text(
-                        langService.t('notify_hint'),
-                        style: TextStyle(
-                          color: AppColors.textSecondary(isDark),
-                          fontSize: 11,
+                        '${credit.credits}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
                         ),
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 12),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF059669),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  icon: const Icon(Icons.notifications_active_rounded, size: 16, color: Colors.white),
-                  label: Text(
-                    langService.t('notify_all_trains'),
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                  onPressed: () => _startMonitoring(context),
+              ),
+              IconButton(
+                icon: const Icon(
+                  Icons.radar_rounded,
+                  color: Colors.white,
+                  size: 22,
                 ),
-              ],
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const MonitorDashboardScreen(),
+                  ),
+                ),
+              ),
+            ],
+            bottom: PreferredSize(
+              preferredSize: const Size.fromHeight(44),
+              child: Container(
+                color: AppColors.appBarGradientEnd,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                child: Row(
+                  children: [
+                    _Chip(Icons.train_rounded, '${trains.length}', 'trains'),
+                    const SizedBox(width: 8),
+                    if (totalSeats > 0)
+                      _Chip(
+                        Icons.event_seat_rounded,
+                        '$totalSeats',
+                        'seats',
+                        highlight: true,
+                      ),
+                    const Spacer(),
+                    if (monitor.isMonitoring)
+                      GestureDetector(
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const MonitorDashboardScreen(),
+                          ),
+                        ),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: AppColors.primary.withValues(alpha: 0.5),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: const BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                'Active: ${monitor.targetTrain ?? "Searching"}',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
           ),
 
-          // ── Train Cards List ──────────────────────────────────────────────
-          Expanded(
-            child: trains.isEmpty
-                ? Center(
+          // ── Train Cards ──────────────────────────────────────────────────
+          trains.isEmpty
+              ? SliverFillRemaining(
+                  child: Center(
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.train_outlined, size: 48, color: AppColors.textMuted(isDark)),
+                        Icon(
+                          Icons.train_outlined,
+                          size: 64,
+                          color: AppColors.textMuted(isDark),
+                        ),
                         const SizedBox(height: 12),
                         Text(
-                          langService.t('no_trains_found'),
-                          style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 14),
+                          'No trains found',
+                          style: TextStyle(
+                            color: AppColors.textMuted(isDark),
+                            fontSize: 16,
+                          ),
                         ),
                       ],
                     ),
-                  )
-                : ListView.builder(
-                    padding: const EdgeInsets.all(12),
-                    itemCount: trains.length,
-                    itemBuilder: (context, index) {
-                      return _buildTrainCard(context, trains[index], isDark, langService);
-                    },
                   ),
-          ),
+                )
+              : SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (ctx, i) {
+                        final isMon = monitor.isMonitoring &&
+                            monitor.targetTrain != null &&
+                            monitor.targetTrain!.toLowerCase() == trains[i].tripNumber.toLowerCase();
+                        return _TrainCard(
+                          train: trains[i],
+                          isDark: isDark,
+                          isMonitored: isMon,
+                          onWatch: () => _watch(ctx, train: trains[i].tripNumber),
+                          onBook: () => _book(ctx, trains[i]),
+                          onSeatWatch: (seat) => _watch(
+                            ctx,
+                            train: trains[i].tripNumber,
+                            seatClass: seat.type,
+                          ),
+                        );
+                      },
+                      childCount: trains.length,
+                    ),
+                  ),
+                ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildTrainCard(
-    BuildContext context,
-    TrainTrip train,
-    bool isDark,
-    LanguageService lang,
-  ) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Train Card — compact, icon-driven
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TrainCard extends StatelessWidget {
+  final TrainTrip train;
+  final bool isDark;
+  final bool isMonitored;
+  final VoidCallback onWatch, onBook;
+  final ValueChanged<SeatType> onSeatWatch;
+
+  const _TrainCard({
+    required this.train,
+    required this.isDark,
+    this.isMonitored = false,
+    required this.onWatch,
+    required this.onBook,
+    required this.onSeatWatch,
+  });
+
+  @override
+  Widget build(BuildContext context) {
     final hasSeats = train.hasAnyOnlineSeats;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: AppColors.cardBg(isDark),
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color: hasSeats ? const Color(0xFF10B981) : AppColors.cardBorder(isDark),
-          width: hasSeats ? 1.5 : 1,
+          color: isMonitored
+              ? AppColors.primary
+              : hasSeats
+                  ? AppColors.primary.withValues(alpha: 0.5)
+                  : AppColors.cardBorder(isDark),
+          width: isMonitored ? 2.0 : (hasSeats ? 1.5 : 1.0),
         ),
-        boxShadow: isDark
-            ? null
-            : [
+        boxShadow: (isMonitored || (hasSeats && isDark))
+            ? [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 8,
-                  offset: const Offset(0, 3),
+                  color: (isMonitored ? AppColors.primary : AppColors.primary)
+                      .withValues(alpha: isMonitored ? 0.25 : 0.1),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
                 ),
-              ],
+              ]
+            : null,
       ),
-      child: Column(
-        children: [
-          // ── Train Header ──────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-            child: Row(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Top row: name + time + availability ───────────────────
+            Row(
               children: [
-                // Train icon
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: hasSeats
-                        ? const Color(0xFFECFDF5)
-                        : (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.train_rounded,
-                    color: hasSeats ? const Color(0xFF059669) : AppColors.textMuted(isDark),
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                // Train name & times
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -261,24 +482,27 @@ class TrainSelectionScreen extends StatelessWidget {
                         train.tripNumber,
                         style: TextStyle(
                           color: AppColors.textPrimary(isDark),
-                          fontSize: 15,
                           fontWeight: FontWeight.bold,
+                          fontSize: 15,
                         ),
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 4),
                       Row(
                         children: [
                           Text(
                             train.departureDateTime,
                             style: const TextStyle(
-                              color: Color(0xFF059669),
-                              fontWeight: FontWeight.w600,
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.bold,
                               fontSize: 13,
                             ),
                           ),
                           Text(
                             '  →  ',
-                            style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 12),
+                            style: TextStyle(
+                              color: AppColors.textMuted(isDark),
+                              fontSize: 12,
+                            ),
                           ),
                           Text(
                             train.arrivalDateTime,
@@ -288,219 +512,323 @@ class TrainSelectionScreen extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 6),
-                          Text(
-                            '(${train.travelTime})',
-                            style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.info.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              train.travelTime,
+                              style: const TextStyle(
+                                color: AppColors.info,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ],
                       ),
                     ],
                   ),
                 ),
-                // Seat count badge
+                // Availability count badge
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
                     color: hasSeats
-                        ? const Color(0xFFECFDF5)
-                        : (isDark ? Colors.red.withValues(alpha: 0.1) : const Color(0xFFFEE2E2)),
-                    borderRadius: BorderRadius.circular(8),
+                        ? AppColors.primary.withValues(alpha: 0.1)
+                        : AppColors.error.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(10),
                     border: Border.all(
                       color: hasSeats
-                          ? const Color(0xFF10B981)
-                          : Colors.redAccent.withValues(alpha: 0.4),
+                          ? AppColors.primary.withValues(alpha: 0.4)
+                          : AppColors.error.withValues(alpha: 0.25),
                     ),
                   ),
-                  child: Text(
-                    hasSeats
-                        ? '${train.totalOnlineSeats} ${lang.t('seats_available')}'
-                        : lang.t('no_seats'),
-                    style: TextStyle(
-                      color: hasSeats ? const Color(0xFF047857) : Colors.redAccent,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 11,
-                    ),
+                  child: Column(
+                    children: [
+                      Text(
+                        '${train.totalOnlineSeats}',
+                        style: TextStyle(
+                          color: hasSeats
+                              ? AppColors.primary
+                              : AppColors.textMuted(isDark),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          height: 1.0,
+                        ),
+                      ),
+                      Text(
+                        'seats',
+                        style: TextStyle(
+                          color: hasSeats
+                              ? AppColors.primary.withValues(alpha: 0.7)
+                              : AppColors.textMuted(isDark),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            ),
-          ),
-
-          // ── Seat Badges ───────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: train.seatTypes.map((seat) {
-                return SeatBadge(
-                  seat: seat,
-                  onTap: () => _showMonitorOptionSheet(context, train, seat, lang),
-                );
-              }).toList(),
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // ── Action Button ─────────────────────────────────────────────────
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF059669),
-                    side: const BorderSide(color: Color(0xFF059669)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  ),
-                  icon: const Icon(Icons.notifications_active_outlined, size: 16),
-                  label: Text(
-                    lang.t('notify_this_train'),
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                  ),
-                  onPressed: () => _startMonitoring(context, trainName: train.tripNumber),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showMonitorOptionSheet(
-    BuildContext context,
-    TrainTrip train,
-    SeatType seat,
-    LanguageService lang,
-  ) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.cardBg(isDark),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Sheet title
-            Row(
-              children: [
-                const Icon(Icons.notifications_active_rounded, color: Color(0xFF059669)),
-                const SizedBox(width: 10),
-                Text(
-                  lang.t('monitor_sheet_title'),
-                  style: TextStyle(
-                    color: AppColors.textPrimary(isDark),
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-
-            // Info card
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.cardBorder(isDark)),
-              ),
-              child: Column(
-                children: [
-                  _buildInfoRow(lang.t('train_label'), train.tripNumber, isDark),
-                  const SizedBox(height: 6),
-                  _buildInfoRow(lang.t('class_label'), '${seat.displayName} (${seat.type})', isDark),
-                  const SizedBox(height: 6),
-                  _buildInfoRow(lang.t('fare_label'), '৳${seat.fare}', isDark),
-                  const SizedBox(height: 6),
-                  _buildInfoRow(
-                    lang.t('current_seats'),
-                    seat.seatCounts.online.toString(),
-                    isDark,
-                    valueColor: seat.seatCounts.online > 0 ? const Color(0xFF059669) : Colors.redAccent,
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              lang.t('monitor_sheet_desc'),
-              style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12, height: 1.4),
-            ),
-            const SizedBox(height: 20),
-
-            // Start Alert button
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF059669),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  elevation: 2,
-                ),
-                icon: const Icon(Icons.alarm_on_rounded, color: Colors.white),
-                label: Text(
-                  '${lang.t('start_alert_for')}: ${seat.type}',
-                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14),
-                ),
-                onPressed: () {
-                  Navigator.pop(ctx);
-                  _startMonitoring(
-                    context,
-                    trainName: train.tripNumber,
-                    seatClass: seat.type,
-                  );
-                },
-              ),
             ),
             const SizedBox(height: 10),
 
-            // Cancel button
-            SizedBox(
-              width: double.infinity,
-              height: 44,
-              child: OutlinedButton(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.textSecondary(isDark),
-                  side: BorderSide(color: AppColors.cardBorder(isDark)),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(lang.t('cancel')),
+            // ── Seat class badges ───────────────────────────────────────
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: train.seatTypes
+                  .map((s) => SeatBadge(seat: s, onTap: () => onSeatWatch(s)))
+                  .toList(),
+            ),
+
+            // Low availability warning
+            if (train.totalOnlineSeats > 0 &&
+                train.totalOnlineSeats <
+                    AppConfig.instance.number(
+                      'low_availability_threshold',
+                    )) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  const Icon(
+                    Icons.warning_amber_rounded,
+                    size: 12,
+                    color: AppColors.warning,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Only ${train.totalOnlineSeats} left — act fast',
+                    style: const TextStyle(
+                      color: AppColors.warning,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
               ),
+            ],
+
+            const SizedBox(height: 12),
+            // ── Action row: icon buttons ─────────────────────────────────
+            Row(
+              children: [
+                // Watch (bell) / Active status
+                Expanded(
+                  child: _ActionBtn(
+                    icon: isMonitored
+                        ? Icons.radar_rounded
+                        : Icons.notifications_outlined,
+                    label: isMonitored ? 'Active • View' : 'Auto-book',
+                    color: isMonitored ? AppColors.accent : AppColors.primary,
+                    onTap: onWatch,
+                    filled: isMonitored || !hasSeats,
+                  ),
+                ),
+                if (hasSeats) ...[
+                  const SizedBox(width: 8),
+                  // Book
+                  Expanded(
+                    child: _ActionBtn(
+                      icon: Icons.east_rounded,
+                      label: 'Book',
+                      color: AppColors.primary,
+                      onTap: onBook,
+                      filled: true,
+                    ),
+                  ),
+                ],
+              ],
             ),
           ],
         ),
       ),
     );
   }
+}
 
-  Widget _buildInfoRow(String label, String value, bool isDark, {Color? valueColor}) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 12)),
-        Text(
-          value,
-          style: TextStyle(
-            color: valueColor ?? AppColors.textPrimary(isDark),
-            fontWeight: FontWeight.w600,
-            fontSize: 13,
-          ),
-        ),
-      ],
+class _ActionBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+  final bool filled;
+  const _ActionBtn({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+    required this.filled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final style = FilledButton.styleFrom(
+      minimumSize: const Size.fromHeight(48),
+      backgroundColor: filled ? color : color.withValues(alpha: .08),
+      foregroundColor: filled
+          ? Colors.black87
+          : Theme.of(context).colorScheme.onSurface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    );
+    return FilledButton.icon(
+      onPressed: onTap,
+      style: style,
+      icon: Icon(icon, size: 18),
+      label: Text(label),
     );
   }
 }
 
+class _Chip extends StatelessWidget {
+  final IconData icon;
+  final String value, label;
+  final bool highlight;
+  const _Chip(this.icon, this.value, this.label, {this.highlight = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: highlight
+            ? AppColors.primary.withValues(alpha: 0.18)
+            : Colors.white.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: highlight
+              ? AppColors.primary.withValues(alpha: 0.5)
+              : Colors.white.withValues(alpha: 0.2),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            icon,
+            size: 12,
+            color: highlight ? AppColors.primary : Colors.white70,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            '$value $label',
+            style: TextStyle(
+              color: highlight ? AppColors.primary : Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Seat class bottom sheet ──────────────────────────────────────────────────
+
+class _ClassSheet extends StatelessWidget {
+  final List<SeatType> seatTypes;
+  const _ClassSheet({required this.seatTypes});
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.textMuted(isDark),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Choose Class',
+            style: TextStyle(
+              color: AppColors.textPrimary(isDark),
+              fontSize: 17,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 14),
+          ...seatTypes.map(
+            (seat) => GestureDetector(
+              onTap: () => Navigator.pop(context, seat),
+              child: Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.inputFill(isDark),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.3),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.airline_seat_recline_extra_rounded,
+                      color: AppColors.primary,
+                      size: 18,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            seat.displayName,
+                            style: TextStyle(
+                              color: AppColors.textPrimary(isDark),
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          Text(
+                            '${seat.seatCounts.online} seats  •  ৳${seat.fare}',
+                            style: TextStyle(
+                              color: AppColors.textSecondary(isDark),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(
+                      Icons.chevron_right_rounded,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

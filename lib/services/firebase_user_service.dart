@@ -59,15 +59,33 @@ class FirebaseUserService extends ChangeNotifier {
 
   /// Sync user on successful login
   Future<void> syncUserOnLogin(AuthSession session) async {
-    final phone = normalizePhone(session.phoneNumber);
-    if (phone.isEmpty) return;
+    String phone = normalizePhone(session.phoneNumber);
+    if (phone.isEmpty) {
+      phone = normalizePhone(session.displayName);
+    }
+    if (phone.isEmpty && session.email != null && session.email!.contains('@')) {
+      phone = session.email!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
+    }
+    if (phone.isEmpty) {
+      final dev = session.deviceId.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');
+      phone = dev.isNotEmpty ? 'user_$dev' : 'user_active';
+    }
 
     _currentPhone = phone;
     _startListeningToUserDoc(phone);
 
-    if (!_isFirebaseReady) return;
+    if (!_isFirebaseReady) {
+      debugPrint('[FirebaseUserService] Firebase not initialized. Retrying initialize...');
+      await initialize(proService: _proService);
+    }
+
+    if (!_isFirebaseReady) {
+      debugPrint('🚨 [FirebaseUserService] syncUserOnLogin skipped: Firebase is not available.');
+      return;
+    }
 
     try {
+      debugPrint('🚀 [FirebaseUserService] Writing user "$phone" to Firestore "users" collection...');
       final docRef = FirebaseFirestore.instance.collection('users').doc(phone);
       final snapshot = await docRef.get();
 
@@ -91,6 +109,7 @@ class FirebaseUserService extends ChangeNotifier {
           'lastLoginAt': now,
           'recentActivity': [loginLog],
         }, SetOptions(merge: true));
+        debugPrint('✅ [FirebaseUserService] Successfully created user "$phone" in Firestore!');
       } else {
         // Update existing user profile
         final data = snapshot.data();
@@ -107,13 +126,14 @@ class FirebaseUserService extends ChangeNotifier {
             'email': session.email,
           'recentActivity': FieldValue.arrayUnion([loginLog]),
         });
+        debugPrint('✅ [FirebaseUserService] Successfully updated user "$phone" in Firestore!');
       }
 
       // Record in dedicated activity_logs subcollection
       await _writeSubcollectionLog(phone, action: 'LOGIN', details: 'User logged in');
       notifyListeners();
     } catch (e) {
-      debugPrint('[FirebaseUserService] syncUserOnLogin error: $e');
+      debugPrint('🚨 [FirebaseUserService] syncUserOnLogin error: $e');
     }
   }
 

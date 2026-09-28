@@ -1,0 +1,4 @@
+storeFile=release-upload.jks
+storePassword=REPLACE_LOCALLY
+keyAlias=upload
+keyPassword=REPLACE_LOCALLY

@@ -1,15 +1,18 @@
 import 'dart:convert';
+import 'app_config.dart';
+import 'secure_store.dart';
 
 import 'package:http/http.dart' as http;
 
 import '../models/auth_session.dart';
 import '../models/train_trip.dart';
+import '../models/seat_layout.dart';
 
 class ApiService {
   static String requestSeatClass(String? value) {
     final normalized = value?.trim().toUpperCase();
     return normalized == null || normalized.isEmpty || normalized == 'ALL'
-        ? 'SNIGDHA'
+        ? AppConfig.instance.string('default_seat_class')
         : normalized;
   }
 
@@ -35,14 +38,18 @@ class ApiService {
         .replace(queryParameters: queryParams);
 
     final headers = <String, String>{
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Origin': 'https://eticket.railway.gov.bd',
       'Referer': 'https://eticket.railway.gov.bd/',
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua': '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
       'sec-ch-ua-platform': '"Windows"',
       'sec-ch-ua-mobile': '?0',
+      'Sec-Fetch-Site': 'same-site',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Dest': 'empty',
     };
 
     if (authSession.token.isNotEmpty) {
@@ -54,11 +61,9 @@ class ApiService {
     final devId = authSession.deviceId.isNotEmpty
         ? authSession.deviceId
         : AuthSession.generateUuid();
-    headers['x-device-id'] = devId;
     headers['X-Device-Id'] = devId;
 
     if (authSession.deviceKey.isNotEmpty) {
-      headers['x-device-key'] = authSession.deviceKey;
       headers['X-Device-Key'] = authSession.deviceKey;
     }
 
@@ -69,7 +74,7 @@ class ApiService {
     final response = await http
         .get(uri, headers: headers)
         .timeout(
-          const Duration(seconds: 15),
+          Duration(seconds: AppConfig.instance.number('request_timeout_seconds')),
           onTimeout: () =>
               throw Exception('Connection timed out. Shohoz server is slow.'),
         );
@@ -399,6 +404,247 @@ class ApiService {
           },
         ],
       },
+    });
+  }
+
+  /// Fetches seat layout from Shohoz API
+  static Future<SeatLayoutResponse> fetchSeatLayout({
+    required int tripId,
+    required int tripRouteId,
+    required AuthSession authSession,
+    String? cftResponse,
+  }) async {
+    final queryParams = <String, String>{
+      'trip_id': tripId.toString(),
+      'trip_route_id': tripRouteId.toString(),
+    };
+    if (cftResponse != null && cftResponse.isNotEmpty) {
+      queryParams['cft_response'] = cftResponse;
+    }
+
+    final uri = Uri.parse('$baseUrl/bookings/seat-layout')
+        .replace(queryParameters: queryParams);
+
+    final headers = <String, String>{
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Origin': 'https://eticket.railway.gov.bd',
+      'Referer': 'https://eticket.railway.gov.bd/',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua': '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-ch-ua-mobile': '?0',
+      'Sec-Fetch-Site': 'same-site',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Dest': 'empty',
+    };
+
+    if (authSession.token.isNotEmpty) {
+      headers['Authorization'] = authSession.token.startsWith('Bearer ')
+          ? authSession.token
+          : 'Bearer ${authSession.token}';
+    }
+
+    final devId = authSession.deviceId.isNotEmpty
+        ? authSession.deviceId
+        : AuthSession.generateUuid();
+    headers['X-Device-Id'] = devId;
+
+    if (authSession.deviceKey.isNotEmpty) {
+      headers['X-Device-Key'] = authSession.deviceKey;
+    }
+
+    // Send stored action-token from a previous session if available
+    final storedActionToken = await SecureStore.read('rail_action_token');
+    if (storedActionToken != null && storedActionToken.isNotEmpty) {
+      headers['X-Action-Token'] = storedActionToken;
+    }
+
+    if (authSession.cookie?.isNotEmpty == true) headers['Cookie'] = authSession.cookie!;
+    final response = await http.get(uri, headers: headers).timeout(
+      Duration(seconds: AppConfig.instance.number('request_timeout_seconds')),
+    );
+    if (response.statusCode != 200) {
+      String? serverMsg;
+      try {
+        final parsed = jsonDecode(response.body);
+        if (parsed is Map) {
+          serverMsg = parsed['message']?.toString() ??
+              parsed['error']?.toString() ??
+              parsed['detail']?.toString() ??
+              parsed['msg']?.toString();
+        }
+      } catch (_) {
+        if (response.body.isNotEmpty && response.body.length < 200) {
+          serverMsg = response.body;
+        }
+      }
+      final detail = (serverMsg != null && serverMsg.isNotEmpty) ? ': $serverMsg' : '';
+      if (response.statusCode == 401) {
+        throw Exception('Session expired (401)$detail. Please sign in to Railway again.');
+      }
+      if (response.statusCode == 403 || response.statusCode == 422) {
+        throw Exception('Seat layout rejected (${response.statusCode})$detail. Cloudflare Turnstile token required.');
+      }
+      if (response.statusCode == 429) {
+        throw Exception('Railway rate limit (429)$detail. Please wait.');
+      }
+      throw Exception('Seat layout request failed (${response.statusCode})$detail');
+    }
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(response.body);
+    } on FormatException {
+      throw Exception('Railway returned an unreadable response. Open the official booking page to continue.');
+    }
+    if (decoded is! Map<String, dynamic> || decoded['data'] is! Map || decoded['data']['seatLayout'] is! List) {
+      throw const FormatException('Railway did not return a seat layout. Open the official booking page to continue.');
+    }
+    final actionToken = response.headers['x-action-token'];
+    if (actionToken != null) await SecureStore.write('rail_action_token', actionToken);
+    return SeatLayoutResponse.fromJson(decoded);
+  }
+
+  /// Provides realistic seat layout matching the official Shohoz seat-layout response
+  static SeatLayoutResponse getMockSeatLayout() {
+    return SeatLayoutResponse.fromJson({
+      "data": {
+        "seatLayout": [
+          {
+            "floor_name": "DA",
+            "seat_floor": 6,
+            "seat_type": 1,
+            "fare_type_id": 1,
+            "seat_fare_type": "Economy",
+            "seat_availability": true,
+            "seat_fare": "450.00",
+            "layout": [
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-1", "ticket_id": 626102649, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102650, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102651, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102652, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102653, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-2", "ticket_id": 626102654, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102655, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102656, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-3", "ticket_id": 626102657, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-4", "ticket_id": 626102658, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-5", "ticket_id": 626102659, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-6", "ticket_id": 626102660, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102661, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-7", "ticket_id": 626102662, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-8", "ticket_id": 626102663, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-9", "ticket_id": 626102664, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-10", "ticket_id": 626102665, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102666, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-11", "ticket_id": 626102667, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-12", "ticket_id": 626102668, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-13", "ticket_id": 626102669, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-14", "ticket_id": 626102670, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102671, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-15", "ticket_id": 626102672, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-16", "ticket_id": 626102673, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-21", "ticket_id": 626102679, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-22", "ticket_id": 626102680, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102681, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-23", "ticket_id": 626102682, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-24", "ticket_id": 626102683, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "DA-25", "ticket_id": 626102684, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-26", "ticket_id": 626102685, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102686, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-27", "ticket_id": 626102687, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-28", "ticket_id": 626102688, "ticket_type": 1}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-29", "ticket_id": 626102689, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-30", "ticket_id": 626102690, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102691, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-31", "ticket_id": 626102692, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-32", "ticket_id": 626102693, "ticket_type": 1}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-33", "ticket_id": 626102699, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-34", "ticket_id": 626102700, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102701, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-35", "ticket_id": 626102702, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-36", "ticket_id": 626102703, "ticket_type": 1}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-37", "ticket_id": 626102704, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-38", "ticket_id": 626102705, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102706, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-39", "ticket_id": 626102707, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "DA-40", "ticket_id": 626102708, "ticket_type": 1}
+              ]
+            ]
+          },
+          {
+            "floor_name": "KA",
+            "seat_floor": 1,
+            "seat_type": 1,
+            "fare_type_id": 1,
+            "seat_fare_type": "Economy",
+            "seat_availability": false,
+            "seat_fare": "450.00",
+            "layout": [
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "KA-1", "ticket_id": 626102254, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102255, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102256, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102257, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102258, "ticket_type": 0}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "KA-2", "ticket_id": 626102259, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102260, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102261, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "KA-3", "ticket_id": 626102262, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "KA-4", "ticket_id": 626102263, "ticket_type": 1}
+              ]
+            ]
+          },
+          {
+            "floor_name": "JHA",
+            "seat_floor": 2,
+            "seat_type": 1,
+            "fare_type_id": 1,
+            "seat_fare_type": "Economy",
+            "seat_availability": true,
+            "seat_fare": "450.00",
+            "layout": [
+              [
+                {"isHidden": false, "seat_availability": 0, "seat_number": "JHA-1", "ticket_id": 626102289, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102290, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102291, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "JHA-3", "ticket_id": 626102297, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "JHA-4", "ticket_id": 626102298, "ticket_type": 1}
+              ],
+              [
+                {"isHidden": false, "seat_availability": 1, "seat_number": "JHA-5", "ticket_id": 626102299, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 1, "seat_number": "JHA-6", "ticket_id": 626102300, "ticket_type": 1},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "", "ticket_id": 626102301, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "JHA-7", "ticket_id": 626102302, "ticket_type": 0},
+                {"isHidden": false, "seat_availability": 0, "seat_number": "JHA-8", "ticket_id": 626102303, "ticket_type": 0}
+              ]
+            ]
+          }
+        ]
+      }
     });
   }
 }

@@ -1,3 +1,5 @@
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -13,6 +15,9 @@ import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/notification_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
+import 'package:rail_automation/services/language_service.dart';
+import 'package:rail_automation/services/credit_service.dart';
+import 'package:rail_automation/services/firebase_user_service.dart';
 import 'package:rail_automation/views/booking_screen.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 
@@ -26,6 +31,7 @@ void main() {
     String? train,
     bool expired = false,
   }) async {
+    FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({
       'br_auth_session': jsonEncode({
         'token': 'valid-test-token',
@@ -140,6 +146,45 @@ void main() {
     expect(monitor.isMonitoring, isFalse);
   });
 
+  test(
+    'worker sees cancellation saved by another isolate before booking',
+    () async {
+      await savedSearch();
+      final prefs = await SharedPreferences.getInstance();
+      final saved = jsonDecode(
+        prefs.getString(MonitorService.preferenceKey)!,
+      ) as Map<String, dynamic>;
+      saved['bookingIntent'] = {'autoReserve': true, 'quantity': 1};
+      await prefs.setString(MonitorService.preferenceKey, jsonEncode(saved));
+      await monitor.restore(startTimers: false);
+      var calls = 0;
+      await http.runWithClient(
+        () => monitor.checkNow(),
+        () => MockClient((request) async {
+          calls++;
+          expect(request.url.path, endsWith('/search-trips-v2'));
+          saved['active'] = false;
+          await prefs.setString(
+            MonitorService.preferenceKey,
+            jsonEncode(saved),
+          );
+          return http.Response(
+            jsonEncode({
+              'data': {
+                'trains': ApiService.getMockResponse().trains
+                    .map((t) => t.toJson())
+                    .toList(),
+              },
+            }),
+            200,
+          );
+        }),
+      );
+      expect(calls, 1);
+      expect(monitor.lastTrains, isEmpty);
+    },
+  );
+
   test('Stopping while a response is pending discards the result', () async {
     await savedSearch();
     final started = Completer<void>();
@@ -187,6 +232,9 @@ void main() {
           ChangeNotifierProvider.value(value: pro),
           ChangeNotifierProvider.value(value: monitor),
           ChangeNotifierProvider(create: (_) => ThemeService()),
+          ChangeNotifierProvider(create: (_) => LanguageService()),
+          ChangeNotifierProvider(create: (_) => CreditService()),
+          ChangeNotifierProvider(create: (_) => FirebaseUserService()),
         ],
         child: const BangladeshRailApp(startLoggedIn: true),
       ),
