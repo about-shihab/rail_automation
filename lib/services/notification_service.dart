@@ -45,7 +45,7 @@ class NotificationService {
       }
       _pendingBooking = null;
       TurnstileSheet.show(navigator.context).then((token) {
-        if (token != null && token.isNotEmpty) {
+        if (token != null && token.isNotEmpty && navigator.mounted) {
           try {
             navigator.context.read<MonitorService>().clearBookingError();
             navigator.context.read<MonitorService>().checkNow();

@@ -92,8 +92,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     } catch (_) {}
     if (!mounted) return;
     Navigator.of(context).pushReplacement(PageRouteBuilder(
-      pageBuilder: (_, __, ___) => const WebviewLoginScreen(clearSession: true),
-      transitionsBuilder: (_, a, __, child) =>
+      pageBuilder: (ctx, anim, sec) => const WebviewLoginScreen(clearSession: true),
+      transitionsBuilder: (ctx, a, sec, child) =>
           FadeTransition(opacity: CurvedAnimation(parent: a, curve: Curves.easeInOut), child: child),
       transitionDuration: const Duration(milliseconds: 500),
     ));
