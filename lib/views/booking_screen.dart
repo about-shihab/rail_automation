@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../models/auth_session.dart';
 import '../utils/app_theme.dart';
+import '../widgets/fancy_train_loader.dart';
 
 class BookingScreen extends StatefulWidget {
   final String url;
@@ -18,6 +19,7 @@ class BookingScreen extends StatefulWidget {
 class _BookingScreenState extends State<BookingScreen> {
   WebViewController? _controller;
   bool _loading = true;
+  bool _bootstrapping = true;
   bool _failed = false;
 
   @override
@@ -68,43 +70,54 @@ class _BookingScreenState extends State<BookingScreen> {
           NavigationDelegate(
             onPageStarted: (_) { if (mounted) setState(() => _loading = true); },
             onPageFinished: (url) async {
-              if (mounted) setState(() => _loading = false);
-              if (!WebSessionService.isRailwayUrl(url) || bootstrapped) return;
-              bootstrapped = true;
-              if (session != null && session.isValid) {
-                final userRaw = await SecureStore.read('rail_user');
-                final cftToken = await SecureStore.read('rail_cft_token');
-                final values = <String, String>{
-                  'token': session.token.startsWith('Bearer ') ? session.token.substring(7) : session.token,
-                  'uudid': session.deviceId,
-                  'ssdk': session.deviceKey,
-                  'user': ?userRaw,
-                  if (cftToken != null && cftToken.isNotEmpty) 'cft_token': cftToken,
-                };
-                Map<String, dynamic> storage = {};
-                if (reservation != null && ['awaitingOtp', 'readyForPayment'].contains(reservation['status'])) {
-                  final user = userRaw == null ? <String, dynamic>{} : jsonDecode(userRaw) as Map<String, dynamic>;
-                  final phone = user['phone_number']?.toString() ?? session.phoneNumber ?? '';
-                  if (phone.isNotEmpty && reservation['expiresAt'] != null) {
-                    storage = BookingService.webStorage(reservation, phone);
+              if (!WebSessionService.isRailwayUrl(url)) return;
+
+              if (!bootstrapped) {
+                bootstrapped = true;
+                if (session != null && session.isValid) {
+                  final userRaw = await SecureStore.read('rail_user');
+                  final cftToken = await SecureStore.read('rail_cft_token');
+                  final values = <String, String>{
+                    'token': session.token.startsWith('Bearer ') ? session.token.substring(7) : session.token,
+                    'uudid': session.deviceId,
+                    'ssdk': session.deviceKey,
+                    'user': ?userRaw,
+                    if (cftToken != null && cftToken.isNotEmpty) 'cft_token': cftToken,
+                  };
+                  Map<String, dynamic> storage = {};
+                  if (reservation != null && ['awaitingOtp', 'readyForPayment'].contains(reservation['status'])) {
+                    final user = userRaw == null ? <String, dynamic>{} : jsonDecode(userRaw) as Map<String, dynamic>;
+                    final phone = user['phone_number']?.toString() ?? session.phoneNumber ?? '';
+                    if (phone.isNotEmpty && reservation['expiresAt'] != null) {
+                      storage = BookingService.webStorage(reservation, phone);
+                    }
                   }
+                  await _controller?.runJavaScript('''
+                    (function() {
+                      Object.entries(${jsonEncode(values)}).forEach(([k,v]) => {
+                        try { localStorage.setItem(k, v); } catch(_) {}
+                      });
+                      Object.entries(${jsonEncode(storage)}).forEach(([k,v]) => {
+                        try { sessionStorage.setItem(k, String(v)); } catch(_) {}
+                      });
+                    })();
+                  ''');
+                  await _controller?.loadRequest(Uri.parse(targetUrl));
+                  return;
                 }
-                await _controller?.runJavaScript('''
-                  (function() {
-                    Object.entries(${jsonEncode(values)}).forEach(([k,v]) => {
-                      try { localStorage.setItem(k, v); } catch(_) {}
-                    });
-                    Object.entries(${jsonEncode(storage)}).forEach(([k,v]) => {
-                      try { sessionStorage.setItem(k, String(v)); } catch(_) {}
-                    });
-                  })();
-                ''');
-                await _controller?.loadRequest(Uri.parse(targetUrl));
+              }
+
+              // Finished loading target booking / payment page
+              if (mounted) {
+                setState(() {
+                  _bootstrapping = false;
+                  _loading = false;
+                });
               }
             },
             onWebResourceError: (error) {
               if (mounted && error.isForMainFrame == true) {
-                setState(() { _failed = true; _loading = false; });
+                setState(() { _failed = true; _loading = false; _bootstrapping = false; });
               }
             },
           ),
@@ -113,7 +126,7 @@ class _BookingScreenState extends State<BookingScreen> {
       setState(() => _controller = controller);
       await controller.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
     } catch (_) {
-      if (mounted) setState(() { _failed = true; _loading = false; });
+      if (mounted) setState(() { _failed = true; _loading = false; _bootstrapping = false; });
     }
   }
 
@@ -172,7 +185,7 @@ class _BookingScreenState extends State<BookingScreen> {
                             label: 'Try Again',
                             icon: Icons.refresh_rounded,
                             onPressed: () {
-                              setState(() { _failed = false; _loading = true; });
+                              setState(() { _failed = false; _loading = true; _bootstrapping = true; });
                               _initWebView();
                             },
                           ),
@@ -180,7 +193,21 @@ class _BookingScreenState extends State<BookingScreen> {
                       ),
                     ),
                   )
-                : WebViewWidget(controller: _controller!),
+                : Stack(
+                    children: [
+                      WebViewWidget(controller: _controller!),
+                      if (_loading || _bootstrapping)
+                        Positioned.fill(
+                          child: Container(
+                            color: isDark ? const Color(0xFF09090B) : Colors.white,
+                            child: const FancyTrainLoader(
+                              message: 'Loading secure checkout & payment...',
+                              showCard: true,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
           ),
         ],
       ),

@@ -147,6 +147,183 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     }
   }
 
+  void _showWalkthroughGuide() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF09090B) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          border: Border(
+            top: BorderSide(
+              color: const Color(0xFF00D59B).withValues(alpha: 0.5),
+              width: 1.5,
+            ),
+          ),
+          boxShadow: const [
+            BoxShadow(color: Colors.black54, blurRadius: 28, offset: Offset(0, -6)),
+          ],
+        ),
+        padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 38,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF00D59B).withValues(alpha: 0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.bolt_rounded, color: Color(0xFF00D59B), size: 22),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Auto-Booking & Security Guide',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        'High-speed automated seat reservation system',
+                        style: TextStyle(
+                          color: isDark ? Colors.white60 : Colors.black54,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  color: isDark ? Colors.white70 : Colors.black54,
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            _buildGuideCard(
+              icon: Icons.notifications_active_rounded,
+              title: 'Over-The-App Security Solve',
+              desc: 'When seats are detected, the Cloudflare verification popup can trigger over any app you are using so you never miss tickets.',
+              color: const Color(0xFF00D59B),
+              isDark: isDark,
+            ),
+            const SizedBox(height: 10),
+            _buildGuideCard(
+              icon: Icons.shield_rounded,
+              title: 'Silent Background Handshake',
+              desc: 'We never show the raw login website to you. Only the minimal security handshake runs cleanly in the background with real-time status loading.',
+              color: const Color(0xFF38BDF8),
+              isDark: isDark,
+            ),
+            const SizedBox(height: 10),
+            _buildGuideCard(
+              icon: Icons.timer_outlined,
+              title: '5-Minute Reservation Guarantee',
+              desc: 'Once seats are reserved, Bangladesh Railway locks them for 5 minutes. Proceed to checkout to finalize your payment.',
+              color: const Color(0xFFF59E0B),
+              isDark: isDark,
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF00D59B),
+                  foregroundColor: const Color(0xFF09090B),
+                  padding: const EdgeInsets.symmetric(vertical: 13),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Got It', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGuideCard({
+    required IconData icon,
+    required String title,
+    required String desc,
+    required Color color,
+    required bool isDark,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF121217) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isDark ? const Color(0xFF27272A) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    color: isDark ? Colors.white : Colors.black87,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  desc,
+                  style: TextStyle(
+                    color: isDark ? Colors.white60 : Colors.black54,
+                    fontSize: 11.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   _BookingStep _step(MonitorService m, Map<String, dynamic>? p) {
     if (p == null) return _BookingStep.searching;
     final s = p['status']?.toString() ?? '';
@@ -187,7 +364,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     return Scaffold(
       backgroundColor: isDark ? AppColors.darkBg : const Color(0xFF050E1C),
       extendBodyBehindAppBar: true,
-      appBar: _TopBar(onNew: _newSearch),
+      appBar: _TopBar(onNew: _newSearch, onGuide: _showWalkthroughGuide),
       body: Stack(children: [
         Positioned.fill(child: _BgCanvas(ctrl: _queueCtrl)),
         SafeArea(
@@ -282,7 +459,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 // ─── Top Bar ──────────────────────────────────────────────────────────────────
 class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback onNew;
-  const _TopBar({required this.onNew});
+  final VoidCallback? onGuide;
+  const _TopBar({required this.onNew, this.onGuide});
   @override
   Size get preferredSize => const Size.fromHeight(56);
   @override
@@ -312,6 +490,24 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
       ],
     ),
     actions: [
+      if (onGuide != null)
+        GestureDetector(
+          onTap: onGuide,
+          child: Container(
+            margin: const EdgeInsets.only(right: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.help_outline_rounded, color: Colors.white70, size: 14),
+              SizedBox(width: 4),
+              Text('Guide', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600)),
+            ]),
+          ),
+        ),
       GestureDetector(
         onTap: onNew,
         child: Container(

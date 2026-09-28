@@ -5,11 +5,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../utils/railway_stations.dart';
+
 /// Public operational settings only. Credentials never belong in this table.
 class AppConfig extends ChangeNotifier {
   static final instance = AppConfig();
   static const cacheKey = 'rail_app_config_v1';
-  static const defaults = <String, dynamic>{
+  static final defaults = <String, dynamic>{
     'poll_interval_seconds': 120,
     'request_timeout_seconds': 15,
     'free_monitor_seconds': 3600,
@@ -17,7 +19,7 @@ class AppConfig extends ChangeNotifier {
     'max_seats': 4,
     'default_seat_class': 'SNIGDHA',
     'seat_classes': ['ALL', 'SNIGDHA', 'S_CHAIR', 'AC_S', 'AC_B', 'F_SEAT', 'F_BERTH', 'SHOVON'],
-    'stations': ['Dhaka', 'Chattogram', "Cox's Bazar", 'Sylhet', 'Rajshahi', 'Khulna', 'Bogura', 'Dinajpur', 'Cumilla', 'Ishwardi', 'Rangpur', 'Brahmanbaria', 'Mymensingh', 'Jessore', 'Santahar'],
+    'stations': railwayStations,
     'sms_senders': ['RAILWAY', 'SHOHOZ', 'BANGLADESH RAILWAY'],
     'otp_length': 6,
     'otp_window_seconds': 180,

@@ -121,6 +121,22 @@ class NotificationService {
         },
       );
       _isInitialized = true;
+      final androidImpl = _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin
+          >();
+      if (androidImpl != null) {
+        const securityChannel = AndroidNotificationChannel(
+          'br_security_alerts',
+          'Railway Security Verification',
+          description:
+              'Urgent alerts when Cloudflare Turnstile verification is required to reserve seats',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+        );
+        await androidImpl.createNotificationChannel(securityChannel);
+      }
       if (!background) {
         final launch = await _notificationsPlugin
             .getNotificationAppLaunchDetails();
