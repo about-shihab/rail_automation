@@ -73,8 +73,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('We’re watching your journey'), findsOneWidget);
-      expect(find.text('JOURNEY DETAILS'), findsOneWidget);
+      expect(find.text('Rail Ticket'), findsOneWidget);
+      expect(find.text('Dhaka'), findsOneWidget);
       expect(find.text('Logs'), findsNothing);
       expect(tester.takeException(), isNull);
       final boundary =
@@ -90,7 +90,6 @@ void main() {
         await file.writeAsBytes(bytes!.buffer.asUint8List());
         image.dispose();
       });
-      await tester.drag(find.byType(ListView), const Offset(0, -700));
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

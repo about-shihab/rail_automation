@@ -16,6 +16,7 @@ import 'services/credit_service.dart';
 import 'services/app_config.dart';
 import 'views/search_screen.dart';
 import 'views/webview_login_screen.dart';
+import 'widgets/turnstile_sheet.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -105,9 +106,24 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
   @override
   Widget build(BuildContext context) {
     final themeService = Provider.of<ThemeService>(context);
-    final hasSearch = context.select<MonitorService, bool>(
-      (monitor) => monitor.dateOfJourney.isNotEmpty,
-    );
+    final monitor = context.watch<MonitorService>();
+    final hasSearch = monitor.dateOfJourney.isNotEmpty;
+
+    // Over-the-app popup trigger for Turnstile verification
+    if (monitor.needsTurnstile && !TurnstileSheet.isShowing) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final navContext = NotificationService.navigatorKey.currentContext;
+        if (navContext != null && monitor.needsTurnstile && !TurnstileSheet.isShowing) {
+          TurnstileSheet.show(navContext).then((token) {
+            if (token != null && token.isNotEmpty) {
+              monitor.clearBookingError();
+              monitor.checkNow();
+            }
+          });
+        }
+      });
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       NotificationService().openPendingBooking();
     });

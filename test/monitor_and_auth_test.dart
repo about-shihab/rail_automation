@@ -78,9 +78,8 @@ void main() {
           ),
         );
 
-        // Verify the dashboard rendered successfully with Rail sheba pro header
-        expect(find.text('Your journey'), findsOneWidget);
-        expect(find.text('Where will you go next?'), findsOneWidget);
+        // Verify the dashboard rendered successfully with header
+        expect(find.text('Rail Ticket'), findsOneWidget);
         // Verify Live Stats Strip is NOT shown
         expect(find.text('Total Checks'), findsNothing);
         expect(find.text('মোট চেক'), findsNothing);

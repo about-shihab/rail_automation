@@ -32,6 +32,53 @@ void main() {
   final train = ApiService.getMockResponse().trains[1];
   final seat = train.seatTypes.first;
 
+  Map<String, dynamic> checkoutState(List<Map<String, dynamic>> seats) => {
+    'train': train.toJson(),
+    'seatClass': seat.toJson(),
+    'coach': {'seat_fare': '450.00'},
+    'seats': seats,
+  };
+
+  test('checkout repairs legacy seat fares using the reserved coach', () {
+    final state = checkoutState([
+      {'ticket_id': 101},
+      {'ticket_id': 102},
+    ]);
+    final storage = BookingService.webStorage(state, '01700000000');
+    final purchase = jsonDecode(storage['initialPurchaseData01700000000']);
+    final seats = purchase['reservedSeats'] as List;
+    expect(seats.map((s) => s['fare']), [450, 450]);
+    expect(seats.map((s) => s['selected_seat_class']), [seat.type, seat.type]);
+    expect(seats.fold<num>(0, (total, s) => total + (s['fare'] as num)), 900);
+    expect(state['seats'][0].containsKey('fare'), isFalse);
+  });
+
+  test('checkout preserves per-seat fares and rejects invalid prices', () {
+    final state = checkoutState([
+      {'ticket_id': 101, 'fare': '595.50'},
+    ]);
+    final purchase = jsonDecode(
+      BookingService.webStorage(
+        state,
+        '01700000000',
+      )['initialPurchaseData01700000000'],
+    );
+    expect(purchase['reservedSeats'][0]['fare'], 595.5);
+    for (final invalid in ['NaN', 'Infinity', '', '-1', 'unknown']) {
+      state['seats'][0]['fare'] = invalid;
+      expect(
+        () => BookingService.webStorage(state, '01700000000'),
+        throwsStateError,
+      );
+    }
+    state['seats'][0].remove('fare');
+    state['coach'].remove('seat_fare');
+    expect(
+      () => BookingService.webStorage(state, '01700000000'),
+      throwsStateError,
+    );
+  });
+
   testWidgets('auto-reserve starts without entering a fare', (tester) async {
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       const MethodChannel('com.example.rail_automation/sms'),
@@ -314,6 +361,10 @@ void main() {
           final state = await reserve();
           expect(state['status'], 'awaitingOtp');
           expect(state['confirmedTicketIds'], hasLength(2));
+          expect((state['seats'] as List).map((s) => s['fare']), [
+            '400',
+            '400',
+          ]);
           expect(
             DateTime.parse(state['expiresAt']).isAfter(DateTime.now()),
             isTrue,
@@ -407,6 +458,40 @@ void main() {
       );
     },
   );
+
+  test('reservation automatically clears after 5 minutes', () async {
+    // 1. Fresh reservation is active
+    await BookingService.save({
+      'status': 'awaitingOtp',
+      'startedAt': DateTime.now().toUtc().toIso8601String(),
+      'expiresAt': DateTime.now().add(const Duration(minutes: 5)).toUtc().toIso8601String(),
+      'seatClass': {'trip_id': 1, 'trip_route_id': 2},
+      'seats': [{'ticket_id': 101}],
+    });
+    expect(await BookingService.pending(), isNotNull);
+
+    // 2. Reservation started 5 minutes and 1 second ago is automatically cleared
+    await BookingService.save({
+      'status': 'awaitingOtp',
+      'startedAt': DateTime.now().subtract(const Duration(minutes: 5, seconds: 1)).toUtc().toIso8601String(),
+      'expiresAt': DateTime.now().add(const Duration(minutes: 10)).toUtc().toIso8601String(),
+      'seatClass': {'trip_id': 1, 'trip_route_id': 2},
+      'seats': [{'ticket_id': 101}],
+    });
+    expect(await BookingService.pending(), isNull);
+    expect(await SecureStore.read(BookingService.storageKey), isNull);
+
+    // 3. Reservation with expired expiresAt is automatically cleared
+    await BookingService.save({
+      'status': 'awaitingOtp',
+      'startedAt': DateTime.now().subtract(const Duration(minutes: 2)).toUtc().toIso8601String(),
+      'expiresAt': DateTime.now().subtract(const Duration(seconds: 5)).toUtc().toIso8601String(),
+      'seatClass': {'trip_id': 1, 'trip_route_id': 2},
+      'seats': [{'ticket_id': 101}],
+    });
+    expect(await BookingService.pending(), isNull);
+    expect(await SecureStore.read(BookingService.storageKey), isNull);
+  });
 }
 
 final throwsStateOrException = throwsA(

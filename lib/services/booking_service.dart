@@ -9,6 +9,7 @@ import '../models/seat_type.dart';
 import '../models/train_trip.dart';
 import 'api_service.dart';
 import 'app_config.dart';
+import 'notification_service.dart';
 import 'secure_store.dart';
 
 /// Existing official website contract, inspected 2026-09-27.
@@ -17,14 +18,54 @@ class BookingService {
   static const storageKey = 'rail_pending_reservation_v1';
   static const tripInfoUrl =
       'https://eticket.railway.gov.bd/booking/train/trip-info';
+  static const reservationTimeoutMinutes = 5;
+
   static Future<Map<String, dynamic>?> pending() async {
     final raw = await SecureStore.read(storageKey);
-    return raw == null ? null : jsonDecode(raw) as Map<String, dynamic>;
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final started = DateTime.tryParse(map['startedAt'] ?? '');
+      final expires = DateTime.tryParse(map['expiresAt'] ?? '');
+      final now = DateTime.now();
+
+      // Automatically clear after 5 minutes (300 seconds) from start or when expired
+      final bool isExpiredByStartedAt =
+          started != null &&
+          now.difference(started).inSeconds >= (reservationTimeoutMinutes * 60);
+      final bool isExpiredByExpiresAt =
+          expires != null && !now.isBefore(expires);
+
+      if (isExpiredByStartedAt || isExpiredByExpiresAt) {
+        await clear();
+        return null;
+      }
+      return map;
+    } catch (_) {
+      await clear();
+      return null;
+    }
   }
 
-  static Future<void> save(Map<String, dynamic> value) =>
-      SecureStore.write(storageKey, jsonEncode(value));
-  static Future<void> clear() => SecureStore.delete(storageKey);
+  static Future<void> save(Map<String, dynamic> value) {
+    if (!value.containsKey('startedAt')) {
+      value['startedAt'] = DateTime.now().toUtc().toIso8601String();
+    }
+    if (!value.containsKey('expiresAt')) {
+      value['expiresAt'] = DateTime.now()
+          .add(const Duration(minutes: reservationTimeoutMinutes))
+          .toUtc()
+          .toIso8601String();
+    }
+    return SecureStore.write(storageKey, jsonEncode(value));
+  }
+
+  static Future<void> clear() async {
+    await SecureStore.delete(storageKey);
+    try {
+      await NotificationService().clearAlerts();
+    } catch (_) {}
+  }
 
   static Future<Map<String, dynamic>> request(
     String method,
@@ -62,7 +103,8 @@ class BookingService {
       try {
         final json = jsonDecode(response.body);
         if (json is Map) {
-          serverMsg = json['message']?.toString() ??
+          serverMsg =
+              json['message']?.toString() ??
               json['error']?.toString() ??
               json['detail']?.toString() ??
               json['msg']?.toString();
@@ -139,7 +181,8 @@ class BookingService {
     // The website rounds this server field to whole minutes after dividing by 60.
     final holdSeconds = (holdDuration / 60).ceil() * 60;
     await SecureStore.write('rail_hold_seconds', '$holdSeconds');
-    final activeCft = cftResponse ??
+    final activeCft =
+        cftResponse ??
         await SecureStore.read('rail_cft_token') ??
         await SecureStore.read('rail_action_token');
     final layout = await ApiService.fetchSeatLayout(
@@ -195,6 +238,8 @@ class BookingService {
               ...s.$2.toJson(),
               'floor': s.$1.seatFloor,
               'floor_name': s.$1.floorName,
+              'fare': s.$1.seatFare,
+              'selected_seat_class': seat.type,
             },
           )
           .toList(),
@@ -205,7 +250,7 @@ class BookingService {
       'autoVerify': autoVerify,
       'startedAt': DateTime.now().toUtc().toIso8601String(),
       'expiresAt': DateTime.now()
-          .add(Duration(seconds: holdSeconds))
+          .add(Duration(seconds: min(holdSeconds, reservationTimeoutMinutes * 60)))
           .toUtc()
           .toIso8601String(),
     };
@@ -226,7 +271,8 @@ class BookingService {
             'origin_name': from,
             'destination_name': to,
           },
-          if (activeCft != null && activeCft.isNotEmpty) 'action_token': activeCft,
+          if (activeCft != null && activeCft.isNotEmpty)
+            'action_token': activeCft,
         }, auth);
         if (data['ack'] != 1)
           throw StateError('Seat reservation was not acknowledged.');
@@ -249,7 +295,7 @@ class BookingService {
       );
       if (seconds != null && seconds > 0) {
         state['expiresAt'] = DateTime.parse(state['startedAt'])
-            .add(Duration(seconds: seconds))
+            .add(Duration(seconds: min(seconds, reservationTimeoutMinutes * 60)))
             .toUtc()
             .toIso8601String();
       }
@@ -308,7 +354,7 @@ class BookingService {
       'selectedTrip': state['train'],
       'selectedSeatClass': state['seatClass'],
       'selectedCoach': state['coach'],
-      'reservedSeats': state['seats'],
+      'reservedSeats': _webReservedSeats(state),
       'selectedBoardingPoint': state['train']['boarding_points'][0],
       'searchInfo': {
         'fromStation': state['from'],
@@ -326,4 +372,25 @@ class BookingService {
     if (state['status'] == 'readyForPayment')
       'confirm_booking_otp': state['otp'],
   };
+
+  static List<Map<String, dynamic>> _webReservedSeats(
+    Map<String, dynamic> state,
+  ) => (state['seats'] as List).map((raw) {
+    final seat = Map<String, dynamic>.from(raw as Map);
+    // Older reservations only stored the fare on the coach. The checkout
+    // calculates ticket price and VAT using Number(reservedSeat.fare).
+    final value = seat['fare'] ?? state['coach']['seat_fare'];
+    final fare = num.tryParse('$value');
+    if (fare == null || !fare.isFinite || fare < 0) {
+      throw StateError(
+        'Reservation fare is unavailable. Please reopen booking.',
+      );
+    }
+    return {
+      ...seat,
+      'fare': fare,
+      'selected_seat_class':
+          seat['selected_seat_class'] ?? state['seatClass']['type'],
+    };
+  }).toList();
 }

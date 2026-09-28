@@ -33,9 +33,37 @@ class _BookingScreenState extends State<BookingScreen> {
       final reservation = await BookingService.pending();
       bool bootstrapped = false;
 
+      // Sync cookies from session if available
+      if (session?.cookie != null && session!.cookie!.isNotEmpty) {
+        final cookies = session.cookie!.split(';');
+        for (final c in cookies) {
+          final parts = c.split('=');
+          if (parts.length >= 2) {
+            final name = parts[0].trim();
+            final value = parts.sublist(1).join('=').trim();
+            if (name.isNotEmpty && value.isNotEmpty) {
+              await WebViewCookieManager().setCookie(
+                WebViewCookie(
+                  name: name,
+                  value: value,
+                  domain: 'eticket.railway.gov.bd',
+                  path: '/',
+                ),
+              );
+            }
+          }
+        }
+      }
+
+      // If already ready for payment, direct straight to trip-info checkout
+      final isReadyForPayment = reservation != null && reservation['status'] == 'readyForPayment';
+      final targetUrl = isReadyForPayment ? BookingService.tripInfoUrl : widget.url;
+
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+        ..setUserAgent(
+          'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+        )
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (_) { if (mounted) setState(() => _loading = true); },
@@ -45,10 +73,13 @@ class _BookingScreenState extends State<BookingScreen> {
               bootstrapped = true;
               if (session != null && session.isValid) {
                 final userRaw = await SecureStore.read('rail_user');
+                final cftToken = await SecureStore.read('rail_cft_token');
                 final values = <String, String>{
                   'token': session.token.startsWith('Bearer ') ? session.token.substring(7) : session.token,
-                  'uudid': session.deviceId, 'ssdk': session.deviceKey,
+                  'uudid': session.deviceId,
+                  'ssdk': session.deviceKey,
                   'user': ?userRaw,
+                  if (cftToken != null && cftToken.isNotEmpty) 'cft_token': cftToken,
                 };
                 Map<String, dynamic> storage = {};
                 if (reservation != null && ['awaitingOtp', 'readyForPayment'].contains(reservation['status'])) {
@@ -58,11 +89,17 @@ class _BookingScreenState extends State<BookingScreen> {
                     storage = BookingService.webStorage(reservation, phone);
                   }
                 }
-                await _controller?.runJavaScript(
-                  'Object.entries(${jsonEncode(values)}).forEach(([k,v]) => localStorage.setItem(k,v));'
-                  'Object.entries(${jsonEncode(storage)}).forEach(([k,v]) => sessionStorage.setItem(k,String(v)));',
-                );
-                await _controller?.loadRequest(Uri.parse(widget.url));
+                await _controller?.runJavaScript('''
+                  (function() {
+                    Object.entries(${jsonEncode(values)}).forEach(([k,v]) => {
+                      try { localStorage.setItem(k, v); } catch(_) {}
+                    });
+                    Object.entries(${jsonEncode(storage)}).forEach(([k,v]) => {
+                      try { sessionStorage.setItem(k, String(v)); } catch(_) {}
+                    });
+                  })();
+                ''');
+                await _controller?.loadRequest(Uri.parse(targetUrl));
               }
             },
             onWebResourceError: (error) {

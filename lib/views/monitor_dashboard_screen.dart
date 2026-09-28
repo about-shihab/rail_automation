@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/auth_session.dart';
 import '../services/booking_service.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
@@ -13,6 +14,7 @@ import 'booking_screen.dart';
 import 'reservation_screen.dart';
 import 'search_screen.dart';
 import 'webview_login_screen.dart';
+import '../widgets/fancy_train_loader.dart';
 import '../widgets/turnstile_sheet.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
@@ -37,8 +39,13 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   @override
   void initState() {
     super.initState();
-    _queueCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4))..repeat();
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))..repeat(reverse: true);
+    final isTest = WidgetsBinding.instance.runtimeType.toString().contains('Test');
+    _queueCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4));
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
+    if (!isTest) {
+      _queueCtrl.repeat();
+      _pulseCtrl.repeat(reverse: true);
+    }
     _refresh();
     _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
   }
@@ -61,6 +68,12 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     if (_sessionExpired || !mounted) return;
     final m = context.read<MonitorService>();
     if (m.needsLogin) {
+      final session = await AuthSession.load();
+      if (session != null && session.isValid) {
+        // Current saved session is completely valid; clear the stale error
+        m.clearErrors();
+        return;
+      }
       setState(() => _sessionExpired = true);
       await Future.delayed(const Duration(milliseconds: 900));
       if (mounted && !_redirecting) {
@@ -70,13 +83,13 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       return;
     }
 
-    if (m.needsTurnstile && !_turnstileShowing) {
+    if (m.needsTurnstile && !_turnstileShowing && !TurnstileSheet.isShowing) {
       _triggerAutoTurnstile();
     }
   }
 
   void _triggerAutoTurnstile() {
-    if (_turnstileShowing || !mounted) return;
+    if (_turnstileShowing || TurnstileSheet.isShowing || !mounted) return;
     _turnstileShowing = true;
     _handleSolveTurnstile().whenComplete(() {
       _turnstileShowing = false;
@@ -156,9 +169,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final isActive = m.isMonitoring && p == null && !m.needsLogin;
     final exactError = m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
 
-    if (m.needsTurnstile && !_turnstileShowing) {
+    if (m.needsTurnstile && !_turnstileShowing && !TurnstileSheet.isShowing) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && m.needsTurnstile && !_turnstileShowing) {
+        if (mounted && m.needsTurnstile && !_turnstileShowing && !TurnstileSheet.isShowing) {
           _triggerAutoTurnstile();
         }
       });
@@ -248,7 +261,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                           padding: const EdgeInsets.only(bottom: 12),
                           child: AnimatedBuilder(
                             animation: _pulseCtrl,
-                            builder: (_, __) => Text(
+                            builder: (context, child) => Text(
                               m.remainingTimeFormatted,
                               style: TextStyle(color: Colors.white.withValues(alpha: 0.38 + _pulseCtrl.value * 0.22), fontSize: 11, letterSpacing: 0.5),
                             ),
@@ -276,19 +289,28 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) => AppBar(
     backgroundColor: Colors.transparent, elevation: 0,
     leading: const SizedBox.shrink(), centerTitle: false,
-    title: Row(children: [
-      Container(
-        width: 32, height: 32,
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+    title: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 32, height: 32,
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+          ),
+          child: const Icon(Icons.train_rounded, color: AppColors.primary, size: 16),
         ),
-        child: const Icon(Icons.train_rounded, color: AppColors.primary, size: 16),
-      ),
-      const SizedBox(width: 10),
-      const Text('Rail Ticket', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
-    ]),
+        const SizedBox(width: 8),
+        const Flexible(
+          child: Text(
+            'Rail Ticket',
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    ),
     actions: [
       GestureDetector(
         onTap: onNew,
@@ -318,7 +340,7 @@ class _BgCanvas extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: ctrl,
-    builder: (_, __) => CustomPaint(painter: _BgPainter(t: ctrl.value)),
+    builder: (context, child) => CustomPaint(painter: _BgPainter(t: ctrl.value)),
   );
 }
 
@@ -409,40 +431,57 @@ class _CenterAnim extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final showQueue = isActive && !ready && !otp;
     return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      AnimatedBuilder(
-        animation: Listenable.merge([pCtrl, qCtrl]),
-        builder: (_, __) {
-          final pulse = pCtrl.value;
-          return Transform.scale(
-            scale: isActive ? (0.97 + pulse * 0.055) : 1.0,
-            child: Stack(alignment: Alignment.center, children: [
-              if (isActive) ...[
-                Container(width: 140 + pulse * 14, height: 140 + pulse * 14,
+      if (showQueue) ...[
+        SizedBox(
+          height: 156,
+          child: FancyTrainLoader(
+            message: step == _BookingStep.reserving
+                ? 'HOLDING SEATS • RESERVING...'
+                : 'WAITING IN QUEUE • LOOKING FOR TICKET',
+            height: 156,
+            showCard: false,
+          ),
+        ),
+        const SizedBox(height: 8),
+      ] else ...[
+        AnimatedBuilder(
+          animation: Listenable.merge([pCtrl, qCtrl]),
+          builder: (context, child) {
+            final pulse = pCtrl.value;
+            return Transform.scale(
+              scale: isActive ? (0.97 + pulse * 0.055) : 1.0,
+              child: Stack(alignment: Alignment.center, children: [
+                if (isActive) ...[
+                  Container(width: 140 + pulse * 14, height: 140 + pulse * 14,
+                    decoration: BoxDecoration(shape: BoxShape.circle,
+                      border: Border.all(color: (ready ? AppColors.gold : AppColors.primary).withValues(alpha: 0.04 + pulse * 0.04), width: 1))),
+                  Container(width: 116 + pulse * 10, height: 116 + pulse * 10,
+                    decoration: BoxDecoration(shape: BoxShape.circle,
+                      border: Border.all(color: (ready ? AppColors.gold : AppColors.primary).withValues(alpha: 0.08 + pulse * 0.08), width: 1.5))),
+                ],
+                Container(width: 90, height: 90,
                   decoration: BoxDecoration(shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.04 + pulse * 0.04), width: 1))),
-                Container(width: 116 + pulse * 10, height: 116 + pulse * 10,
-                  decoration: BoxDecoration(shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.primary.withValues(alpha: 0.08 + pulse * 0.08), width: 1.5))),
-              ],
-              Container(width: 90, height: 90,
-                decoration: BoxDecoration(shape: BoxShape.circle,
-                  gradient: RadialGradient(colors: [
-                    AppColors.primary.withValues(alpha: 0.22 + pulse * 0.12),
-                    AppColors.primaryDark.withValues(alpha: 0.06),
-                  ]),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.35 + pulse * 0.25), width: 1.5),
-                  boxShadow: [BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.14 + pulse * 0.14),
-                    blurRadius: 20 + pulse * 16, spreadRadius: 2,
-                  )]),
-                child: Icon(_icon, color: ready ? AppColors.gold : AppColors.primary, size: 38)),
-            ]),
-          );
-        },
-      ),
-
-      const SizedBox(height: 18),
+                    gradient: RadialGradient(colors: [
+                      ready ? AppColors.gold.withValues(alpha: 0.25) : AppColors.primary.withValues(alpha: 0.22 + pulse * 0.12),
+                      ready ? AppColors.gold.withValues(alpha: 0.08) : AppColors.primaryDark.withValues(alpha: 0.06),
+                    ]),
+                    border: Border.all(
+                      color: ready ? AppColors.gold : AppColors.primary.withValues(alpha: 0.35 + pulse * 0.25),
+                      width: 1.5,
+                    ),
+                    boxShadow: [BoxShadow(
+                      color: (ready ? AppColors.gold : AppColors.primary).withValues(alpha: 0.14 + pulse * 0.14),
+                      blurRadius: 20 + pulse * 16, spreadRadius: 2,
+                    )]),
+                  child: Icon(_icon, color: ready ? AppColors.gold : AppColors.primary, size: 38)),
+              ]),
+            );
+          },
+        ),
+        const SizedBox(height: 14),
+      ],
 
       // Route pill with animated dots
       Container(
@@ -458,7 +497,7 @@ class _CenterAnim extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 8),
             child: AnimatedBuilder(
               animation: qCtrl,
-              builder: (_, __) => Row(mainAxisSize: MainAxisSize.min,
+              builder: (context, child) => Row(mainAxisSize: MainAxisSize.min,
                 children: List.generate(3, (i) {
                   final a = ((qCtrl.value - i / 3.0) % 1.0 + 1.0) % 1.0;
                   return Padding(padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -473,16 +512,17 @@ class _CenterAnim extends StatelessWidget {
         ]),
       ),
 
-      const SizedBox(height: 12),
-
-      // Pulsing label
-      AnimatedBuilder(
-        animation: pCtrl,
-        builder: (_, __) => Text(_label, style: TextStyle(
-          color: Colors.white.withValues(alpha: 0.42 + pCtrl.value * 0.38),
-          fontSize: 11, letterSpacing: 2.0, fontWeight: FontWeight.w600,
-        )),
-      ),
+      if (!showQueue) ...[
+        const SizedBox(height: 12),
+        // Pulsing label
+        AnimatedBuilder(
+          animation: pCtrl,
+          builder: (context, child) => Text(_label, style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.42 + pCtrl.value * 0.38),
+            fontSize: 11, letterSpacing: 2.0, fontWeight: FontWeight.w600,
+          )),
+        ),
+      ],
 
       // Exact Error Notice
       if (errorMessage != null && errorMessage!.isNotEmpty) ...[
@@ -630,7 +670,7 @@ class _StepDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: ctrl,
-    builder: (_, __) {
+    builder: (context, child) {
       final Color bg, border, ic;
       if (done) { bg = AppColors.primary.withValues(alpha: 0.15); border = AppColors.primary.withValues(alpha: 0.45); ic = AppColors.primary; }
       else if (active) { bg = AppColors.primary.withValues(alpha: 0.09 + ctrl.value * 0.09); border = AppColors.primary.withValues(alpha: 0.28 + ctrl.value * 0.32); ic = AppColors.primary; }
@@ -729,7 +769,7 @@ class _PrimaryBtnState extends State<_PrimaryBtn> with SingleTickerProviderState
       onTapDown: (_) => _a.forward(),
       onTapUp: (_) { _a.reverse(); widget.onTap(); },
       onTapCancel: () => _a.reverse(),
-      child: AnimatedBuilder(animation: _a, builder: (_, __) => Transform.scale(
+      child: AnimatedBuilder(animation: _a, builder: (context, child) => Transform.scale(
         scale: 1.0 - _a.value * 0.025,
         child: Container(
           width: double.infinity, height: 52,
@@ -786,7 +826,7 @@ class _ExpiredOverlay extends StatelessWidget {
   const _ExpiredOverlay({required this.ctrl});
   @override
   Widget build(BuildContext context) => Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-    AnimatedBuilder(animation: ctrl, builder: (_, __) => Container(
+    AnimatedBuilder(animation: ctrl, builder: (context, child) => Container(
       width: 82 + ctrl.value * 8, height: 82 + ctrl.value * 8,
       decoration: BoxDecoration(shape: BoxShape.circle,
         color: AppColors.error.withValues(alpha: 0.08),

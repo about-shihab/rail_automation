@@ -210,6 +210,12 @@ class MonitorService extends ChangeNotifier {
     _lastBookingError = null;
     notifyListeners();
   }
+
+  void clearErrors() {
+    _lastError = null;
+    _lastBookingError = null;
+    notifyListeners();
+  }
   bool get needsTurnstile =>
       (_lastBookingError != null &&
           RegExp(

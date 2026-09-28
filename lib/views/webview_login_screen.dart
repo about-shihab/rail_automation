@@ -628,6 +628,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   void _navigateToSearch() {
     if (!mounted) return;
     final monitorService = context.read<MonitorService>();
+    monitorService.clearErrors();
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) =>

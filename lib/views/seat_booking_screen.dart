@@ -151,6 +151,9 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final maxSeats = AppConfig.instance.number('max_seats');
+    final availableCoaches = (_layout?.coaches ?? <CoachLayout>[])
+        .where((c) => c.layout.expand((r) => r).any((s) => !s.isEmptySpace && s.isAvailable))
+        .toList();
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -284,27 +287,43 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                           ),
                           const SizedBox(height: 16),
 
-                          // Coach layouts
-                          for (final coach in _layout?.coaches ?? <CoachLayout>[]) ...[
-                            _CoachCard(
-                              coach: coach,
-                              selected: _selected,
-                              isDark: isDark,
-                              maxSeats: maxSeats,
-                              allCoachIds: coach.layout.expand((r) => r).map((s) => s.ticketId).toSet(),
-                              onSeatTap: (seat) => setState(() {
-                                if (_selected.contains(seat)) {
-                                  _selected.remove(seat);
-                                  return;
-                                }
-                                // Enforce single-coach rule
-                                final coachIds = coach.layout.expand((r) => r).map((s) => s.ticketId).toSet();
-                                if (_selected.any((s) => !coachIds.contains(s.ticketId))) _selected.clear();
-                                if (_selected.length < maxSeats) _selected.add(seat);
-                              }),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
+                          // Coach layouts (only show coaches with available seats)
+                          if (availableCoaches.isEmpty && _layout != null)
+                            AppCard(
+                              child: Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                    'No online seats currently available for this train.',
+                                    style: TextStyle(
+                                      color: AppColors.textSecondary(isDark),
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            for (final coach in availableCoaches) ...[
+                              _CoachCard(
+                                coach: coach,
+                                selected: _selected,
+                                isDark: isDark,
+                                maxSeats: maxSeats,
+                                allCoachIds: coach.layout.expand((r) => r).map((s) => s.ticketId).toSet(),
+                                onSeatTap: (seat) => setState(() {
+                                  if (_selected.contains(seat)) {
+                                    _selected.remove(seat);
+                                    return;
+                                  }
+                                  // Enforce single-coach rule
+                                  final coachIds = coach.layout.expand((r) => r).map((s) => s.ticketId).toSet();
+                                  if (_selected.any((s) => !coachIds.contains(s.ticketId))) _selected.clear();
+                                  if (_selected.length < maxSeats) _selected.add(seat);
+                                }),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
 
                           // SMS verify toggle
                           AppCard(
@@ -461,7 +480,7 @@ class _CoachCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final seats = coach.layout.expand((r) => r).where((s) => !s.isEmptySpace).toList();
+    final seats = coach.layout.expand((r) => r).where((s) => !s.isEmptySpace && s.isAvailable).toList();
     final isCoachSelected = selected.any((s) => allCoachIds.contains(s.ticketId));
 
     return Container(
@@ -504,7 +523,7 @@ class _CoachCard extends StatelessWidget {
             ),
           ),
 
-          // Seats grid
+          // Seats grid (only available seats)
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
             child: Wrap(
@@ -512,30 +531,19 @@ class _CoachCard extends StatelessWidget {
               runSpacing: 8,
               children: seats.map((seat) {
                 final isSelected = selected.contains(seat);
-                final isAvailable = seat.isAvailable;
-                final canSelect = isAvailable && (
-                  isSelected ||
+                final canSelect = isSelected ||
                   (selected.length < maxSeats &&
-                    (selected.isEmpty || allCoachIds.containsAll(selected.map((s) => s.ticketId))))
-                );
+                    (selected.isEmpty || allCoachIds.containsAll(selected.map((s) => s.ticketId))));
 
-                Color bgColor;
-                Color textColor;
-                Color borderColor;
-
-                if (isSelected) {
-                  bgColor = AppColors.primary;
-                  textColor = Colors.black87;
-                  borderColor = AppColors.primary;
-                } else if (!isAvailable) {
-                  bgColor = AppColors.error.withValues(alpha: 0.08);
-                  textColor = AppColors.textMuted(isDark);
-                  borderColor = AppColors.error.withValues(alpha: 0.2);
-                } else {
-                  bgColor = AppColors.primary.withValues(alpha: 0.08);
-                  textColor = AppColors.primary;
-                  borderColor = AppColors.primary.withValues(alpha: 0.4);
-                }
+                final Color bgColor = isSelected
+                    ? AppColors.primary
+                    : AppColors.primary.withValues(alpha: 0.08);
+                final Color textColor = isSelected
+                    ? Colors.black87
+                    : AppColors.primary;
+                final Color borderColor = isSelected
+                    ? AppColors.primary
+                    : AppColors.primary.withValues(alpha: 0.4);
 
                 return GestureDetector(
                   onTap: canSelect ? () => onSeatTap(seat) : null,
@@ -567,10 +575,8 @@ class _CoachCard extends StatelessWidget {
             child: Row(
               children: [
                 _LegendDot(color: AppColors.primary.withValues(alpha: 0.08), border: AppColors.primary.withValues(alpha: 0.4), label: 'Available'),
-                const SizedBox(width: 12),
-                _LegendDot(color: AppColors.primary, border: AppColors.primary, label: 'Selected', textColor: Colors.black87),
-                const SizedBox(width: 12),
-                _LegendDot(color: AppColors.error.withValues(alpha: 0.08), border: AppColors.error.withValues(alpha: 0.2), label: 'Booked'),
+                const SizedBox(width: 14),
+                const _LegendDot(color: AppColors.primary, border: AppColors.primary, label: 'Selected', textColor: Colors.black87),
               ],
             ),
           ),
