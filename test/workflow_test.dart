@@ -11,11 +11,14 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/models/booking_intent.dart';
+import 'package:rail_automation/models/seat_type.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/app_config.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/services/sms_service.dart';
+import 'package:rail_automation/models/trip_record.dart';
+import 'package:rail_automation/services/trip_history_service.dart';
 import 'package:rail_automation/services/web_session_service.dart';
 
 void main() {
@@ -173,6 +176,25 @@ void main() {
     expect(chosen?.$2.type, 'S_CHAIR');
     expect(chosen?.$1.tripNumber, 'CHATTALA EXPRESS (802)');
     expect(intent.choose([train], seatClass: 'SNIGDHA'), isNull);
+  });
+  test('random class chooses whichever seat class is available across all returned seat types', () {
+    expect(SeatType.randomClass.displayName, 'Random Class (Any Available)');
+    expect(ApiService.requestSeatClass('RANDOM'), 'SNIGDHA');
+    expect(ApiService.requestSeatClass('ALL'), 'SNIGDHA');
+
+    const intent = BookingIntent(autoReserve: true, quantity: 1);
+    final mockTrains = ApiService.getMockResponse().trains;
+
+    // Both 'RANDOM', 'ALL', and null evaluate all seat types and pick an available one
+    final chosenRandom = intent.choose(mockTrains, seatClass: 'RANDOM', random: Random(42));
+    final chosenAll = intent.choose(mockTrains, seatClass: 'ALL', random: Random(42));
+    final chosenNull = intent.choose(mockTrains, seatClass: null, random: Random(42));
+
+    expect(chosenRandom, isNotNull);
+    expect(chosenAll, isNotNull);
+    expect(chosenNull, isNotNull);
+    expect(chosenRandom?.$2.seatCounts.online, greaterThanOrEqualTo(1));
+    expect(chosenAll?.$2.seatCounts.online, greaterThanOrEqualTo(1));
   });
   test('SMS parser ignores unrelated senders and non-OTP messages', () {
     expect(SmsService.extractOtp('BANK', 'OTP 123456', ['RAILWAY'], 6), isNull);
@@ -491,6 +513,54 @@ void main() {
     });
     expect(await BookingService.pending(), isNull);
     expect(await SecureStore.read(BookingService.storageKey), isNull);
+  });
+
+  test('TripHistoryService tracks successful, awaitingOtp, expired, and failed bookings', () async {
+    final history = TripHistoryService();
+    await history.clearHistory();
+
+    final trip1 = TripRecord(
+      id: 'trip_1',
+      trainName: 'PARJOTAK EXPRESS (816)',
+      fromCity: 'Dhaka',
+      toCity: 'Chattogram',
+      dateOfJourney: '06-Oct-2026',
+      seatClass: 'SNIGDHA',
+      seatNumbers: ['CHA-12', 'CHA-13'],
+      coachName: 'CHA',
+      totalFare: 1640.0,
+      status: TripBookingStatus.successful,
+      createdAt: DateTime.now(),
+      isAutoBook: true,
+    );
+
+    final trip2 = TripRecord(
+      id: 'trip_2',
+      trainName: 'SONAR BANGLA EXPRESS (788)',
+      fromCity: 'Dhaka',
+      toCity: 'Chattogram',
+      dateOfJourney: '06-Oct-2026',
+      seatClass: 'S_CHAIR',
+      seatNumbers: [],
+      status: TripBookingStatus.failed,
+      failureReason: 'Seat layout rejected (422): Turnstile verification required',
+      createdAt: DateTime.now(),
+      isAutoBook: true,
+    );
+
+    await history.recordTrip(trip1);
+    await history.recordTrip(trip2);
+
+    expect(history.trips.length, 2);
+    expect(history.successfulTrips.length, 1);
+    expect(history.failedTrips.length, 1);
+    expect(history.successfulTrips.first.trainName, 'PARJOTAK EXPRESS (816)');
+    expect(history.failedTrips.first.failureReason, contains('422'));
+
+    // Update trip1 status to expired when 5-min timeout hits
+    await history.updateTripStatus('trip_1', TripBookingStatus.expired, failureReason: 'Reservation timed out after 5 minutes');
+    expect(history.failedTrips.length, 2);
+    expect(history.successfulTrips.length, 0);
   });
 }
 

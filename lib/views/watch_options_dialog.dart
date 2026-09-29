@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../models/booking_intent.dart';
 import '../services/app_config.dart';
+import '../services/credit_service.dart';
 import '../services/sms_service.dart';
 import '../utils/app_theme.dart';
+import 'recharge_credit_dialog.dart';
 
 Future<BookingIntent?> showWatchOptions(
   BuildContext context, {
@@ -30,6 +32,11 @@ class _WatchSheetState extends State<_WatchSheet> {
 
   Future<void> _start() async {
     if (_busy) return;
+    if (CreditService().credits <= 0) {
+      Navigator.pop(context);
+      RechargeCreditDialog.show(context);
+      return;
+    }
     setState(() => _busy = true);
     final verify = _autoVerify && await SmsService().requestSmsPermission();
     if (!mounted) return;
@@ -69,8 +76,23 @@ class _WatchSheetState extends State<_WatchSheet> {
         ),
         const SizedBox(height: 20),
         Chip(
-          avatar: const Icon(Icons.event_seat_outlined, size: 18),
-          label: Text(widget.seatClass ?? 'Any available class'),
+          avatar: Icon(
+            (widget.seatClass == null ||
+                    widget.seatClass == 'ALL' ||
+                    widget.seatClass == 'RANDOM')
+                ? Icons.shuffle_rounded
+                : Icons.event_seat_outlined,
+            size: 18,
+            color: AppColors.primary,
+          ),
+          label: Text(
+            (widget.seatClass == null ||
+                    widget.seatClass == 'ALL' ||
+                    widget.seatClass == 'RANDOM')
+                ? 'Random Class (Any Available)'
+                : widget.seatClass!,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
         ),
         const SizedBox(height: 18),
         Row(
@@ -122,10 +144,21 @@ class _WatchSheetState extends State<_WatchSheet> {
         ),
         const SizedBox(height: 24),
         PrimaryButton(
-          label: 'Start auto-booking',
-          icon: Icons.arrow_forward_rounded,
+          label: CreditService().credits <= 0
+              ? 'Buy Credit to Auto-Book'
+              : 'Start auto-booking',
+          icon: CreditService().credits <= 0
+              ? Icons.bolt_rounded
+              : Icons.arrow_forward_rounded,
           loading: _busy,
-          onPressed: _busy ? null : _start,
+          onPressed: _busy
+              ? null
+              : (CreditService().credits <= 0
+                  ? () {
+                      Navigator.pop(context);
+                      RechargeCreditDialog.show(context);
+                    }
+                  : _start),
         ),
         const SizedBox(height: 8),
         Center(

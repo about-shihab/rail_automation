@@ -44,11 +44,10 @@ class NotificationService {
         return;
       }
       _pendingBooking = null;
-      TurnstileSheet.show(navigator.context).then((token) {
+      TurnstileDialog.show(navigator.context).then((token) {
         if (token != null && token.isNotEmpty && navigator.mounted) {
           try {
-            navigator.context.read<MonitorService>().clearBookingError();
-            navigator.context.read<MonitorService>().checkNow();
+            navigator.context.read<MonitorService>().onTurnstileSolved(token);
           } catch (_) {}
         }
       });
@@ -212,11 +211,13 @@ class NotificationService {
     final androidDetails = AndroidNotificationDetails(
       'br_security_alerts',
       'Railway Security Verification',
-      channelDescription: 'Urgent alerts when Cloudflare Turnstile verification is required to reserve seats',
+      channelDescription:
+          'Urgent alerts when Cloudflare Turnstile verification is required to reserve seats',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
       fullScreenIntent: true,
       category: AndroidNotificationCategory.alarm,
+      visibility: NotificationVisibility.public,
       playSound: true,
       enableVibration: true,
       ticker: 'Security Verification Required',

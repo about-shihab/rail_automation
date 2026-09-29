@@ -75,6 +75,12 @@ class AppThemes {
       onSurface: AppColors.darkTextPrimary,
     ),
     scaffoldBackgroundColor: AppColors.darkBg,
+    navigationBarTheme: NavigationBarThemeData(
+      height: 68,
+      backgroundColor: AppColors.darkSurface,
+      indicatorColor: AppColors.primary.withValues(alpha: 0.18),
+      labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    ),
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
       backgroundColor: AppColors.darkSurface,
@@ -143,6 +149,12 @@ class AppThemes {
       onSurface: AppColors.lightTextPrimary,
     ),
     scaffoldBackgroundColor: AppColors.lightBg,
+    navigationBarTheme: NavigationBarThemeData(
+      height: 68,
+      backgroundColor: AppColors.lightSurface,
+      indicatorColor: AppColors.primary.withValues(alpha: 0.18),
+      labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+    ),
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
       backgroundColor: AppColors.lightSurface,
@@ -300,28 +312,34 @@ class AppCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(18),
-        child: Container(
-          padding: padding ?? const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.cardBg(isDark),
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: borderColor ?? AppColors.cardBorder(isDark)),
-            boxShadow: isDark
-                ? null
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.06),
-                      blurRadius: 12,
-                      offset: const Offset(0, 4),
-                    )
-                  ],
+    final radius = BorderRadius.circular(18);
+    final border = BorderSide(color: borderColor ?? AppColors.cardBorder(isDark));
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: isDark
+            ? null
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                )
+              ],
+      ),
+      child: Material(
+        color: AppColors.cardBg(isDark),
+        shape: RoundedRectangleBorder(
+          borderRadius: radius,
+          side: border,
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: padding ?? const EdgeInsets.all(16),
+            child: child,
           ),
-          child: child,
         ),
       ),
     );

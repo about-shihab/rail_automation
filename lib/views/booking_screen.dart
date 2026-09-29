@@ -1,5 +1,6 @@
 import 'dart:convert';
 import '../services/booking_service.dart';
+import '../services/credit_service.dart';
 import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../models/auth_session.dart';
 import '../utils/app_theme.dart';
 import '../widgets/fancy_train_loader.dart';
+import 'recharge_credit_dialog.dart';
 
 class BookingScreen extends StatefulWidget {
   final String url;
@@ -113,6 +115,7 @@ class _BookingScreenState extends State<BookingScreen> {
                   _bootstrapping = false;
                   _loading = false;
                 });
+                await _checkPaymentSuccess(url);
               }
             },
             onWebResourceError: (error) {
@@ -130,6 +133,88 @@ class _BookingScreenState extends State<BookingScreen> {
     }
   }
 
+  bool _completedHandled = false;
+
+  Future<void> _checkPaymentSuccess(String url) async {
+    if (_completedHandled) return;
+    final lower = url.toLowerCase();
+    if (lower.contains('confirmation') ||
+        lower.contains('payment-success') ||
+        lower.contains('purchase-success') ||
+        lower.contains('ticket-history') ||
+        lower.contains('payment/success') ||
+        lower.contains('booking/confirm')) {
+      _completedHandled = true;
+      final done = await BookingService.completeSuccessfulBooking();
+      if (done && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('🎉 Booking Successful! 1 Credit Deducted.'),
+            backgroundColor: Color(0xFF059669),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _confirmPaymentManual() async {
+    if (CreditService().credits <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ You have 0 credits. Please buy credits to confirm booking.'),
+          backgroundColor: Color(0xFFF59E0B),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      await RechargeCreditDialog.show(context);
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Confirm Successful Booking?'),
+        content: const Text(
+          'Did you successfully complete payment on Bangladesh Railway?\n\nExactly 1 credit will be deducted from your account.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.black,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Yes, Deduct 1 Credit'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      _completedHandled = true;
+      final done = await BookingService.completeSuccessfulBooking();
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              done
+                  ? '🎉 Booking Confirmed! 1 Credit Deducted.'
+                  : 'Booking finalized.',
+            ),
+            backgroundColor: const Color(0xFF059669),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -143,6 +228,17 @@ class _BookingScreenState extends State<BookingScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+            icon: const Icon(Icons.check_circle_rounded, color: Color(0xFF34D399), size: 18),
+            label: const Text(
+              'Confirmed',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            onPressed: _confirmPaymentManual,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white),
             onPressed: () {

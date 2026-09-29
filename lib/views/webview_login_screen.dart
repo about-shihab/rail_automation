@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'app_shell.dart';
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../models/auth_session.dart';
@@ -631,9 +632,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     monitorService.clearErrors();
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) =>
-        monitorService.dateOfJourney.isNotEmpty
-          ? const MonitorDashboardScreen() : const SearchScreen()),
+      MaterialPageRoute(builder: (_) => AppShell(
+        initialTab: monitorService.dateOfJourney.isNotEmpty
+          ? AppShell.tabMonitor : AppShell.tabSearch)),
     );
   }
 

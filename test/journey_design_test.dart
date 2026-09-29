@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
+import 'package:rail_automation/widgets/train_navigation_bar.dart';
 import 'package:rail_automation/utils/app_theme.dart';
 
 void main() {
@@ -67,7 +68,31 @@ void main() {
             theme: dark ? AppThemes.darkTheme : AppThemes.lightTheme,
             home: RepaintBoundary(
               key: boundaryKey,
-              child: const MonitorDashboardScreen(),
+              child: Scaffold(
+                body: const MonitorDashboardScreen(),
+                bottomNavigationBar: TrainNavigationBar(
+                  selectedIndex: 1,
+                  onDestinationSelected: (_) {},
+                  destinations: [
+                    const TrainDestination(
+                      label: 'Search',
+                    ),
+                    TrainDestination(
+                      label: 'Tickets',
+                      showBadge: monitor.isMonitoring,
+                      badgeColor: AppColors.primary,
+                    ),
+                    TrainDestination(
+                      label: 'Trips',
+                      showBadge: monitor.needsTurnstile,
+                      badgeColor: AppColors.error,
+                    ),
+                    const TrainDestination(
+                      label: 'Profile',
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
         ),

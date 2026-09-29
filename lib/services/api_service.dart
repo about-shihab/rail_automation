@@ -11,7 +11,10 @@ import '../models/seat_layout.dart';
 class ApiService {
   static String requestSeatClass(String? value) {
     final normalized = value?.trim().toUpperCase();
-    return normalized == null || normalized.isEmpty || normalized == 'ALL'
+    return normalized == null ||
+            normalized.isEmpty ||
+            normalized == 'ALL' ||
+            normalized == 'RANDOM'
         ? AppConfig.instance.string('default_seat_class')
         : normalized;
   }

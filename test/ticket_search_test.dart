@@ -17,6 +17,7 @@ import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
 import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/credit_service.dart';
+import 'package:rail_automation/services/trip_history_service.dart';
 import 'package:rail_automation/services/firebase_user_service.dart';
 import 'package:rail_automation/views/booking_screen.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
@@ -234,6 +235,7 @@ void main() {
           ChangeNotifierProvider(create: (_) => ThemeService()),
           ChangeNotifierProvider(create: (_) => LanguageService()),
           ChangeNotifierProvider(create: (_) => CreditService()),
+          ChangeNotifierProvider(create: (_) => TripHistoryService()),
           ChangeNotifierProvider(create: (_) => FirebaseUserService()),
         ],
         child: const BangladeshRailApp(startLoggedIn: true),

@@ -54,10 +54,22 @@ class SeatType {
     required this.seatCounts,
   });
 
+  static final SeatType randomClass = SeatType(
+    key: -1,
+    type: 'ALL',
+    fare: '0',
+    vatPercent: 0,
+    vatAmount: 0,
+    seatCounts: SeatCounts(online: 0, offline: 0, isDivided: false),
+  );
+
   bool get isAvailable => seatCounts.online > 0;
 
   String get displayName {
     switch (type.toUpperCase()) {
+      case 'ALL':
+      case 'RANDOM':
+        return 'Random Class (Any Available)';
       case 'SNIGDHA':
         return 'Snigdha (AC Chair)';
       case 'S_CHAIR':

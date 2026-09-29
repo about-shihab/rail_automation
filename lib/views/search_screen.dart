@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'app_shell.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../models/auth_session.dart';
@@ -75,8 +76,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     // If monitor active, jump straight to dashboard
     final monitor = context.read<MonitorService>();
     if (monitor.dateOfJourney.isNotEmpty && mounted) {
-      Navigator.pushReplacement(context,
-        MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()));
+      AppShell.tab.value = AppShell.tabMonitor;
     }
   }
 
@@ -98,6 +98,17 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
 
   Future<void> _search() async {
     if (_loading) return;
+    if (CreditService().credits <= 0) {
+      RechargeCreditDialog.show(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You have 0 credits. Please buy credits to search and auto-book.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     if (_fromCity.trim().toLowerCase() == _toCity.trim().toLowerCase()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -216,8 +227,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
               // Dashboard
               _IconAction(
                 icon: Icons.radar_rounded,
-                onTap: () => Navigator.push(context,
-                  MaterialPageRoute(builder: (_) => const MonitorDashboardScreen())),
+                onTap: () => AppShell.goTo(context, AppShell.tabMonitor),
               ),
               const SizedBox(width: 4),
             ],
@@ -283,11 +293,90 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                               ),
-                              onPressed: () => Navigator.push(
-                                context,
-                                MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-                              ),
+                              onPressed: () => AppShell.goTo(context, AppShell.tabMonitor),
                               child: const Text('View', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    if (credit.credits <= 0) ...[
+                      Container(
+                        margin: const EdgeInsets.only(bottom: 16),
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: isDark ? const Color(0xFF1E1504) : const Color(0xFFFFFBEB),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: const Color(0xFFF59E0B),
+                            width: 1.2,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                              blurRadius: 10,
+                              offset: const Offset(0, 3),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.bolt_rounded, color: Color(0xFFF59E0B), size: 24),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        '0 Credits Available',
+                                        style: TextStyle(
+                                          color: isDark ? Colors.white : const Color(0xFF92400E),
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 15,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        'Each successful booking consumes 1 credit. Please buy credit via bKash to search and auto-book.',
+                                        style: TextStyle(
+                                          color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78350F),
+                                          fontSize: 11.5,
+                                          height: 1.3,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFFF59E0B),
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  padding: const EdgeInsets.symmetric(vertical: 12),
+                                  elevation: 0,
+                                ),
+                                icon: const Icon(Icons.shopping_bag_outlined, size: 18),
+                                label: const Text(
+                                  'Buy Credit Now (bKash)',
+                                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                                ),
+                                onPressed: () => RechargeCreditDialog.show(context),
+                              ),
                             ),
                           ],
                         ),
@@ -337,12 +426,20 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                     ]),
                     const SizedBox(height: 16),
 
-                    // Search button
+                    // Search / Buy Credit button
                     PrimaryButton(
-                      label: 'Search Trains',
-                      icon: Icons.search_rounded,
+                      label: credit.credits <= 0
+                          ? 'Buy Credit to Search'
+                          : 'Search Trains',
+                      icon: credit.credits <= 0
+                          ? Icons.bolt_rounded
+                          : Icons.search_rounded,
                       loading: _loading,
-                      onPressed: _loading ? null : _search,
+                      onPressed: _loading
+                          ? null
+                          : (credit.credits <= 0
+                              ? () => RechargeCreditDialog.show(context)
+                              : _search),
                     ),
                   ]),
                 ),
@@ -1047,7 +1144,7 @@ class _ClassDrop extends StatelessWidget {
       ),
       items: classes.map((c) => DropdownMenuItem(
         value: c,
-        child: Text(c == 'ALL' ? 'Any' : c, overflow: TextOverflow.ellipsis),
+        child: Text(c == 'ALL' ? 'Random / Any Class' : c, overflow: TextOverflow.ellipsis),
       )).toList(),
       onChanged: onChanged,
     );
@@ -1059,17 +1156,30 @@ class _CreditPill extends StatelessWidget {
   const _CreditPill({required this.credits});
   @override
   Widget build(BuildContext context) {
+    final isZero = credits <= 0;
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 2),
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.18),
+        color: isZero
+            ? const Color(0xFFF59E0B).withValues(alpha: 0.3)
+            : Colors.white.withValues(alpha: 0.18),
         borderRadius: BorderRadius.circular(20),
+        border: isZero
+            ? Border.all(color: const Color(0xFFF59E0B), width: 1.0)
+            : null,
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         const Icon(Icons.bolt_rounded, color: AppColors.gold, size: 14),
         const SizedBox(width: 3),
-        Text('$credits', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+        Text(
+          isZero ? '0 • Buy' : '$credits',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+            fontSize: 12,
+          ),
+        ),
       ]),
     );
   }

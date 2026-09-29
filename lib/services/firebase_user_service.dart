@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../firebase_options.dart';
 import '../models/auth_session.dart';
 import 'pro_service.dart';
+import 'credit_service.dart';
 
 /// Service responsible for managing user data in Firebase Firestore:
 /// - Stores and syncs user profiles in the 'users' collection (keyed by phone number).
@@ -102,6 +103,7 @@ class FirebaseUserService extends ChangeNotifier {
           'phone': phone,
           'displayName': session.displayName ?? '',
           'email': session.email ?? '',
+          'credits': 0, // Controlled from DB; defaults to 0 until recharged or granted by admin
           'isPro': false, // Admin can toggle this in Firebase console
           'isActive': true,
           'createdAt': now,
@@ -131,6 +133,7 @@ class FirebaseUserService extends ChangeNotifier {
 
       // Record in dedicated activity_logs subcollection
       await _writeSubcollectionLog(phone, action: 'LOGIN', details: 'User logged in');
+      unawaited(CreditService().syncFromFirestore());
       notifyListeners();
     } catch (e) {
       debugPrint('🚨 [FirebaseUserService] syncUserOnLogin error: $e');

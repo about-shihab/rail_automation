@@ -2,9 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/auth_session.dart';
 import '../services/booking_service.dart';
+import '../services/credit_service.dart';
 import '../services/notification_service.dart';
 import '../utils/app_theme.dart';
 import 'booking_screen.dart';
+import 'recharge_credit_dialog.dart';
 
 class ReservationScreen extends StatefulWidget {
   const ReservationScreen({super.key});
@@ -164,6 +166,84 @@ class _ReservationScreenState extends State<ReservationScreen> {
                     MaterialPageRoute(builder: (_) => BookingScreen(url: BookingService.tripInfoUrl)),
                   ),
                 ),
+                if (ready && !expired) ...[
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF059669),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: Icon(
+                        CreditService().credits <= 0
+                            ? Icons.bolt_rounded
+                            : Icons.check_circle_outline_rounded,
+                        size: 18,
+                      ),
+                      label: Text(
+                        CreditService().credits <= 0
+                            ? 'Buy Credit to Confirm (0 Left)'
+                            : 'Mark as Paid & Confirmed (1 Credit)',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () async {
+                        if (CreditService().credits <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('⚠️ You have 0 credits. Please buy credits to confirm booking.'),
+                              backgroundColor: Color(0xFFF59E0B),
+                              behavior: SnackBarBehavior.floating,
+                            ),
+                          );
+                          await RechargeCreditDialog.show(context);
+                          return;
+                        }
+
+                        final confirm = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Confirm Successful Booking?'),
+                            content: const Text(
+                              'Did you successfully complete payment for these seats on Bangladesh Railway?\n\nExactly 1 credit will be deducted.',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Cancel'),
+                              ),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppColors.primary,
+                                  foregroundColor: Colors.black,
+                                ),
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Yes, Confirm (Deduct 1 Credit)'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (confirm == true && mounted) {
+                          await BookingService.completeSuccessfulBooking();
+                          if (mounted) {
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('🎉 Booking marked as successful! 1 credit deducted.'),
+                                backgroundColor: Color(0xFF059669),
+                                behavior: SnackBarBehavior.floating,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
 
                 // ── Clear Button ─────────────────────────────────────────

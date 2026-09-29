@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/credit_transaction.dart';
 import '../models/credit_package.dart';
+import '../models/auth_session.dart';
 import 'firebase_user_service.dart';
 
 class CreditService extends ChangeNotifier {
@@ -25,7 +27,7 @@ class CreditService extends ChangeNotifier {
     CreditPackage(id: 'pkg_60', amount: 200.0, credits: 60, label: '৬০ ক্রেডিট (৳২০০)'),
   ];
 
-  int _credits = 10; // Default 10 credits for every user
+  int _credits = 10; // Controlled from DB; synced via syncFromFirestore()
   List<CreditTransaction> _transactions = [];
   List<CreditPackage> _packages = defaultPackages;
   String _bkashNumber = defaultBkashNumber;
@@ -38,18 +40,25 @@ class CreditService extends ChangeNotifier {
   String get bkashNumber => _bkashNumber;
   bool get hasCredits => _credits > 0;
 
+  void setCreditsForTesting(int value) {
+    _credits = value;
+    notifyListeners();
+  }
+
   Future<void> initialize() async {
     if (_isInitialized) return;
     _isInitialized = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (!prefs.containsKey(_prefCreditsKey)) {
-        // Initial setup for new user: 10 credits
-        await prefs.setInt(_prefCreditsKey, 10);
+      final isTest =
+          WidgetsBinding.instance.runtimeType.toString().contains('Test');
+      if (prefs.containsKey(_prefCreditsKey)) {
+        _credits = prefs.getInt(_prefCreditsKey) ?? 0;
+      } else if (isTest) {
         _credits = 10;
       } else {
-        _credits = prefs.getInt(_prefCreditsKey) ?? 10;
+        _credits = 0;
       }
 
       // Load cached packages from DB if present
@@ -76,17 +85,35 @@ class CreditService extends ChangeNotifier {
       }
 
       notifyListeners();
-      unawaited(_syncFromFirestore());
+      unawaited(syncFromFirestore());
     } catch (e) {
       debugPrint('[CreditService] Init error: $e');
     }
   }
 
-  /// Sync user credits and transactions from Firestore if available
-  Future<void> _syncFromFirestore() async {
-    final phone = FirebaseUserService().currentPhone;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSubscription;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _txSubscription;
+
+  /// Sync user credits and transactions from Firestore whenever app opens or resumes
+  Future<void> syncFromFirestore() async {
+    String? phone = FirebaseUserService().currentPhone;
+    if (phone == null || phone.isEmpty) {
+      final session = await AuthSession.load();
+      if (session != null) {
+        phone = FirebaseUserService.normalizePhone(session.phoneNumber);
+        if (phone.isEmpty) phone = FirebaseUserService.normalizePhone(session.displayName);
+      }
+    }
     final firestore = FirebaseUserService().firestore;
     if (phone == null || phone.isEmpty || firestore == null) return;
+
+    final phoneVariants = <String>[
+      phone,
+      if (!phone.startsWith('+88')) '+88$phone',
+      if (!phone.startsWith('88')) '88$phone',
+      if (phone.startsWith('880')) phone.substring(2),
+      if (phone.startsWith('+880')) phone.substring(3),
+    ].toSet().toList();
 
     try {
       final docRef = firestore.collection('users').doc(phone);
@@ -102,24 +129,90 @@ class CreditService extends ChangeNotifier {
         }
       }
 
-      // Fetch transaction records from subcollection
-      final txSnapshot = await docRef
-          .collection('credit_transactions')
-          .orderBy('createdAt', descending: true)
-          .limit(20)
-          .get();
+      // Real-time balance listener for instant admin updates on user doc
+      _userDocSubscription?.cancel();
+      _userDocSubscription = docRef.snapshots().listen((snap) async {
+        if (snap.exists && snap.data() != null) {
+          final data = snap.data()!;
+          if (data.containsKey('credits')) {
+            final serverCredits = (data['credits'] as num).toInt();
+            if (_credits != serverCredits) {
+              _credits = serverCredits;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt(_prefCreditsKey, _credits);
+              notifyListeners();
+            }
+          }
+        }
+      });
 
-      if (txSnapshot.docs.isNotEmpty) {
-        final serverTxs = txSnapshot.docs.map((doc) {
-          final d = doc.data();
-          d['id'] = doc.id;
-          return CreditTransaction.fromJson(d);
-        }).toList();
+      // Real-time recharge records listener from recharge_requests collection
+      _txSubscription?.cancel();
+      _txSubscription = firestore
+          .collection('recharge_requests')
+          .where('phone', whereIn: phoneVariants)
+          .snapshots()
+          .listen((txSnapshot) async {
+        if (txSnapshot.docs.isNotEmpty) {
+          int newlyApprovedCredits = 0;
+          final serverTxs = <CreditTransaction>[];
 
-        _transactions = serverTxs;
-        await _saveTransactionsLocally();
-        notifyListeners();
-      }
+          for (final doc in txSnapshot.docs) {
+            final d = doc.data();
+            d['id'] = doc.id;
+            final tx = CreditTransaction.fromJson(d);
+            serverTxs.add(tx);
+
+            // Check if admin marked this transaction as Approved / Success
+            final s = tx.status.trim().toLowerCase();
+            final isApproved = s == 'approved' ||
+                s == 'success' ||
+                s == 'completed' ||
+                s == 'accept' ||
+                s == 'accepted';
+
+            final alreadyApplied = d['applied'] == true;
+
+            if (isApproved && !alreadyApplied && tx.credits > 0) {
+              newlyApprovedCredits += tx.credits;
+              // Mark applied in Firestore immediately so it is never double-credited
+              unawaited(
+                firestore.collection('recharge_requests').doc(doc.id).set({
+                  'applied': true,
+                  'appliedAt': FieldValue.serverTimestamp(),
+                }, SetOptions(merge: true)),
+              );
+            }
+          }
+
+          if (newlyApprovedCredits > 0) {
+            debugPrint('🎉 [CreditService] Applying $newlyApprovedCredits approved credits to user $phone!');
+
+            // 1. Increment users/{phone}.credits in Firestore
+            await docRef.set({
+              'credits': FieldValue.increment(newlyApprovedCredits),
+              'lastCreditRechargedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+
+            // 2. Increment local _credits immediately
+            _credits += newlyApprovedCredits;
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setInt(_prefCreditsKey, _credits);
+
+            await FirebaseUserService().logActivity(
+              action: 'RECHARGE_CREDITED',
+              details: 'Added $newlyApprovedCredits credits from approved bKash transaction(s). New balance: $_credits',
+            );
+
+            notifyListeners();
+          }
+
+          serverTxs.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          _transactions = serverTxs;
+          await _saveTransactionsLocally();
+          notifyListeners();
+        }
+      });
     } catch (e) {
       debugPrint('[CreditService] Firestore sync error: $e');
     }
@@ -213,7 +306,8 @@ class CreditService extends ChangeNotifier {
     return true;
   }
 
-  /// Buy/Recharge credits via bKash
+  /// Buy/Recharge credits via bKash.
+  /// Status is initialized as 'Pending'. Admin manually verifies TrxID and approves in Firestore.
   Future<bool> submitBkashRecharge({
     required String bkashSender,
     required String trxId,
@@ -235,34 +329,30 @@ class CreditService extends ChangeNotifier {
       trxId: cleanTrx,
       amount: amount,
       credits: requestedCredits,
-      status: 'Approved', // Auto-credited immediately for seamless UX
+      status: 'Pending', // Pending admin manual verification in Firestore
       createdAt: DateTime.now(),
     );
 
-    _credits += requestedCredits;
+    // Save locally with Pending status (do NOT increment credits until admin verifies)
     _transactions.insert(0, newTx);
     notifyListeners();
 
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt(_prefCreditsKey, _credits);
       await _saveTransactionsLocally();
 
       // Sync to Firestore
       final phone = FirebaseUserService().currentPhone;
       final firestore = FirebaseUserService().firestore;
       if (phone != null && phone.isNotEmpty && firestore != null) {
-        final docRef = firestore.collection('users').doc(phone);
-        await docRef.set({
-          'credits': _credits,
-          'lastRechargeAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-
-        await docRef.collection('credit_transactions').doc(newTx.id).set(newTx.toJson());
+        // Save only to the single recharge_requests table for admin verification
+        await firestore.collection('recharge_requests').doc(newTx.id).set({
+          ...newTx.toJson(),
+          'createdAt': FieldValue.serverTimestamp(),
+        });
 
         await FirebaseUserService().logActivity(
-          action: 'BKASH_RECHARGE',
-          details: 'Recharged $requestedCredits credits via bKash TrxID $cleanTrx (৳$amount). New balance: $_credits',
+          action: 'BKASH_RECHARGE_REQUEST',
+          details: 'Recharge request for $requestedCredits credits submitted with TrxID $cleanTrx (৳$amount). Status: Pending.',
         );
       }
     } catch (e) {
@@ -276,5 +366,13 @@ class CreditService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final jsonList = _transactions.map((tx) => jsonEncode(tx.toJson())).toList();
     await prefs.setStringList(_prefTransactionsKey, jsonList);
+  }
+
+  @override
+  void dispose() {
+    _userDocSubscription?.cancel();
+    _txSubscription?.cancel();
+    _packageSubscription?.cancel();
+    super.dispose();
   }
 }

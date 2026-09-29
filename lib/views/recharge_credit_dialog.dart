@@ -10,8 +10,8 @@ import '../utils/app_theme.dart';
 class RechargeCreditDialog extends StatefulWidget {
   const RechargeCreditDialog({super.key});
 
-  static void show(BuildContext context) {
-    showModalBottomSheet(
+  static Future<T?> show<T>(BuildContext context) {
+    return showModalBottomSheet<T>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
@@ -29,6 +29,29 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
   double? _selectedAmount;
   int? _calculatedCredits;
   bool _isSubmitting = false;
+  bool _isRefreshing = false;
+
+  Future<void> _refreshStatus() async {
+    if (_isRefreshing) return;
+    setState(() => _isRefreshing = true);
+    final creditService = Provider.of<CreditService>(context, listen: false);
+    await creditService.syncFromFirestore();
+    if (mounted) {
+      setState(() => _isRefreshing = false);
+      final lang = LanguageService.of(context, listen: false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: const Color(0xFF059669),
+          duration: const Duration(seconds: 2),
+          content: Text(
+            lang.isBangla
+                ? '✅ ব্যালেন্স আপডেট হয়েছে: ${creditService.credits} ক্রেডিট'
+                : '✅ Balance updated: ${creditService.credits} Credits',
+          ),
+        ),
+      );
+    }
+  }
 
   @override
   void initState() {
@@ -94,11 +117,12 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
       _trxController.clear();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          backgroundColor: const Color(0xFF059669),
+          backgroundColor: const Color(0xFFD97706),
+          duration: const Duration(seconds: 4),
           content: Text(
             lang.isBangla
-                ? '🎉 অভিনন্দন! $_calculatedCredits ক্রেডিট সফলভাবে যোগ হয়েছে।'
-                : '🎉 Success! $_calculatedCredits credits added to your account.',
+                ? '⏳ রিচার্জ জমা হয়েছে! স্ট্যাটাস: পেন্ডিং। অ্যাডমিন TrxID যাচাই করার পর ক্রেডিট যোগ হবে।'
+                : '⏳ Recharge submitted! Status: Pending. Admin will verify TrxID and credits will be added shortly.',
           ),
         ),
       );
@@ -425,19 +449,121 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
                               ),
                       ),
                     ),
-                    const SizedBox(height: 26),
+
+                    // Notice with quick refresh button when user has pending recharge
+                    if (creditService.transactions.any((tx) => tx.status.toLowerCase() == 'pending')) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.hourglass_top_rounded, color: Color(0xFFD97706), size: 20),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                lang.isBangla
+                                    ? 'আপনার রিচার্জটি অপেক্ষমাণ (Pending)। অ্যাডমিন অনুমোদন দিলে ক্রেডিট আপডেট হবে।'
+                                    : 'Recharge is Pending verification by admin.',
+                                style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFFD97706)),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            InkWell(
+                              onTap: _isRefreshing ? null : _refreshStatus,
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFD97706),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _isRefreshing
+                                        ? const SizedBox(
+                                            width: 12,
+                                            height: 12,
+                                            child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.white),
+                                          )
+                                        : const Icon(Icons.refresh_rounded, size: 14, color: Colors.white),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      lang.isBangla ? 'রিফ্রেশ' : 'Refresh',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 24),
 
                     // ── 4. Transaction History Table ────────────────────────
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Icon(Icons.history_rounded, size: 20, color: Color(0xFF059669)),
-                        const SizedBox(width: 8),
-                        Text(
-                          lang.isBangla ? 'রিচার্জের তালিকা (Transactions Table)' : 'Recharge History Table',
-                          style: TextStyle(
-                            color: AppColors.textPrimary(isDark),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15,
+                        Row(
+                          children: [
+                            const Icon(Icons.history_rounded, size: 20, color: Color(0xFF059669)),
+                            const SizedBox(width: 8),
+                            Text(
+                              lang.isBangla ? 'রিচার্জের তালিকা' : 'Recharge History Table',
+                              style: TextStyle(
+                                color: AppColors.textPrimary(isDark),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 15,
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Refresh button in table header
+                        InkWell(
+                          onTap: _isRefreshing ? null : _refreshStatus,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF059669).withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: const Color(0xFF059669).withValues(alpha: 0.3),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                _isRefreshing
+                                    ? const SizedBox(
+                                        width: 12,
+                                        height: 12,
+                                        child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF059669)),
+                                      )
+                                    : const Icon(Icons.refresh_rounded, size: 14, color: Color(0xFF059669)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  lang.isBangla ? 'স্ট্যাটাস রিফ্রেশ' : 'Refresh Status',
+                                  style: const TextStyle(
+                                    color: Color(0xFF059669),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
@@ -493,21 +619,41 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
                                     DataCell(Text('৳${tx.amount.toInt()}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11))),
                                     DataCell(Text('+${tx.credits}', style: const TextStyle(color: Color(0xFF059669), fontWeight: FontWeight.bold, fontSize: 12))),
                                     DataCell(
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(6),
-                                        ),
-                                        child: Text(
-                                          tx.status,
-                                          style: const TextStyle(
-                                            color: Color(0xFF059669),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 10,
+                                      Builder(builder: (context) {
+                                        final isPending = tx.status.toLowerCase() == 'pending';
+                                        final isApproved = tx.status.toLowerCase() == 'approved';
+                                        final badgeBg = isApproved
+                                            ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                                            : (isPending
+                                                ? const Color(0xFFF59E0B).withValues(alpha: 0.15)
+                                                : const Color(0xFFEF4444).withValues(alpha: 0.15));
+                                        final badgeTextColor = isApproved
+                                            ? const Color(0xFF059669)
+                                            : (isPending
+                                                ? const Color(0xFFD97706)
+                                                : const Color(0xFFDC2626));
+                                        final badgeText = isPending
+                                            ? (lang.isBangla ? 'পেন্ডিং' : 'Pending')
+                                            : (isApproved
+                                                ? (lang.isBangla ? 'অনুমোদিত' : 'Approved')
+                                                : (lang.isBangla ? 'বাতিল' : 'Rejected'));
+
+                                        return Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                          decoration: BoxDecoration(
+                                            color: badgeBg,
+                                            borderRadius: BorderRadius.circular(6),
                                           ),
-                                        ),
-                                      ),
+                                          child: Text(
+                                            badgeText,
+                                            style: TextStyle(
+                                              color: badgeTextColor,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        );
+                                      }),
                                     ),
                                   ],
                                 );

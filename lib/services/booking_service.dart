@@ -7,10 +7,13 @@ import '../models/auth_session.dart';
 import '../models/seat_layout.dart';
 import '../models/seat_type.dart';
 import '../models/train_trip.dart';
+import '../models/trip_record.dart';
 import 'api_service.dart';
 import 'app_config.dart';
+import 'credit_service.dart';
 import 'notification_service.dart';
 import 'secure_store.dart';
+import 'trip_history_service.dart';
 
 /// Existing official website contract, inspected 2026-09-27.
 /// Never retries a mutation with an unknown outcome.
@@ -19,6 +22,22 @@ class BookingService {
   static const tripInfoUrl =
       'https://eticket.railway.gov.bd/booking/train/trip-info';
   static const reservationTimeoutMinutes = 5;
+
+  /// Retrieves a valid cached Turnstile token if solved within the last 5 minutes (300 seconds).
+  static Future<String?> getValidCftToken() async {
+    final token = await SecureStore.read('rail_cft_token');
+    final timeStr = await SecureStore.read('rail_cft_token_time');
+    if (token == null || token.isEmpty || timeStr == null) return null;
+    final timeMs = int.tryParse(timeStr);
+    if (timeMs == null) return null;
+    final ageSeconds = (DateTime.now().millisecondsSinceEpoch - timeMs) ~/ 1000;
+    if (ageSeconds > 300) {
+      await SecureStore.delete('rail_cft_token');
+      await SecureStore.delete('rail_cft_token_time');
+      return null;
+    }
+    return token;
+  }
 
   static Future<Map<String, dynamic>?> pending() async {
     final raw = await SecureStore.read(storageKey);
@@ -37,6 +56,12 @@ class BookingService {
           expires != null && !now.isBefore(expires);
 
       if (isExpiredByStartedAt || isExpiredByExpiresAt) {
+        final id = map['id']?.toString() ?? '';
+        await TripHistoryService().updateTripStatus(
+          id,
+          TripBookingStatus.expired,
+          failureReason: 'Reservation timed out after 5 minutes',
+        );
         await clear();
         return null;
       }
@@ -183,7 +208,7 @@ class BookingService {
     await SecureStore.write('rail_hold_seconds', '$holdSeconds');
     final activeCft =
         cftResponse ??
-        await SecureStore.read('rail_cft_token') ??
+        await getValidCftToken() ??
         await SecureStore.read('rail_action_token');
     final layout = await ApiService.fetchSeatLayout(
       tripId: seat.tripId!,
@@ -300,6 +325,31 @@ class BookingService {
             .toIso8601String();
       }
       await save(state);
+      try {
+        final seatsList = chosen.map((s) => s.$2.seatNumber).toList();
+        final coachName = eligible.first.floorName.isNotEmpty
+            ? eligible.first.floorName
+            : '${eligible.first.seatFloor}';
+        final fareNum = double.tryParse(eligible.first.seatFare) ??
+            (double.tryParse(seat.fare) ?? 0.0);
+        await TripHistoryService().recordTrip(
+          TripRecord(
+            id: state['id']?.toString() ?? '',
+            trainName: train.tripNumber,
+            fromCity: from,
+            toCity: to,
+            dateOfJourney: date,
+            seatClass: seat.type,
+            seatNumbers: seatsList,
+            coachName: coachName,
+            totalFare:
+                fareNum * (seatsList.isNotEmpty ? seatsList.length : quantity),
+            status: TripBookingStatus.awaitingOtp,
+            createdAt: DateTime.now(),
+            isAutoBook: autoVerify,
+          ),
+        );
+      } catch (_) {}
       return state;
     } catch (_) {
       state['status'] = 'needsReview';
@@ -329,7 +379,49 @@ class BookingService {
     state['status'] = 'readyForPayment';
     state['otp'] = otp;
     await save(state);
+    // OTP verified: Status is ready for payment.
+    // Remember: Credit is NOT deducted on OTP verification, only on successful booking!
     return state;
+  }
+
+  /// Complete a successful booking:
+  /// Deducts exactly 1 credit from DB via CreditService, updates status to successful
+  /// in TripHistoryService, and clears the active reservation.
+  static Future<bool> completeSuccessfulBooking({
+    Map<String, dynamic>? reservation,
+  }) async {
+    final state = reservation ?? await pending();
+    if (state == null) return false;
+
+    final id = state['id']?.toString() ?? '';
+    final trainName = state['train']?['trip_number']?.toString() ??
+        state['train']?['train_name']?.toString() ??
+        'Train';
+    final coach = state['coach']?['floor_name']?.toString() ??
+        state['coach']?['seat_floor']?.toString() ??
+        '';
+    final seats = (state['seats'] as List?)
+            ?.map((s) => s['seat_number']?.toString() ?? '')
+            .where((s) => s.isNotEmpty)
+            .join(', ') ??
+        '';
+    final seatInfo = coach.isNotEmpty ? '$coach ($seats)' : seats;
+
+    // 1. Deduct exactly 1 credit for successful booking
+    await CreditService().deductBookingCredit(
+      trainName: trainName,
+      seatInfo: seatInfo,
+    );
+
+    // 2. Mark as SUCCESSFUL in trip history
+    await TripHistoryService().updateTripStatus(
+      id,
+      TripBookingStatus.successful,
+    );
+
+    // 3. Clear active reservation and notifications
+    await clear();
+    return true;
   }
 
   static Future<void> resendOtp(AuthSession auth) async {

@@ -35,18 +35,42 @@ class AppConfig extends ChangeNotifier {
   static Map<String, dynamic> validate(Map<String, dynamic> input) {
     final result = Map<String, dynamic>.of(defaults);
     const limits = <String, (int, int)>{
-      'poll_interval_seconds': (60, 86400),
+      'poll_interval_seconds': (10, 86400),
       'request_timeout_seconds': (5, 120),
       'free_monitor_seconds': (60, 86400),
-      'low_availability_threshold': (1, 4),
+      'low_availability_threshold': (1, 10),
       'max_seats': (1, 4),
       'otp_length': (4, 8),
       'otp_window_seconds': (30, 600),
     };
+
+    // Check for minutes-based time limit aliases from DB (e.g. time_limit_minutes: 60 or time_limit: 60)
+    int? timeLimitSecs;
+    if (input.containsKey('time_limit_minutes')) {
+      final v = input['time_limit_minutes'];
+      final m = v is num ? v.toInt() : int.tryParse('$v');
+      if (m != null && m > 0) timeLimitSecs = m * 60;
+    } else if (input.containsKey('free_monitor_minutes')) {
+      final v = input['free_monitor_minutes'];
+      final m = v is num ? v.toInt() : int.tryParse('$v');
+      if (m != null && m > 0) timeLimitSecs = m * 60;
+    } else if (input.containsKey('time_limit')) {
+      final v = input['time_limit'];
+      final n = v is num ? v.toInt() : int.tryParse('$v');
+      if (n != null && n > 0) {
+        timeLimitSecs = n <= 180 ? n * 60 : n;
+      }
+    }
+    if (timeLimitSecs != null && timeLimitSecs >= 60 && timeLimitSecs <= 86400) {
+      result['free_monitor_seconds'] = timeLimitSecs;
+    }
+
     for (final entry in limits.entries) {
-      final value = input[entry.key];
-      if (value is int && value >= entry.value.$1 && value <= entry.value.$2) {
-        result[entry.key] = value;
+      if (entry.key == 'free_monitor_seconds' && timeLimitSecs != null) continue;
+      final raw = input[entry.key];
+      final val = raw is num ? raw.toInt() : (raw is String ? int.tryParse(raw) : null);
+      if (val != null && val >= entry.value.$1 && val <= entry.value.$2) {
+        result[entry.key] = val;
       }
     }
     for (final key in ['seat_classes', 'stations', 'sms_senders']) {
@@ -62,19 +86,77 @@ class AppConfig extends ChangeNotifier {
     return result;
   }
 
+  final Map<String, dynamic> _rawFirestoreData = {};
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _settingsSubscription;
+
+  Future<void> _updateFromDoc(String source, Map<String, dynamic>? data) async {
+    if (data == null) return;
+    _rawFirestoreData.addAll(data);
+    _values = validate(_rawFirestoreData);
+    syncError = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(cacheKey, jsonEncode(_values));
+    notifyListeners();
+  }
+
+  /// Actively fetch configuration from Firestore when app opens
+  Future<void> syncFromFirestore() async {
+    if (Firebase.apps.isEmpty) return;
+    try {
+      final firestore = FirebaseFirestore.instance;
+      // Fetch workflow doc & settings doc
+      final workflowDoc = await firestore.collection('app_config').doc('workflow').get();
+      final settingsDoc = await firestore.collection('app_config').doc('settings').get();
+
+      if (workflowDoc.exists && workflowDoc.data() != null) {
+        _rawFirestoreData.addAll(workflowDoc.data()!);
+      }
+      if (settingsDoc.exists && settingsDoc.data() != null) {
+        _rawFirestoreData.addAll(settingsDoc.data()!);
+      }
+
+      if (_rawFirestoreData.isNotEmpty) {
+        _values = validate(_rawFirestoreData);
+        syncError = null;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(cacheKey, jsonEncode(_values));
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[AppConfig] Firestore sync error: $e');
+    }
+  }
+
   Future<void> initialize() async {
     await reloadCache();
-    if (Firebase.apps.isEmpty || _subscription != null) return;
-    _subscription = FirebaseFirestore.instance.collection('app_config').doc('workflow').snapshots().listen((doc) async {
-      _values = validate(doc.data() ?? {});
-      syncError = null;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(cacheKey, jsonEncode(_values));
-      notifyListeners();
+    if (Firebase.apps.isEmpty) return;
+
+    unawaited(syncFromFirestore());
+
+    if (_subscription != null) return;
+    _subscription = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('workflow')
+        .snapshots()
+        .listen((doc) {
+      if (doc.exists && doc.data() != null) {
+        unawaited(_updateFromDoc('workflow', doc.data()));
+      }
     }, onError: (_) {
       syncError = 'Using cached settings; database settings are unavailable.';
       notifyListeners();
     });
+
+    _settingsSubscription?.cancel();
+    _settingsSubscription = FirebaseFirestore.instance
+        .collection('app_config')
+        .doc('settings')
+        .snapshots()
+        .listen((doc) {
+      if (doc.exists && doc.data() != null) {
+        unawaited(_updateFromDoc('settings', doc.data()));
+      }
+    }, onError: (_) {});
   }
 
   Future<void> reloadCache() async {
@@ -85,5 +167,12 @@ class AppConfig extends ChangeNotifier {
     } catch (_) {
       _values = Map.of(defaults);
     }
+  }
+
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    _settingsSubscription?.cancel();
+    super.dispose();
   }
 }

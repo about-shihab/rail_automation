@@ -15,12 +15,28 @@ class BookingIntent {
     maxFare: json['maxFare'] is num ? (json['maxFare'] as num).toDouble() : null,
     autoVerify: json['autoVerify'] == true,
   );
+  BookingIntent copyWith({
+    bool? autoReserve,
+    int? quantity,
+    double? maxFare,
+    bool? autoVerify,
+  }) {
+    return BookingIntent(
+      autoReserve: autoReserve ?? this.autoReserve,
+      quantity: quantity ?? this.quantity,
+      maxFare: maxFare ?? this.maxFare,
+      autoVerify: autoVerify ?? this.autoVerify,
+    );
+  }
   (TrainTrip, SeatType)? choose(List<TrainTrip> trains, {String? train, String? seatClass, Random? random}) {
     final matches = <(TrainTrip, SeatType)>[];
     for (final item in trains) {
       if (train != null && item.tripNumber.toLowerCase() != train.toLowerCase()) continue;
       for (final seat in item.seatTypes) {
-        if (seatClass != null && seatClass != 'ALL' && seat.type.toUpperCase() != seatClass.toUpperCase()) continue;
+        if (seatClass != null &&
+            seatClass.toUpperCase() != 'ALL' &&
+            seatClass.toUpperCase() != 'RANDOM' &&
+            seat.type.toUpperCase() != seatClass.toUpperCase()) continue;
         final fare = double.tryParse(seat.fare);
         if (seat.seatCounts.online < quantity || fare == null || !fare.isFinite || fare < 0) continue;
         if (maxFare != null && fare + seat.vatAmount > maxFare!) continue;

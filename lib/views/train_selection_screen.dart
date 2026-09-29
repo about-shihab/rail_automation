@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'app_shell.dart';
 import 'package:provider/provider.dart';
 
 import '../models/auth_session.dart';
@@ -66,10 +67,7 @@ class TrainSelectionScreen extends StatelessWidget {
       final isSameTrain = currentTrain != null && currentTrain.toLowerCase() == train.toLowerCase();
 
       if (isSameTrain) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-        );
+        AppShell.goTo(context, AppShell.tabMonitor);
         return;
       }
 
@@ -128,7 +126,21 @@ class TrainSelectionScreen extends StatelessWidget {
         builder: (_) => _ClassSheet(seatTypes: selectedTrain.seatTypes),
       );
       if (selected == null || !context.mounted) return;
-      seatClass = selected.type;
+      seatClass = (selected.type.toUpperCase() == 'ALL' ||
+              selected.type.toUpperCase() == 'RANDOM')
+          ? null
+          : selected.type;
+    }
+    if (CreditService().credits <= 0) {
+      RechargeCreditDialog.show(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You have 0 credits. Please buy credits to auto-book tickets.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
     }
     final effectiveClass = seatClass;
     final intent = await showWatchOptions(
@@ -144,13 +156,21 @@ class TrainSelectionScreen extends StatelessWidget {
       targetTrain: train,
       targetSeatClass: effectiveClass,
     );
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const MonitorDashboardScreen()),
-    );
+    AppShell.goTo(context, AppShell.tabMonitor);
   }
 
   Future<void> _book(BuildContext context, TrainTrip train) async {
+    if (CreditService().credits <= 0) {
+      RechargeCreditDialog.show(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You have 0 credits. Please buy credits to book seats.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     final session = await AuthSession.load();
     if (!context.mounted) return;
     if (session == null || !session.isValid) {
@@ -288,12 +308,7 @@ class TrainSelectionScreen extends StatelessWidget {
                   color: Colors.white,
                   size: 22,
                 ),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const MonitorDashboardScreen(),
-                  ),
-                ),
+                onPressed: () => AppShell.goTo(context, AppShell.tabMonitor),
               ),
             ],
             bottom: PreferredSize(
@@ -315,12 +330,7 @@ class TrainSelectionScreen extends StatelessWidget {
                     const Spacer(),
                     if (monitor.isMonitoring)
                       GestureDetector(
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const MonitorDashboardScreen(),
-                          ),
-                        ),
+                        onTap: () => AppShell.goTo(context, AppShell.tabMonitor),
                         child: Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 10,
@@ -362,6 +372,58 @@ class TrainSelectionScreen extends StatelessWidget {
               ),
             ),
           ),
+          // ── Zero Credits Warning ─────────────────────────────────────────
+          if (credit.credits <= 0)
+            SliverToBoxAdapter(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E1504) : const Color(0xFFFFFBEB),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFF59E0B), width: 1.2),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.bolt_rounded, color: Color(0xFFF59E0B), size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '0 Credits Available',
+                            style: TextStyle(
+                              color: isDark ? Colors.white : const Color(0xFF92400E),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '1 credit is deducted per successful booking. Please buy credit to auto-book.',
+                            style: TextStyle(
+                              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78350F),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF59E0B),
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      onPressed: () => RechargeCreditDialog.show(context),
+                      child: const Text('Buy Credit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // ── Train Cards ──────────────────────────────────────────────────
           trains.isEmpty
@@ -742,6 +804,11 @@ class _ClassSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final totalSeats = seatTypes.fold<int>(
+      0,
+      (sum, s) => sum + s.seatCounts.online,
+    );
+
     return Container(
       decoration: BoxDecoration(
         color: AppColors.cardBg(isDark),
@@ -763,15 +830,143 @@ class _ClassSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
-          Text(
-            'Choose Class',
-            style: TextStyle(
-              color: AppColors.textPrimary(isDark),
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Choose Class',
+                  style: TextStyle(
+                    color: AppColors.textPrimary(isDark),
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              if (totalSeats > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Text(
+                    '$totalSeats total seats',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+            ],
           ),
           const SizedBox(height: 14),
+
+          // ── Option 1: Random Class (Whichever is Available) ──────────────
+          GestureDetector(
+            onTap: () => Navigator.pop(context, SeatType.randomClass),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14,
+                vertical: 12,
+              ),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppColors.primary.withValues(alpha: isDark ? 0.18 : 0.10),
+                    AppColors.accent.withValues(alpha: isDark ? 0.12 : 0.06),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.6),
+                  width: 1.5,
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.shuffle_rounded,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              'Random Class (Any Available)',
+                              style: TextStyle(
+                                color: AppColors.textPrimary(isDark),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 5,
+                                vertical: 1,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.gold.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'FASTEST',
+                                style: TextStyle(
+                                  color: AppColors.gold,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          totalSeats > 0
+                              ? 'Whichever class has seats available • $totalSeats seats total'
+                              : 'Auto-books whichever class becomes available',
+                          style: TextStyle(
+                            color: AppColors.textSecondary(isDark),
+                            fontSize: 11.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // ── Option 2+: Specific Seat Classes ─────────────────────────────
           ...seatTypes.map(
             (seat) => GestureDetector(
               onTap: () => Navigator.pop(context, seat),

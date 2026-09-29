@@ -13,8 +13,9 @@ import 'services/firebase_user_service.dart';
 import 'views/monitor_dashboard_screen.dart';
 import 'utils/app_theme.dart';
 import 'services/credit_service.dart';
+import 'services/trip_history_service.dart';
 import 'services/app_config.dart';
-import 'views/search_screen.dart';
+import 'views/app_shell.dart';
 import 'views/webview_login_screen.dart';
 import 'widgets/turnstile_sheet.dart';
 
@@ -35,6 +36,8 @@ void main() async {
   final monitor = MonitorService(proService: proService);
   final creditService = CreditService();
   await creditService.initialize();
+  final tripHistoryService = TripHistoryService();
+  await tripHistoryService.initialize();
 
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
@@ -60,6 +63,7 @@ void main() async {
         ChangeNotifierProvider.value(value: languageService),
         ChangeNotifierProvider.value(value: monitor),
         ChangeNotifierProvider.value(value: creditService),
+        ChangeNotifierProvider.value(value: tripHistoryService),
         ChangeNotifierProvider.value(value: firebaseUserService),
       ],
       child: BangladeshRailApp(startLoggedIn: isLoggedIn),
@@ -91,10 +95,35 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     if (state == AppLifecycleState.resumed) {
       monitor.restore();
       firebaseUser.setUserActive(true);
+      CreditService().syncFromFirestore();
+      AppConfig.instance.syncFromFirestore();
+      _triggerTurnstilePopup(monitor);
     } else if (state == AppLifecycleState.paused) {
       monitor.suspendForegroundTimers();
       firebaseUser.setUserActive(false);
     }
+  }
+
+  DateTime? _lastTurnstileDismissed;
+
+  void _triggerTurnstilePopup(MonitorService monitor) {
+    if (!monitor.needsTurnstile || TurnstileDialog.isShowing) return;
+    if (_lastTurnstileDismissed != null &&
+        DateTime.now().difference(_lastTurnstileDismissed!).inSeconds < 8) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navContext = NotificationService.navigatorKey.currentContext;
+      if (navContext != null && !TurnstileDialog.isShowing && monitor.needsTurnstile) {
+        TurnstileDialog.show(navContext).then((token) {
+          if (token != null && token.isNotEmpty) {
+            monitor.onTurnstileSolved(token);
+          } else {
+            _lastTurnstileDismissed = DateTime.now();
+          }
+        });
+      }
+    });
   }
 
   @override
@@ -109,19 +138,9 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.watch<MonitorService>();
     final hasSearch = monitor.dateOfJourney.isNotEmpty;
 
-    // Over-the-app popup trigger for Turnstile verification
-    if (monitor.needsTurnstile && !TurnstileSheet.isShowing) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final navContext = NotificationService.navigatorKey.currentContext;
-        if (navContext != null && monitor.needsTurnstile && !TurnstileSheet.isShowing) {
-          TurnstileSheet.show(navContext).then((token) {
-            if (token != null && token.isNotEmpty) {
-              monitor.clearBookingError();
-              monitor.checkNow();
-            }
-          });
-        }
-      });
+    // Pop up Turnstile verification over the app whenever required
+    if (monitor.needsTurnstile) {
+      _triggerTurnstilePopup(monitor);
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -135,10 +154,8 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       theme: AppThemes.lightTheme,
       darkTheme: AppThemes.darkTheme,
       themeMode: themeService.themeMode,
-      home: hasSearch
-          ? const MonitorDashboardScreen()
-          : widget.startLoggedIn
-          ? const SearchScreen()
+      home: widget.startLoggedIn
+          ? AppShell(initialTab: hasSearch ? AppShell.tabMonitor : AppShell.tabSearch)
           : const WebviewLoginScreen(),
     );
   }

@@ -4,6 +4,7 @@ import 'dart:convert';
 import '../models/booking_intent.dart';
 import 'app_config.dart';
 import 'booking_service.dart';
+import 'credit_service.dart';
 import 'foreground_monitor.dart';
 import 'otp_verifier.dart';
 
@@ -17,6 +18,9 @@ import 'notification_service.dart';
 import 'pro_service.dart';
 import 'background_monitor.dart';
 import 'firebase_user_service.dart';
+import 'secure_store.dart';
+import 'trip_history_service.dart';
+import '../models/trip_record.dart';
 
 class MonitorLog {
   final DateTime time;
@@ -79,7 +83,13 @@ class MonitorService extends ChangeNotifier {
       _toCity = data['to'] as String;
       _dateOfJourney = data['date'] as String;
       _targetTrain = data['train'] as String?;
-      _targetSeatClass = data['seat'] as String?;
+      final rawSeat = data['seat'] as String?;
+      _targetSeatClass = (rawSeat == null ||
+              rawSeat.trim().isEmpty ||
+              rawSeat.trim().toUpperCase() == 'ALL' ||
+              rawSeat.trim().toUpperCase() == 'RANDOM')
+          ? null
+          : rawSeat.trim().toUpperCase();
       _searchId = data['id'] as String;
       final status = prefs.getString('ticket_status_$_searchId');
       if (status != null) {
@@ -101,7 +111,11 @@ class MonitorService extends ChangeNotifier {
             .where((t) => _targetTrain == null || t.tripNumber == _targetTrain)
             .expand((t) => t.seatTypes)
             .where(
-              (s) => _targetSeatClass == null || s.type == _targetSeatClass,
+              (s) =>
+                  _targetSeatClass == null ||
+                  _targetSeatClass == 'ALL' ||
+                  _targetSeatClass == 'RANDOM' ||
+                  s.type.toUpperCase() == _targetSeatClass!.toUpperCase(),
             )
             .fold(0, (sum, seat) => sum + seat.seatCounts.online);
       }
@@ -206,14 +220,47 @@ class MonitorService extends ChangeNotifier {
   String? get lastError => _lastError;
   String? get lastBookingError => _lastBookingError;
 
+  bool _turnstileRequestedForBooking = false;
+  bool _lastReservationExpired = false;
+  bool get lastReservationExpired => _lastReservationExpired;
+
   void clearBookingError() {
     _lastBookingError = null;
+    _turnstileRequestedForBooking = false;
     notifyListeners();
+  }
+
+  void onTurnstileSolved(String token) {
+    _turnstileRequestedForBooking = false;
+    _lastBookingError = null;
+    if (_lastError != null &&
+        RegExp(r'422|turnstile|cft_response', caseSensitive: false).hasMatch(_lastError!)) {
+      _lastError = null;
+    }
+    notifyListeners();
+    checkNow();
+  }
+
+  Future<void> reAutoBook() async {
+    if (CreditService().credits <= 0) {
+      _lastError = 'Cannot auto-book: 0 credits remaining. Please buy credits.';
+      notifyListeners();
+      return;
+    }
+    await BookingService.clear();
+    _lastReservationExpired = false;
+    _lastBookingError = null;
+    _turnstileRequestedForBooking = false;
+    bookingIntent = bookingIntent.copyWith(autoReserve: true);
+    await _saveAndSchedule();
+    notifyListeners();
+    await checkNow();
   }
 
   void clearErrors() {
     _lastError = null;
     _lastBookingError = null;
+    _turnstileRequestedForBooking = false;
     notifyListeners();
   }
   bool get needsTurnstile =>
@@ -320,7 +367,12 @@ class MonitorService extends ChangeNotifier {
         isAlert: true,
       );
     }
-    // ────────────────────────────────────────────────────────────────────────
+
+    if (intent.autoReserve && CreditService().credits <= 0) {
+      _lastError = 'Cannot auto-book: 0 credits remaining. Please buy credits.';
+      notifyListeners();
+      return;
+    }
 
     bookingIntent = intent;
     _intervalSeconds = AppConfig.instance.pollSeconds;
@@ -331,7 +383,8 @@ class MonitorService extends ChangeNotifier {
     _targetSeatClass =
         targetSeatClass == null ||
             targetSeatClass.trim().isEmpty ||
-            targetSeatClass.trim().toUpperCase() == 'ALL'
+            targetSeatClass.trim().toUpperCase() == 'ALL' ||
+            targetSeatClass.trim().toUpperCase() == 'RANDOM'
         ? null
         : targetSeatClass.trim().toUpperCase();
     _generation++;
@@ -415,8 +468,56 @@ class MonitorService extends ChangeNotifier {
         );
       }
 
+      // Check 5-minute reservation validity and auto-clear if expired
+      unawaited(_checkReservationExpiry());
+
+      // If admin reduces credits to 0 in DB while monitoring is active, pause auto-booking!
+      if (_isMonitoring && bookingIntent.autoReserve && CreditService().credits <= 0) {
+        stopMonitoring();
+        _lastError = 'Auto-booking paused: 0 credits remaining. Please buy credits.';
+        _addLog(
+          '⚠️ 0 credits remaining. Auto-booking stopped. Please recharge credits.',
+          isAlert: true,
+        );
+        notifyListeners();
+      }
+
       notifyListeners();
     });
+  }
+
+  Future<void> _checkReservationExpiry() async {
+    final raw = await SecureStore.read(BookingService.storageKey);
+    if (raw == null) return;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final started = DateTime.tryParse(map['startedAt'] ?? '');
+      final expires = DateTime.tryParse(map['expiresAt'] ?? '');
+      final now = DateTime.now();
+      final bool isExpired =
+          (started != null && now.difference(started).inSeconds >= 300) ||
+          (expires != null && !now.isBefore(expires));
+
+      if (isExpired) {
+        final id = map['id']?.toString() ?? '';
+        await TripHistoryService().updateTripStatus(
+          id,
+          TripBookingStatus.expired,
+          failureReason: 'Reservation timed out after 5 minutes',
+        );
+        await BookingService.clear();
+        await _notificationService.clearAlerts();
+        _lastReservationExpired = true;
+        _turnstileRequestedForBooking = false;
+        bookingIntent = bookingIntent.copyWith(autoReserve: false);
+        await _saveAndSchedule();
+        _addLog(
+          '⏱️ 5-minute reservation window expired. Live reservation and alerts cleared.',
+          isAlert: true,
+        );
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   void _restartTimer() {
@@ -439,10 +540,29 @@ class MonitorService extends ChangeNotifier {
     _checking = true;
     final generation = _generation;
     try {
-      // A held or uncertain reservation must be reviewed before another attempt.
-      if (bookingIntent.autoReserve && await BookingService.pending() != null) {
-        await OtpVerifier.listen();
-        return;
+      // Check for held or pending reservation
+      if (bookingIntent.autoReserve) {
+        final pendingReservation = await BookingService.pending();
+        if (pendingReservation != null) {
+          final expiry = DateTime.tryParse('${pendingReservation['expiresAt'] ?? ''}');
+          final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
+          if (isExpired) {
+            // Automatically clear timed out reservation
+            await BookingService.clear();
+            _lastReservationExpired = true;
+            // Each auto-book books only one time; user must explicitly re-autobook
+            bookingIntent = bookingIntent.copyWith(autoReserve: false);
+            await _saveAndSchedule();
+            _addLog(
+              '⏱️ Reservation timed out waiting for OTP. Cleared automatically. User must re-auto book.',
+              isAlert: true,
+            );
+            notifyListeners();
+          } else {
+            await OtpVerifier.listen();
+            return;
+          }
+        }
       }
       final session = await AuthSession.load();
       if (session == null || !session.isValid) {
@@ -507,8 +627,14 @@ class MonitorService extends ChangeNotifier {
                     generation == _generation &&
                     await _savedSearchIsActive(),
               );
+              _turnstileRequestedForBooking = false;
+              _lastReservationExpired = false;
+              // Each auto-book books only ONE time. Disable autoReserve so it never re-books without explicit user re-autobook
+              bookingIntent = bookingIntent.copyWith(autoReserve: false);
+              await _saveAndSchedule();
               await _notificationService.showReservation(reservation);
               await OtpVerifier.listen();
+              notifyListeners();
               return;
             } catch (error) {
               if (_disposed ||
@@ -527,6 +653,25 @@ class MonitorService extends ChangeNotifier {
                 'Automatic reservation needs attention: $clean',
                 isError: true,
               );
+              try {
+                await TripHistoryService().recordTrip(
+                  TripRecord(
+                    id: DateTime.now().millisecondsSinceEpoch.toString(),
+                    trainName: chosen.$1.tripNumber,
+                    fromCity: _fromCity,
+                    toCity: _toCity,
+                    dateOfJourney: _dateOfJourney,
+                    seatClass: chosen.$2.type,
+                    seatNumbers: [],
+                    coachName: '',
+                    totalFare: double.tryParse(chosen.$2.fare) ?? 0.0,
+                    status: TripBookingStatus.failed,
+                    failureReason: clean,
+                    createdAt: DateTime.now(),
+                    isAutoBook: true,
+                  ),
+                );
+              } catch (_) {}
               notifyListeners();
 
               final isTurnstile = RegExp(
@@ -535,10 +680,14 @@ class MonitorService extends ChangeNotifier {
               ).hasMatch(clean);
 
               if (isTurnstile) {
-                await _notificationService.triggerTurnstileRequiredAlert(
-                  trainName: chosen.$1.tripNumber,
-                  seatType: chosen.$2.type,
-                );
+                // Security check should be triggered only ONCE per booking attempt
+                if (!_turnstileRequestedForBooking) {
+                  _turnstileRequestedForBooking = true;
+                  await _notificationService.triggerTurnstileRequiredAlert(
+                    trainName: chosen.$1.tripNumber,
+                    seatType: chosen.$2.type,
+                  );
+                }
               } else {
                 final prefs = await SharedPreferences.getInstance();
                 final alertKey = 'ticket_attention_$_searchId';
@@ -589,6 +738,7 @@ class MonitorService extends ChangeNotifier {
             if (_targetSeatClass != null &&
                 _targetSeatClass!.isNotEmpty &&
                 _targetSeatClass != 'ALL' &&
+                _targetSeatClass != 'RANDOM' &&
                 seat.type.toUpperCase() != _targetSeatClass!.toUpperCase()) {
               continue;
             }
