@@ -263,6 +263,12 @@ class MonitorService extends ChangeNotifier {
     _turnstileRequestedForBooking = false;
     notifyListeners();
   }
+
+  void setErrorForTesting({String? error, String? bookingError}) {
+    if (error != null) _lastError = error;
+    if (bookingError != null) _lastBookingError = bookingError;
+    notifyListeners();
+  }
   bool get needsTurnstile =>
       (_lastBookingError != null &&
           RegExp(

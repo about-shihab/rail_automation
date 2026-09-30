@@ -65,7 +65,7 @@ class LanguageService extends ChangeNotifier {
 
   static const Map<String, Map<String, String>> _translations = {
     // ── App Info ──────────────────────────────────────────────────────────────
-    'app_name': {'bn': 'Rail sheba pro', 'en': 'Rail sheba pro'},
+    'app_name': {'bn': 'Rail Pro', 'en': 'Rail Pro'},
     'app_subtitle': {'bn': 'বাংলাদেশ রেলওয়ে টিকেট অটোমেশন ও এলার্ট', 'en': 'Bangladesh Railway Ticket Automation & Alerts'},
 
     // ── Navigation & Actions ──────────────────────────────────────────────────

@@ -1,76 +1,189 @@
 package com.example.rail_sms;
-import android.Manifest;
-import android.content.*;
-import android.content.pm.PackageManager;
+
+import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.os.Build;
-import android.provider.Telephony;
-import android.telephony.SmsMessage;
+import android.os.Bundle;
+import androidx.annotation.NonNull;
+import com.google.android.gms.auth.api.phone.SmsRetriever;
+import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
+import com.google.android.gms.common.api.CommonStatusCodes;
+import com.google.android.gms.common.api.Status;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
 import io.flutter.embedding.engine.plugins.activity.ActivityAware;
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
-import io.flutter.plugin.common.*;
+import io.flutter.plugin.common.EventChannel;
+import io.flutter.plugin.common.MethodChannel;
+import io.flutter.plugin.common.PluginRegistry;
 import java.util.HashMap;
 import java.util.Map;
 
-public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegistry.RequestPermissionsResultListener {
+public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegistry.ActivityResultListener {
     private Context context;
     private ActivityPluginBinding activityBinding;
     private MethodChannel methods;
     private EventChannel events;
-    private MethodChannel.Result permissionResult;
     private BroadcastReceiver receiver;
-    private static final int REQUEST = 721;
-    private boolean allowed() { return context.checkSelfPermission(Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED; }
-    @Override public void onAttachedToEngine(FlutterPluginBinding binding) {
+    private EventChannel.EventSink currentSink;
+    private static final int SMS_CONSENT_REQUEST = 852;
+
+    @Override
+    public void onAttachedToEngine(@NonNull FlutterPluginBinding binding) {
         context = binding.getApplicationContext();
         methods = new MethodChannel(binding.getBinaryMessenger(), "com.example.rail_automation/sms");
         methods.setMethodCallHandler((call, result) -> {
-            if (call.method.equals("hasSmsPermission")) { result.success(allowed()); return; }
-            if (!call.method.equals("requestSmsPermission")) { result.notImplemented(); return; }
-            if (allowed()) { result.success(true); return; }
-            if (activityBinding == null || permissionResult != null) { result.success(false); return; }
-            permissionResult = result;
-            activityBinding.getActivity().requestPermissions(new String[]{Manifest.permission.RECEIVE_SMS}, REQUEST);
+            if (call.method.equals("hasSmsPermission") || call.method.equals("requestSmsPermission")) {
+                // Google SMS Retriever API does not require runtime Android permissions
+                result.success(true);
+                return;
+            }
+            if (call.method.equals("startListening")) {
+                startRetriever();
+                result.success(true);
+                return;
+            }
+            result.notImplemented();
         });
+
         events = new EventChannel(binding.getBinaryMessenger(), "com.example.rail_automation/sms_stream");
         events.setStreamHandler(new EventChannel.StreamHandler() {
-            @Override public void onListen(Object args, EventChannel.EventSink sink) {
-                stop();
-                if (!allowed()) { sink.error("PERMISSION_DENIED", "Enter the OTP manually", null); return; }
-                receiver = new BroadcastReceiver() {
-                    @Override public void onReceive(Context c, Intent intent) {
-                        if (!Telephony.Sms.Intents.SMS_RECEIVED_ACTION.equals(intent.getAction())) return;
-                        SmsMessage[] parts = Telephony.Sms.Intents.getMessagesFromIntent(intent);
-                        if (parts == null || parts.length == 0) return;
-                        StringBuilder body = new StringBuilder();
-                        for (SmsMessage part : parts) body.append(part.getMessageBody());
-                        Map<String,Object> data = new HashMap<>();
-                        data.put("sender", parts[0].getOriginatingAddress());
-                        data.put("body", body.toString());
-                        sink.success(data);
-                    }
-                };
-                IntentFilter filter = new IntentFilter(Telephony.Sms.Intents.SMS_RECEIVED_ACTION);
-                if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Manifest.permission.BROADCAST_SMS, null, Context.RECEIVER_EXPORTED);
-                else context.registerReceiver(receiver, filter, Manifest.permission.BROADCAST_SMS, null);
+            @Override
+            public void onListen(Object args, EventChannel.EventSink sink) {
+                currentSink = sink;
+                startRetriever();
             }
-            @Override public void onCancel(Object args) { stop(); }
+
+            @Override
+            public void onCancel(Object args) {
+                stop();
+            }
         });
     }
-    private void stop() { if (receiver != null) { context.unregisterReceiver(receiver); receiver = null; } }
-    @Override public boolean onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
-        if (request != REQUEST) return false;
-        if (permissionResult != null) { permissionResult.success(allowed()); permissionResult = null; }
-        return true;
+
+    private void startRetriever() {
+        stopReceiver();
+        try {
+            SmsRetrieverClient client = SmsRetriever.getClient(context);
+            // Start standard SMS Retriever (if message includes app hash)
+            client.startSmsRetriever();
+            // Start SMS User Consent API (prompts consent dialog for any railway OTP without hash)
+            client.startSmsUserConsent(null);
+
+            receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context c, Intent intent) {
+                    if (intent == null || !SmsRetriever.SMS_RETRIEVED_ACTION.equals(intent.getAction())) return;
+                    Bundle extras = intent.getExtras();
+                    if (extras == null) return;
+                    Status status = (Status) extras.get(SmsRetriever.EXTRA_STATUS);
+                    if (status == null) return;
+
+                    if (status.getStatusCode() == CommonStatusCodes.SUCCESS) {
+                        // Directly retrieved (e.g. from startSmsRetriever with hash)
+                        String message = extras.getString(SmsRetriever.EXTRA_SMS_MESSAGE);
+                        if (message != null && !message.isEmpty()) {
+                            deliverSms(message);
+                            return;
+                        }
+
+                        // Consent intent retrieved (from startSmsUserConsent)
+                        Intent consentIntent;
+                        if (Build.VERSION.SDK_INT >= 33) {
+                            consentIntent = extras.getParcelable(SmsRetriever.EXTRA_CONSENT_INTENT, Intent.class);
+                        } else {
+                            consentIntent = extras.getParcelable(SmsRetriever.EXTRA_CONSENT_INTENT);
+                        }
+
+                        if (consentIntent != null && activityBinding != null && activityBinding.getActivity() != null) {
+                            try {
+                                activityBinding.getActivity().startActivityForResult(consentIntent, SMS_CONSENT_REQUEST);
+                            } catch (ActivityNotFoundException ignored) {}
+                        }
+                    }
+                }
+            };
+
+            IntentFilter filter = new IntentFilter(SmsRetriever.SMS_RETRIEVED_ACTION);
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null, Context.RECEIVER_EXPORTED);
+            } else {
+                context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null);
+            }
+        } catch (Exception ignored) {}
     }
-    @Override public void onAttachedToActivity(ActivityPluginBinding binding) { activityBinding = binding; binding.addRequestPermissionsResultListener(this); }
-    @Override public void onDetachedFromActivityForConfigChanges() { detach(); }
-    @Override public void onReattachedToActivityForConfigChanges(ActivityPluginBinding binding) { onAttachedToActivity(binding); }
-    @Override public void onDetachedFromActivity() { detach(); }
+
+    private void deliverSms(String message) {
+        if (currentSink == null) return;
+        Map<String, Object> data = new HashMap<>();
+        data.put("sender", "RAILWAY");
+        data.put("body", message);
+        currentSink.success(data);
+    }
+
+    private void stopReceiver() {
+        if (receiver != null) {
+            try {
+                context.unregisterReceiver(receiver);
+            } catch (Exception ignored) {}
+            receiver = null;
+        }
+    }
+
+    private void stop() {
+        stopReceiver();
+        currentSink = null;
+    }
+
+    @Override
+    public boolean onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == SMS_CONSENT_REQUEST) {
+            if (resultCode == Activity.RESULT_OK && data != null) {
+                String message = data.getStringExtra(SmsRetriever.EXTRA_SMS_MESSAGE);
+                if (message != null && !message.isEmpty()) {
+                    deliverSms(message);
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
+        activityBinding = binding;
+        binding.addActivityResultListener(this);
+    }
+
+    @Override
+    public void onDetachedFromActivityForConfigChanges() {
+        detach();
+    }
+
+    @Override
+    public void onReattachedToActivityForConfigChanges(@NonNull ActivityPluginBinding binding) {
+        onAttachedToActivity(binding);
+    }
+
+    @Override
+    public void onDetachedFromActivity() {
+        detach();
+    }
+
     private void detach() {
-        if (activityBinding != null) activityBinding.removeRequestPermissionsResultListener(this);
-        activityBinding = null;
-        if (permissionResult != null) { permissionResult.success(false); permissionResult = null; }
+        if (activityBinding != null) {
+            activityBinding.removeActivityResultListener(this);
+            activityBinding = null;
+        }
     }
-    @Override public void onDetachedFromEngine(FlutterPluginBinding binding) { stop(); methods.setMethodCallHandler(null); events.setStreamHandler(null); }
+
+    @Override
+    public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+        stop();
+        if (methods != null) methods.setMethodCallHandler(null);
+        if (events != null) events.setStreamHandler(null);
+    }
 }

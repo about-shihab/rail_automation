@@ -1,4 +1,4 @@
-# Rail Sheba Pro
+# Rail Pro
 
 Flutter app for finding Railway journeys, selecting a class and seat quantity,
 watching availability, attempting a reservation, and handing payment back to the user.

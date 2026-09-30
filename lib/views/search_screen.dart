@@ -506,7 +506,7 @@ class _HeroHeader extends StatelessWidget {
                   child: const Icon(Icons.train_rounded, color: Colors.white, size: 22),
                 ),
                 const SizedBox(width: 10),
-                const Text('Rail Sheba Pro',
+                const Text('Rail Pro',
                   style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                 const Spacer(),
                 // Account avatar

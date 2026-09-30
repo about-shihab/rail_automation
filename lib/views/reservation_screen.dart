@@ -429,7 +429,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'If SMS access is enabled, OTPs are verified automatically. You can also enter it below.',
+            'If SMS auto-fill is enabled, OTPs are verified automatically. You can also enter it below.',
             style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12, height: 1.5),
           ),
           const SizedBox(height: 14),

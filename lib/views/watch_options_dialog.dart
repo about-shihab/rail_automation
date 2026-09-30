@@ -132,7 +132,7 @@ class _WatchSheetState extends State<_WatchSheet> {
           contentPadding: EdgeInsets.zero,
           title: const Text('Verify Railway SMS automatically'),
           subtitle: const Text(
-            'Requires SMS permission on Android. Otherwise, we’ll ask you to enter the code.',
+            'Uses Google SMS Retriever to auto-fill Railway OTP. Otherwise, we’ll ask you to enter the code.',
           ),
           value: _autoVerify,
           onChanged: _busy ? null : (v) => setState(() => _autoVerify = v),

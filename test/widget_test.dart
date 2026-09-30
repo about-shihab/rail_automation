@@ -9,7 +9,7 @@ import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/credit_service.dart';
 
 void main() {
-  testWidgets('App renders SearchScreen with Rail sheba pro header',
+  testWidgets('App renders SearchScreen with Rail Pro header',
       (WidgetTester tester) async {
     final proService = ProService();
     final themeService = ThemeService();
@@ -33,7 +33,7 @@ void main() {
       ),
     );
 
-    expect(find.text('Rail Sheba Pro'), findsOneWidget);
+    expect(find.text('Rail Pro'), findsOneWidget);
     expect(find.text('To'), findsOneWidget);
     expect(find.text('Class'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());

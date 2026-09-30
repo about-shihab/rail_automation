@@ -52,7 +52,7 @@ enum _Phase { loading, ready, success, error }
 class _TurnstileDialogState extends State<TurnstileDialog> {
   static const _loginUrl = 'https://eticket.railway.gov.bd/login';
 
-  late final WebViewController _controller;
+  WebViewController? _controller;
   _Phase _phase = _Phase.loading;
   String? _error;
   Timer? _loadTimeout;
@@ -111,22 +111,24 @@ class _TurnstileDialogState extends State<TurnstileDialog> {
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
-      ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Colors.transparent)
-      ..addJavaScriptChannel('TurnstileBridge', onMessageReceived: _onMessage)
-      ..setNavigationDelegate(NavigationDelegate(
-        onPageFinished: (_) {
-          if (!mounted || _phase == _Phase.success) return;
-          _controller.runJavaScript(
-              _script.replaceAll('__THEME__', _dark ? 'dark' : 'light'));
-        },
-        onWebResourceError: (e) {
-          if (e.isForMainFrame ?? true) {
-            _fail('No connection to Railway. Check your internet and retry.');
-          }
-        },
-      ));
+    try {
+      _controller = WebViewController()
+        ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setBackgroundColor(Colors.transparent)
+        ..addJavaScriptChannel('TurnstileBridge', onMessageReceived: _onMessage)
+        ..setNavigationDelegate(NavigationDelegate(
+          onPageFinished: (_) {
+            if (!mounted || _phase == _Phase.success) return;
+            _controller?.runJavaScript(
+                _script.replaceAll('__THEME__', _dark ? 'dark' : 'light'));
+          },
+          onWebResourceError: (e) {
+            if (e.isForMainFrame ?? true) {
+              _fail('No connection to Railway. Check your internet and retry.');
+            }
+          },
+        ));
+    } catch (_) {}
   }
 
   @override
@@ -145,7 +147,9 @@ class _TurnstileDialogState extends State<TurnstileDialog> {
       _phase = _Phase.loading;
       _error = null;
     });
-    _controller.loadRequest(Uri.parse(_loginUrl));
+    try {
+      _controller?.loadRequest(Uri.parse(_loginUrl));
+    } catch (_) {}
     _loadTimeout = Timer(const Duration(seconds: 25), () {
       if (mounted && _phase == _Phase.loading) {
         _fail('Verification is taking too long. Tap Retry.');
@@ -398,12 +402,13 @@ class _TurnstileDialogState extends State<TurnstileDialog> {
                       child: Stack(
                         alignment: Alignment.center,
                         children: [
-                          Positioned.fill(
-                            child: Opacity(
-                              opacity: _phase == _Phase.ready ? 1 : 0,
-                              child: WebViewWidget(controller: _controller),
+                          if (_controller != null)
+                            Positioned.fill(
+                              child: Opacity(
+                                opacity: _phase == _Phase.ready ? 1 : 0,
+                                child: WebViewWidget(controller: _controller!),
+                              ),
                             ),
-                          ),
                           if (_phase == _Phase.loading)
                             Column(
                               mainAxisAlignment: MainAxisAlignment.center,

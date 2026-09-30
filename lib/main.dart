@@ -148,7 +148,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     });
 
     return MaterialApp(
-      title: 'Rail sheba pro',
+      title: 'Rail Pro',
       navigatorKey: NotificationService.navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: AppThemes.lightTheme,
