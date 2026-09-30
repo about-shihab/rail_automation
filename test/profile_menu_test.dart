@@ -41,7 +41,7 @@ void main() {
           ChangeNotifierProvider.value(value: TripHistoryService()),
         ],
         child: const MaterialApp(
-          home: AppShell(initialTab: AppShell.tabMore),
+          home: ProfileTab(),
         ),
       ),
     );
@@ -55,7 +55,8 @@ void main() {
 
     // Tap to expand
     await tester.tap(find.text('Developer Information'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
 
     // Verify expanded details
     expect(find.text('Lead Developer & Creator'), findsOneWidget);

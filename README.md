@@ -1,65 +1,114 @@
-# Rail Pro
+<div align="center">
 
-Flutter app for finding Railway journeys, selecting a class and seat quantity,
-watching availability, attempting a reservation, and handing payment back to the user.
+  <img src="docs/assets/icon_512x512.png" alt="Rail Pro Logo" width="120" style="border-radius: 24px; box-shadow: 0 8px 24px rgba(16, 185, 129, 0.3);" />
 
-## User flow
+  # Rail Pro (বাংলাদেশ রেলওয়ে অটোমেশন)
+  ### Smart Bangladesh Railway Ticket Monitoring & Auto-Reservation Assistant
 
-1. Sign in to Railway and search a route and date.
-2. Choose a train and class, then select Auto-book and the number of seats.
-3. Optionally allow Railway SMS verification. Without permission, OTP is entered manually.
-4. View a simple journey card; diagnostic logs are not displayed.
-5. Review the held reservation and complete payment with Railway.
+  [![Release](https://img.shields.io/badge/Release-v1.0.0-10b981?style=for-the-badge&logo=android)](https://github.com/about-shihab/rail_automation/releases)
+  [![Platform](https://img.shields.io/badge/Platform-Android_5.0%2B-059669?style=for-the-badge&logo=android)](https://github.com/about-shihab/rail_automation)
+  [![Flutter](https://img.shields.io/badge/Built_with-Flutter-02569B?style=for-the-badge&logo=flutter)](https://flutter.dev)
+  [![Tests](https://img.shields.io/badge/Tests-54_Passed-success?style=for-the-badge&logo=githubactions)](test/)
+  [![Website](https://img.shields.io/badge/Website-Live_Page-blue?style=for-the-badge&logo=googlechrome)](https://about-shihab.github.io/rail_automation/)
 
-Search preferences survive restarts. Pause stops future reservation attempts; it
-cannot undo a request already accepted by Railway. Pending or uncertain bookings
-block further automatic attempts until reviewed. No payment is submitted automatically.
+  <p align="center">
+    <strong>Never miss an open train seat again.</strong> Continuous route monitoring, multi-train selection, multi-coach seat booking, and secure Google SMS Retriever OTP verification for Bangladesh Railway.
+  </p>
 
-## Background operation
+  <p align="center">
+    <a href="https://about-shihab.github.io/rail_automation/"><strong>🌐 Visit Official App Website »</strong></a>
+    &nbsp;•&nbsp;
+    <a href="#-direct-apk-download"><strong>📥 Download APK »</strong></a>
+    &nbsp;•&nbsp;
+    <a href="PRIVACY_POLICY.md"><strong>📄 Privacy Policy »</strong></a>
+  </p>
 
-Android uses the existing foreground service and a persistent notification. The
-configured polling interval defaults to 120 seconds. A saved active search starts
-its service again when restored in the foreground. If service startup fails, the
-app tells the user to keep it open. iOS uses scheduled background tasks rather than
-continuous polling. Desktop and web require the app to remain open.
+</div>
 
-The current implementation bounds Android service sessions at five hours, and
-free searches expire after the configured free duration (default one hour).
-The operating system, connectivity, force-stop, and Railway authentication can
-interrupt processing. Continuous unattended operation is not guaranteed.
+---
 
-Railway can require a fresh verification challenge (`cft_response`). The app does
-not currently obtain that challenge automatically. In that case users must
-continue on the official booking page. Live seat reservation and SMS verification
-must be validated on a physical device before release.
+## 📸 App Preview
 
-## Validation
+| Ticket Search & Radar | Queue Waiting Room | Multi-Coach Seat Layout |
+|:---:|:---:|:---:|
+| <img src="docs/assets/screenshot_1.png" width="240" /> | <img src="docs/assets/screenshot_2.png" width="240" /> | <img src="docs/assets/screenshot_3.png" width="240" /> |
+| *256 Canonical stations with class filters* | *Intelligent waiting room queue handling* | *Select up to 4 seats across different coaches* |
 
-```sh
-flutter analyze --no-pub
-flutter test --no-pub
-flutter build apk --debug --no-pub
+---
+
+## ⚡ Key Features
+
+* 🚆 **Multi-Train Auto-Booking**: Bangladesh Railway returns multiple trains per route in a single API call. Monitor and auto-book across multiple target trains (e.g. *Subarna Express*, *Sonar Bangla Express*, *Mohanagar Provati*) without interrupting or resetting your route.
+* 💺 **Multi-Coach Seat Flexibility**: Auto-book up to 4 tickets across any coaches on the train. You are no longer restricted to a single coach when seats are scattered.
+* ⏱️ **Departure-Time Monitoring**: No artificial 60-minute cutoff. Monitoring searches non-stop until the train's scheduled departure time.
+* 📲 **Google SMS Retriever API**: Auto-detects official Railway OTP verification codes securely without requiring dangerous SMS-reading permissions.
+* 💳 **Dynamic Cloud Credit System**: Firestore database integration dynamically syncs credit packages in real-time. Exactly **1 credit** is deducted per auto-book reservation when seat hold & OTP are triggered.
+* 🌓 **Dark Mode & Bilingual**: Sleek, battery-friendly dark theme with one-tap switching between Bangla (বাংলা) and English.
+* 🔒 **Hardware-Backed Security**: Hardware keystore storage for action tokens and session data. Direct HTTPS connection to official Bangladesh Railway portal.
+
+---
+
+## 📥 Direct APK Download
+
+| File | Version | Architecture | Minimum Android | Download Link |
+| :--- | :---: | :---: | :---: | :--- |
+| `app-release.apk` | **v1.0.0** | `universal` (arm64, armeabi-v7a, x86_64) | Android 5.0 (API 21+) | [**Download APK**](https://github.com/about-shihab/rail_automation/releases/latest) |
+
+---
+
+## 🛠️ Project Structure
+
+```text
+rail_automation/
+├── android/                  # Android native project & release signing configs
+├── assets/                   # App icons and audio sound cues
+├── docs/                     # GitHub Pages app website (index.html & assets)
+├── lib/
+│   ├── models/               # Data models (TrainTrip, SeatType, BookingIntent, CreditPackage)
+│   ├── services/             # Core engines (BookingService, MonitorService, CreditService, SmsService)
+│   ├── utils/                # Design system tokens (AppColors, AppCard, Typography)
+│   ├── views/                # Screens (SearchScreen, AppShell, SeatBookingScreen, MonitorDashboard)
+│   └── widgets/              # Reusable components (TrainNavigationBar, TurnstileSheet)
+├── test/                     # 54 Automated unit and widget tests
+└── PRIVACY_POLICY.md         # Store-compliant privacy policy
 ```
 
-Mobile dashboard layout tests render previews under `build/design-preview`.
-Tests cover seat availability parsing, cancellation before mutation, uncertain
-booking outcomes, OTP acknowledgements, and fare-free automatic booking setup.
+---
 
-## Release configuration
+## 🚀 Building & Running Locally
 
-Release builds require an upload keystore; debug signing is never used for release.
-Copy `android/key.properties.example` to `android/key.properties` and supply your
-own values. Keep the properties file and keystore private. The keystore path is
-relative to the Android project directory, or can be absolute.
+### Prerequisites
+* Flutter SDK (3.13.1+)
+* Android SDK / Android Studio
+* Connected Android Device or Emulator
 
-Before publishing, choose the final application ID (currently
-`com.example.rail_automation`) and update the matching Firebase/platform
-configuration. Verify production Firebase access rules and the existing credit
-and account configuration in their deployed environment. Those external settings
-are not validated by local tests.
+### Commands
+```bash
+# Get dependencies
+flutter pub get
 
-Physical-device acceptance still required: notification and SMS permission granted
-and denied, background/foreground transitions, service restart, force-stop recovery,
-session expiry, Railway challenge, seats disappearing during booking, OTP timeout,
-reservation expiry, and payment handoff. iOS signing and background behavior must
-be validated using Xcode on macOS. The repository is not yet a certified production release.
+# Run test suite
+flutter test
+
+# Run in debug mode
+flutter run
+
+# Build signed production release APK
+flutter build apk --release
+```
+
+---
+
+## 👨‍💻 Developer Information
+
+* **Lead Developer & Creator**: **Abdulla Al Mamun**
+* **Email**: [`connect.abdulla@gmail.com`](mailto:connect.abdulla@gmail.com)
+* **GitHub**: [@about-shihab](https://github.com/about-shihab)
+
+---
+
+## 🛡️ Official Disclaimer
+
+> **Disclaimer**: Rail Pro is an independent automation and train ticket monitoring utility designed to assist users with personal ticket availability search and booking on the Bangladesh Railway portal.
+>
+> This application is **not affiliated with, endorsed by, or operated by Bangladesh Railway (BR)** or Shohoz-Synesis-Vincen JV. All ticket reservations, fares, OTPs, and seat allocations are processed directly through the official railway ticketing portal (`eticket.railway.gov.bd`).

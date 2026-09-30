@@ -110,7 +110,7 @@ class _AppShellState extends State<AppShell> {
                 SearchScreen(),
                 _MonitorTab(),
                 TripsScreen(),
-                _ProfileTab(),
+                ProfileTab(),
               ]),
             ),
           ],
@@ -160,8 +160,8 @@ class _MonitorTab extends StatelessWidget {
 }
 
 // ── Profile tab: user profile, credits, appearance, language, logout ────────
-class _ProfileTab extends StatelessWidget {
-  const _ProfileTab();
+class ProfileTab extends StatelessWidget {
+  const ProfileTab({super.key});
 
   Future<void> _logout(BuildContext context) async {
     final confirmed = await showDialog<bool>(
@@ -365,87 +365,7 @@ class _ProfileTab extends StatelessWidget {
           const SizedBox(height: 14),
 
           // ── Developer Information (Expandable, Collapsed Initially) ──
-          AppCard(
-            child: Theme(
-              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-              child: ExpansionTile(
-                initiallyExpanded: false,
-                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                childrenPadding: const EdgeInsets.only(bottom: 8),
-                leading: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(
-                    Icons.code_rounded,
-                    color: AppColors.primary,
-                    size: 20,
-                  ),
-                ),
-                title: Text(
-                  'Developer Information',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary(isDark),
-                  ),
-                ),
-                subtitle: Text(
-                  'Abdulla Al Mamun · Contact & Details',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textMuted(isDark),
-                  ),
-                ),
-                children: [
-                  const Divider(height: 1),
-                  tile(
-                    Icons.person_outline_rounded,
-                    'Abdulla Al Mamun',
-                    sub: 'Lead Developer & Creator',
-                  ),
-                  tile(
-                    Icons.email_outlined,
-                    'connect.abdulla@gmail.com',
-                    sub: 'Tap to copy contact email',
-                    trailing: const Icon(
-                      Icons.copy_rounded,
-                      size: 18,
-                      color: AppColors.primary,
-                    ),
-                    onTap: () {
-                      Clipboard.setData(
-                        const ClipboardData(text: 'connect.abdulla@gmail.com'),
-                      );
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: const Row(
-                            children: [
-                              Icon(
-                                Icons.check_circle_rounded,
-                                color: Colors.white,
-                                size: 20,
-                              ),
-                              SizedBox(width: 8),
-                              Text('Email copied to clipboard'),
-                            ],
-                          ),
-                          behavior: SnackBarBehavior.floating,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          backgroundColor: AppColors.primary,
-                          duration: const Duration(seconds: 2),
-                        ),
-                      );
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
+          _ExpandableDeveloperCard(isDark: isDark),
           const SizedBox(height: 14),
 
           // ── Disclaimer ──
@@ -506,6 +426,130 @@ class _ProfileTab extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExpandableDeveloperCard extends StatefulWidget {
+  final bool isDark;
+  const _ExpandableDeveloperCard({required this.isDark});
+
+  @override
+  State<_ExpandableDeveloperCard> createState() => _ExpandableDeveloperCardState();
+}
+
+class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      padding: EdgeInsets.zero,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(18),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(
+                      Icons.code_rounded,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Developer Information',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary(widget.isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _expanded
+                              ? 'Tap to collapse'
+                              : 'Abdulla Al Mamun · Tap to expand',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted(widget.isDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    _expanded
+                        ? Icons.keyboard_arrow_up_rounded
+                        : Icons.keyboard_arrow_down_rounded,
+                    color: AppColors.textMuted(widget.isDark),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (_expanded) ...[
+            const Divider(height: 1),
+            const ListTile(
+              leading: Icon(Icons.person_outline_rounded, color: AppColors.primary),
+              title: Text('Abdulla Al Mamun', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('Lead Developer & Creator'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.email_outlined, color: AppColors.primary),
+              title: const Text('connect.abdulla@gmail.com', style: TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: const Text('Tap to copy contact email'),
+              trailing: const Icon(
+                Icons.copy_rounded,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              onTap: () {
+                Clipboard.setData(
+                  const ClipboardData(text: 'connect.abdulla@gmail.com'),
+                );
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: const Row(
+                      children: [
+                        Icon(
+                          Icons.check_circle_rounded,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        SizedBox(width: 8),
+                        Text('Email copied to clipboard'),
+                      ],
+                    ),
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    backgroundColor: AppColors.primary,
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 6),
+          ],
         ],
       ),
     );
