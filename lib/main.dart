@@ -43,6 +43,7 @@ void main() async {
   final firebaseUserService = FirebaseUserService();
   await firebaseUserService.initialize(proService: proService);
   await AppConfig.instance.initialize();
+  unawaited(creditService.syncPackagesFromFirestore());
   if (isLoggedIn) {
     unawaited(firebaseUserService.syncUserOnLogin(session));
   }

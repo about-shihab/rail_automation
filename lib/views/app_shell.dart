@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/auth_session.dart';
@@ -363,6 +364,126 @@ class _ProfileTab extends StatelessWidget {
           ),
           const SizedBox(height: 14),
 
+          // ── Developer Information (Expandable, Collapsed Initially) ──
+          AppCard(
+            child: Theme(
+              data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                initiallyExpanded: false,
+                tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                childrenPadding: const EdgeInsets.only(bottom: 8),
+                leading: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.code_rounded,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
+                ),
+                title: Text(
+                  'Developer Information',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary(isDark),
+                  ),
+                ),
+                subtitle: Text(
+                  'Abdulla Al Mamun · Contact & Details',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textMuted(isDark),
+                  ),
+                ),
+                children: [
+                  const Divider(height: 1),
+                  tile(
+                    Icons.person_outline_rounded,
+                    'Abdulla Al Mamun',
+                    sub: 'Lead Developer & Creator',
+                  ),
+                  tile(
+                    Icons.email_outlined,
+                    'connect.abdulla@gmail.com',
+                    sub: 'Tap to copy contact email',
+                    trailing: const Icon(
+                      Icons.copy_rounded,
+                      size: 18,
+                      color: AppColors.primary,
+                    ),
+                    onTap: () {
+                      Clipboard.setData(
+                        const ClipboardData(text: 'connect.abdulla@gmail.com'),
+                      );
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Row(
+                            children: [
+                              Icon(
+                                Icons.check_circle_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              SizedBox(width: 8),
+                              Text('Email copied to clipboard'),
+                            ],
+                          ),
+                          behavior: SnackBarBehavior.floating,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          backgroundColor: AppColors.primary,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // ── Disclaimer ──
+          AppCard(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.shield_outlined, color: AppColors.textMuted(isDark), size: 18),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Disclaimer',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    'Rail Pro is an independent automation and train ticket monitoring utility designed to assist users with personal ticket availability search and booking on the Bangladesh Railway portal.\n\nThis app is not affiliated with, endorsed by, or operated by Bangladesh Railway (BR) or Shohoz-Synesis-Vincen JV. All ticket reservations, fares, OTPs, and seat allocations are processed directly through the official railway portal.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.45,
+                      color: AppColors.textMuted(isDark),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+
           // ── Sign Out Card ──
           AppCard(
             child: tile(
@@ -370,6 +491,19 @@ class _ProfileTab extends StatelessWidget {
               'Sign Out',
               sub: 'Switch or disconnect Railway account',
               onTap: () => _logout(context),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          // ── Version & Footer ──
+          Center(
+            child: Text(
+              'Rail Pro v1.0.0 · Developed by Abdulla Al Mamun',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textMuted(isDark),
+              ),
             ),
           ),
         ],

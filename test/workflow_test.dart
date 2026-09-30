@@ -19,6 +19,8 @@ import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/services/sms_service.dart';
 import 'package:rail_automation/models/trip_record.dart';
 import 'package:rail_automation/services/trip_history_service.dart';
+import 'package:rail_automation/services/credit_service.dart';
+import 'package:rail_automation/models/seat_layout.dart';
 import 'package:rail_automation/services/web_session_service.dart';
 
 void main() {
@@ -432,6 +434,141 @@ void main() {
       expect(paths.where((p) => p.endsWith('/verify-otp')), hasLength(1));
     },
   );
+
+  test('auto-book reservation to awaitingOtp costs 1 credit, but completion does not double deduct', () async {
+    final creditService = CreditService();
+    creditService.setCreditsForTesting(3);
+
+    await http.runWithClient(
+      () async {
+        final state = await BookingService.reserve(
+          train: train,
+          seat: seat,
+          from: 'Dhaka',
+          to: 'Chattogram',
+          date: '30-Sep-2026',
+          auth: auth,
+          quantity: 2,
+          maxFare: 600,
+          isAutoBook: true,
+        );
+        expect(state['status'], 'awaitingOtp');
+        expect(state['isAutoBook'], isTrue);
+        expect(state['credit_deducted'], isTrue);
+        // Credit deducted by 1 upon sending OTP
+        expect(creditService.credits, 2);
+
+        // Later when booking completes successfully, it should NOT double deduct
+        final completed = await BookingService.completeSuccessfulBooking(reservation: state);
+        expect(completed, isTrue);
+        expect(creditService.credits, 2, reason: 'Credit must not be double deducted if already deducted at OTP send');
+      },
+      () => MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/handshake')) {
+          return http.Response(
+            jsonEncode({'data': {'release_time_interval_in_minutes': 300}}),
+            200,
+          );
+        }
+        if (path.endsWith('/seat-layout')) {
+          return http.Response(jsonEncode(layout()), 200, headers: {'x-action-token': 'token-a'});
+        }
+        if (path.endsWith('/reserve-seat')) {
+          return http.Response('{"data":{"ack":1}}', 200, headers: {'x-action-token': 'token-b'});
+        }
+        return http.Response('{"data":{"success":true}}', 200);
+      }),
+    );
+  });
+
+  test('reservation supports selecting seats across multiple coaches', () async {
+    final multiCoachLayout = {
+      'data': {
+        'seatLayout': [
+          {
+            'floor_name': 'KA',
+            'seat_floor': 1,
+            'seat_fare': '400',
+            'seat_availability': true,
+            'layout': [
+              [
+                {'seat_number': 'KA-1', 'ticket_id': 101, 'seat_availability': 1},
+              ],
+            ],
+          },
+          {
+            'floor_name': 'KHA',
+            'seat_floor': 2,
+            'seat_fare': '400',
+            'seat_availability': true,
+            'layout': [
+              [
+                {'seat_number': 'KHA-1', 'ticket_id': 201, 'seat_availability': 1},
+              ],
+            ],
+          },
+        ],
+      },
+    };
+
+    final selectedSeats = [
+      SeatItem(
+        isHidden: false,
+        seatAvailability: 1,
+        seatNumber: 'KA-1',
+        ticketId: 101,
+        ticketType: 1,
+      ),
+      SeatItem(
+        isHidden: false,
+        seatAvailability: 1,
+        seatNumber: 'KHA-1',
+        ticketId: 201,
+        ticketType: 1,
+      ),
+    ];
+
+    await http.runWithClient(
+      () async {
+        final state = await BookingService.reserve(
+          train: train,
+          seat: seat,
+          from: 'Dhaka',
+          to: 'Chattogram',
+          date: '30-Sep-2026',
+          auth: auth,
+          quantity: 2,
+          selectedSeats: selectedSeats,
+        );
+        expect(state['coach_names'], 'KA, KHA');
+        expect(state['seats'], hasLength(2));
+        final seatFloors = (state['seats'] as List).map((s) => s['floor_name']).toList();
+        expect(seatFloors, containsAll(['KA', 'KHA']));
+      },
+      () => MockClient((request) async {
+        final path = request.url.path;
+        if (path.endsWith('/handshake'))
+          return http.Response(
+            jsonEncode({'data': {'release_time_interval_in_minutes': 300}}),
+            200,
+          );
+        if (path.endsWith('/seat-layout'))
+          return http.Response(
+            jsonEncode(multiCoachLayout),
+            200,
+            headers: {'x-action-token': 'token-mc'},
+          );
+        if (path.endsWith('/reserve-seat'))
+          return http.Response(
+            '{"data":{"ack":1}}',
+            200,
+            headers: {'x-action-token': 'token-ack'},
+          );
+        return http.Response('{"data":{"success":true}}', 200);
+      }),
+    );
+  });
   test(
     'unknown mutation outcome persists and blocks duplicate booking',
     () async {

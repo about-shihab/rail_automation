@@ -84,7 +84,15 @@ class MonitorService extends ChangeNotifier {
       _fromCity = data['from'] as String;
       _toCity = data['to'] as String;
       _dateOfJourney = data['date'] as String;
-      _targetTrain = data['train'] as String?;
+      if (data['trains'] is List) {
+        _targetTrains = (data['trains'] as List).map((e) => e.toString()).toList();
+      } else if (data['train'] is String && (data['train'] as String).isNotEmpty) {
+        final t = data['train'] as String;
+        _targetTrains = t.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      } else {
+        _targetTrains = [];
+      }
+      _targetTrain = _targetTrains.isNotEmpty ? _targetTrains.join(', ') : (data['train'] as String?);
       final rawSeat = data['seat'] as String?;
       _targetSeatClass = (rawSeat == null ||
               rawSeat.trim().isEmpty ||
@@ -110,13 +118,16 @@ class MonitorService extends ChangeNotifier {
       bookingIntent = BookingIntent.fromJson(
         Map<String, dynamic>.from(data['bookingIntent'] ?? {}),
       );
+      if (_targetTrains.isNotEmpty && bookingIntent.targetTrains.isEmpty) {
+        bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
+      }
       final result = prefs.getString('ticket_results_$_searchId');
       if (result != null) {
         _lastTrains = (jsonDecode(result) as List)
             .map((e) => TrainTrip.fromJson(Map<String, dynamic>.from(e)))
             .toList();
         _seatsFoundCount = _lastTrains
-            .where((t) => _targetTrain == null || t.tripNumber == _targetTrain)
+            .where((t) => isTrainMonitored(t.tripNumber))
             .expand((t) => t.seatTypes)
             .where(
               (s) =>
@@ -156,7 +167,8 @@ class MonitorService extends ChangeNotifier {
       'from': _fromCity,
       'to': _toCity,
       'date': _dateOfJourney,
-      'train': _targetTrain,
+      'train': _targetTrains.isNotEmpty ? _targetTrains.join(', ') : _targetTrain,
+      'trains': _targetTrains,
       'seat': _targetSeatClass,
       'active': _isMonitoring,
       'expires': _expiresAt?.toIso8601String(),
@@ -197,7 +209,8 @@ class MonitorService extends ChangeNotifier {
   String _fromCity = 'Dhaka';
   String _toCity = 'Chattogram';
   String _dateOfJourney = '';
-  String? _targetTrain; // If null, monitors all trains on route
+  List<String> _targetTrains = [];
+  String? _targetTrain; // If null/empty, monitors all trains on route
   String? _targetSeatClass; // If null, monitors any seat class
 
   DateTime? _lastCheckedAt;
@@ -220,7 +233,47 @@ class MonitorService extends ChangeNotifier {
   String get fromCity => _fromCity;
   String get toCity => _toCity;
   String get dateOfJourney => _dateOfJourney;
-  String? get targetTrain => _targetTrain;
+  List<String> get targetTrains => List.unmodifiable(_targetTrains);
+  String? get targetTrain {
+    if (_targetTrains.isNotEmpty) {
+      return _targetTrains.length == 1 ? _targetTrains.first : _targetTrains.join(', ');
+    }
+    return _targetTrain;
+  }
+
+  bool isTrainMonitored(String trainName) {
+    if (!_isMonitoring) return false;
+    final clean = trainName.trim().toLowerCase();
+    if (_targetTrains.isEmpty && (_targetTrain == null || _targetTrain == 'ALL' || _targetTrain!.isEmpty)) {
+      return true;
+    }
+    return _targetTrains.any((t) => t.trim().toLowerCase() == clean) ||
+        (_targetTrain != null && _targetTrain!.trim().toLowerCase() == clean);
+  }
+
+  void addTrainToMonitoring(String trainName) {
+    final clean = trainName.trim();
+    if (clean.isEmpty) return;
+    if (!_targetTrains.any((t) => t.toLowerCase() == clean.toLowerCase())) {
+      _targetTrains.add(clean);
+      _targetTrain = _targetTrains.join(', ');
+      bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
+      _addLog('➕ Added $clean to active auto-booking (Total: ${_targetTrains.length} trains)');
+      unawaited(_saveAndSchedule());
+      notifyListeners();
+    }
+  }
+
+  void removeTrainFromMonitoring(String trainName) {
+    final clean = trainName.trim();
+    _targetTrains.removeWhere((t) => t.toLowerCase() == clean.toLowerCase());
+    _targetTrain = _targetTrains.isNotEmpty ? _targetTrains.join(', ') : null;
+    bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
+    _addLog('➖ Removed $clean from active auto-booking (Remaining: ${_targetTrains.length} trains)');
+    unawaited(_saveAndSchedule());
+    notifyListeners();
+  }
+
   String? get targetSeatClass => _targetSeatClass;
   DateTime? get lastCheckedAt => _lastCheckedAt;
   int get totalChecksCount => _totalChecksCount;
@@ -433,6 +486,7 @@ class MonitorService extends ChangeNotifier {
     required String toCity,
     required String dateOfJourney,
     String? targetTrain,
+    List<String>? targetTrains,
     String? targetSeatClass,
     BookingIntent intent = const BookingIntent(),
     DateTime? departureTime,
@@ -461,12 +515,22 @@ class MonitorService extends ChangeNotifier {
       return;
     }
 
-    bookingIntent = intent;
+    if (targetTrains != null && targetTrains.isNotEmpty) {
+      _targetTrains = targetTrains.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+      _targetTrain = _targetTrains.join(', ');
+    } else if (targetTrain != null && targetTrain.trim().isNotEmpty && targetTrain.toUpperCase() != 'ALL') {
+      _targetTrains = targetTrain.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      _targetTrain = _targetTrains.join(', ');
+    } else {
+      _targetTrains = [];
+      _targetTrain = null;
+    }
+
+    bookingIntent = intent.copyWith(targetTrains: _targetTrains);
     _intervalSeconds = AppConfig.instance.pollSeconds;
     _fromCity = fromCity;
     _toCity = toCity;
     _dateOfJourney = dateOfJourney;
-    _targetTrain = targetTrain;
     _targetSeatClass =
         targetSeatClass == null ||
             targetSeatClass.trim().isEmpty ||
@@ -480,8 +544,8 @@ class MonitorService extends ChangeNotifier {
     // ── Search time limit: until train departure time ──
     DateTime? calculatedDeparture = departureTime;
     if (calculatedDeparture == null) {
-      if (targetTrain != null && _lastTrains.isNotEmpty) {
-        final matched = _lastTrains.where((t) => t.tripNumber == targetTrain).firstOrNull;
+      if (_targetTrains.isNotEmpty && _lastTrains.isNotEmpty) {
+        final matched = _lastTrains.where((t) => isTrainMonitored(t.tripNumber)).firstOrNull;
         if (matched != null) {
           departureDateTimeJd ??= matched.departureDateTimeJd;
           departureDateTime ??= matched.departureDateTime;
@@ -703,8 +767,8 @@ class MonitorService extends ChangeNotifier {
         if (!await _savedSearchIsActive()) return;
         _lastError = null;
         _lastTrains = response.trains;
-        if (_targetTrain != null) {
-          final matched = response.trains.where((t) => t.tripNumber == _targetTrain).firstOrNull;
+        if (_targetTrains.isNotEmpty || _targetTrain != null) {
+          final matched = response.trains.where((t) => isTrainMonitored(t.tripNumber)).firstOrNull;
           if (matched != null) {
             final dep = parseDepartureDateTime(
               departureDateTimeJd: matched.departureDateTimeJd,
@@ -722,6 +786,7 @@ class MonitorService extends ChangeNotifier {
           final chosen = bookingIntent.choose(
             response.trains,
             train: _targetTrain,
+            targetTrains: _targetTrains,
             seatClass: _targetSeatClass,
           );
           if (chosen != null) {
@@ -736,6 +801,7 @@ class MonitorService extends ChangeNotifier {
                 quantity: bookingIntent.quantity,
                 maxFare: bookingIntent.maxFare,
                 autoVerify: bookingIntent.autoVerify,
+                isAutoBook: true,
                 canReserve: () async =>
                     !_disposed &&
                     _isMonitoring &&
@@ -843,9 +909,7 @@ class MonitorService extends ChangeNotifier {
         // Evaluate availability
         bool foundSeats = false;
         for (final train in response.trains) {
-          if (_targetTrain != null &&
-              _targetTrain!.isNotEmpty &&
-              train.tripNumber.toLowerCase() != _targetTrain!.toLowerCase()) {
+          if (!isTrainMonitored(train.tripNumber)) {
             continue;
           }
 
@@ -878,8 +942,7 @@ class MonitorService extends ChangeNotifier {
 
               try {
                 if (bookingIntent.autoReserve) continue;
-                // Only alert for the specific targeted train; never broadcast for all trains
-                if (_targetTrain == null || _targetTrain!.isEmpty) continue;
+                if (!isTrainMonitored(train.tripNumber)) continue;
                 await _notificationService.triggerSeatAvailableAlert(
                   trainName: train.tripNumber,
                   seatType: seat.displayName,

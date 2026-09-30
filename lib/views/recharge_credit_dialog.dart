@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -57,6 +58,7 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
   void initState() {
     super.initState();
     final cs = Provider.of<CreditService>(context, listen: false);
+    unawaited(cs.syncPackagesFromFirestore());
     _phoneController.text = cs.bkashNumber;
     if (cs.packages.isNotEmpty) {
       final defaultPkg = cs.packages.firstWhere((p) => p.popular, orElse: () => cs.packages.first);

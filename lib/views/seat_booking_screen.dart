@@ -279,7 +279,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                                 const Icon(Icons.info_outline_rounded, color: AppColors.info, size: 18),
                                 const SizedBox(width: 10),
                                 Expanded(child: Text(
-                                  'Select up to $maxSeats seats from one coach. Tap a seat to select it.',
+                                  'Select up to $maxSeats seats from any coach. Tap a seat to select it.',
                                   style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 13, height: 1.4),
                                 )),
                               ],
@@ -316,14 +316,96 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                                     _selected.remove(seat);
                                     return;
                                   }
-                                  // Enforce single-coach rule
-                                  final coachIds = coach.layout.expand((r) => r).map((s) => s.ticketId).toSet();
-                                  if (_selected.any((s) => !coachIds.contains(s.ticketId))) _selected.clear();
-                                  if (_selected.length < maxSeats) _selected.add(seat);
+                                  if (_selected.length < maxSeats) {
+                                    _selected.add(seat);
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text('You can select at most $maxSeats seats across any coach.'),
+                                        duration: const Duration(seconds: 2),
+                                        behavior: SnackBarBehavior.floating,
+                                      ),
+                                    );
+                                  }
                                 }),
                               ),
                               const SizedBox(height: 12),
                             ],
+
+                          if (_selected.isNotEmpty) ...[
+                            AppCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.check_circle_rounded, color: AppColors.primary, size: 18),
+                                      const SizedBox(width: 8),
+                                      Text(
+                                        'Selected Seats (${_selected.length}/$maxSeats)',
+                                        style: TextStyle(
+                                          color: AppColors.textPrimary(isDark),
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      const Spacer(),
+                                      TextButton(
+                                        style: TextButton.styleFrom(
+                                          padding: EdgeInsets.zero,
+                                          minimumSize: Size.zero,
+                                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                        ),
+                                        onPressed: () => setState(() => _selected.clear()),
+                                        child: const Text('Clear All', style: TextStyle(fontSize: 12, color: AppColors.error)),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: _selected.map((seat) {
+                                      String coachName = '';
+                                      for (final c in _layout?.coaches ?? <CoachLayout>[]) {
+                                        if (c.layout.expand((r) => r).any((s) => s.ticketId == seat.ticketId)) {
+                                          coachName = c.floorName;
+                                          break;
+                                        }
+                                      }
+                                      return Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.primary.withValues(alpha: 0.12),
+                                          borderRadius: BorderRadius.circular(8),
+                                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              coachName.isNotEmpty ? '$coachName: ${seat.seatNumber}' : seat.seatNumber,
+                                              style: const TextStyle(
+                                                color: AppColors.primary,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            GestureDetector(
+                                              onTap: () => setState(() => _selected.remove(seat)),
+                                              child: const Icon(Icons.close_rounded, size: 14, color: AppColors.primary),
+                                            ),
+                                          ],
+                                        ),
+                                      );
+                                    }).toList(),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
 
                           // SMS verify toggle
                           AppCard(
@@ -506,7 +588,9 @@ class _CoachCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
-                    'Coach ${coach.floorName}',
+                    selected.any((s) => allCoachIds.contains(s.ticketId))
+                        ? 'Coach ${coach.floorName} (${seats.where((s) => selected.contains(s)).length} selected)'
+                        : 'Coach ${coach.floorName}',
                     style: TextStyle(
                       color: isCoachSelected ? AppColors.primary : AppColors.textPrimary(isDark),
                       fontWeight: FontWeight.bold, fontSize: 13,
@@ -531,9 +615,7 @@ class _CoachCard extends StatelessWidget {
               runSpacing: 8,
               children: seats.map((seat) {
                 final isSelected = selected.contains(seat);
-                final canSelect = isSelected ||
-                  (selected.length < maxSeats &&
-                    (selected.isEmpty || allCoachIds.containsAll(selected.map((s) => s.ticketId))));
+                final canSelect = isSelected || (selected.length < maxSeats);
 
                 final Color bgColor = isSelected
                     ? AppColors.primary

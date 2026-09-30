@@ -61,58 +61,118 @@ class TrainSelectionScreen extends StatelessWidget {
       return;
     }
 
-    // Single action check: if already monitoring, user must stop current search first
+    final isSameRoute = monitor.isMonitoring &&
+        monitor.fromCity.toLowerCase() == fromCity.toLowerCase() &&
+        monitor.toCity.toLowerCase() == toCity.toLowerCase() &&
+        monitor.dateOfJourney == dateOfJourney;
+
+    // Multi-train support: if monitoring same route, allow adding or removing trains
     if (monitor.isMonitoring) {
-      final currentTrain = monitor.targetTrain;
-      final isSameTrain = currentTrain != null && currentTrain.toLowerCase() == train.toLowerCase();
-
-      if (isSameTrain) {
-        AppShell.goTo(context, AppShell.tabMonitor);
-        return;
-      }
-
-      final stopAndProceed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF0F172A),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 22),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Stop Current Search First',
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+      if (isSameRoute) {
+        if (monitor.isTrainMonitored(train)) {
+          final action = await showDialog<String>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: const Color(0xFF0F172A),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  const Icon(Icons.radar_rounded, color: AppColors.primary, size: 22),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      train,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              content: Text(
+                '$train is actively being monitored for auto-booking.',
+                style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, 'remove'),
+                  child: const Text('Remove from Search', style: TextStyle(color: AppColors.error)),
                 ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(ctx, 'view'),
+                  child: const Text('View in Monitor'),
+                ),
+              ],
+            ),
+          );
+          if (!context.mounted) return;
+          if (action == 'view') {
+            AppShell.goTo(context, AppShell.tabMonitor);
+          } else if (action == 'remove') {
+            monitor.removeTrainFromMonitoring(train);
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Removed $train from active auto-booking.'),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        } else {
+          monitor.addTrainToMonitoring(train);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Added $train to active auto-booking! (Monitoring ${monitor.targetTrains.length} trains)'),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: AppColors.primaryDark,
+            ),
+          );
+          return;
+        }
+      } else {
+        // Different route
+        final currentTrain = monitor.targetTrain;
+        final stopAndProceed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0F172A),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(
+              children: [
+                Icon(Icons.warning_amber_rounded, color: AppColors.warning, size: 22),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Stop Current Search First',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: Text(
+              'A search is already active for ${monitor.fromCity} → ${monitor.toCity} ("${currentTrain ?? 'Active'}").\n\nStop the current search to monitor this route?',
+              style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('Keep Current', style: TextStyle(color: Colors.white60)),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.error,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Stop & Switch'),
               ),
             ],
           ),
-          content: Text(
-            'Auto-booking is already active for "${currentTrain ?? 'another train'}".\n\nYou can only perform one action at a time. Please stop the current search before starting another.',
-            style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Keep Current', style: TextStyle(color: Colors.white60)),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.error,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              ),
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Stop & Switch'),
-            ),
-          ],
-        ),
-      );
+        );
 
-      if (stopAndProceed != true || !context.mounted) return;
-      monitor.stopMonitoring();
-      await monitor.clearSearch();
-      if (!context.mounted) return;
+        if (stopAndProceed != true || !context.mounted) return;
+        monitor.stopMonitoring();
+        await monitor.clearSearch();
+        if (!context.mounted) return;
+      }
     }
     if (seatClass == null) {
       final selectedTrain = searchResponse.trains.firstWhere(
@@ -146,6 +206,7 @@ class TrainSelectionScreen extends StatelessWidget {
     final intent = await showWatchOptions(
       context,
       seatClass: effectiveClass,
+      trainName: train,
     );
     if (intent == null || !context.mounted) return;
     final selectedTrain = searchResponse.trains.where((t) => t.tripNumber == train).firstOrNull;
@@ -158,6 +219,65 @@ class TrainSelectionScreen extends StatelessWidget {
       targetSeatClass: effectiveClass,
       departureDateTimeJd: selectedTrain?.departureDateTimeJd,
       departureDateTime: selectedTrain?.departureDateTime,
+    );
+    AppShell.goTo(context, AppShell.tabMonitor);
+  }
+
+  Future<void> _openMultiTrainAutoBook(BuildContext context) async {
+    final session = await AuthSession.load();
+    if (!context.mounted) return;
+    if (session == null || !session.isValid) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
+      );
+      return;
+    }
+
+    if (CreditService().credits <= 0) {
+      RechargeCreditDialog.show(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You have 0 credits. Please buy credits to auto-book tickets.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final monitor = Provider.of<MonitorService>(context, listen: false);
+    final isSameRoute = monitor.isMonitoring &&
+        monitor.fromCity.toLowerCase() == fromCity.toLowerCase() &&
+        monitor.toCity.toLowerCase() == toCity.toLowerCase() &&
+        monitor.dateOfJourney == dateOfJourney;
+
+    final selectedTrains = await showModalBottomSheet<List<String>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => _MultiTrainSheet(
+        trains: searchResponse.trains,
+        initialSelected: isSameRoute ? monitor.targetTrains : const [],
+      ),
+    );
+
+    if (selectedTrains == null || selectedTrains.isEmpty || !context.mounted) return;
+
+    final intent = await showWatchOptions(
+      context,
+      seatClass: initialClass,
+      targetTrains: selectedTrains,
+    );
+    if (intent == null || !context.mounted) return;
+
+    monitor.startMonitoring(
+      intent: intent,
+      fromCity: fromCity,
+      toCity: toCity,
+      dateOfJourney: dateOfJourney,
+      targetTrains: selectedTrains,
+      targetSeatClass: initialClass,
     );
     AppShell.goTo(context, AppShell.tabMonitor);
   }
@@ -428,6 +548,64 @@ class TrainSelectionScreen extends StatelessWidget {
               ),
             ),
 
+          // ── Multi-Train Auto-Book Banner ──────────────────────────────────
+          if (trains.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Container(
+                margin: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF0F2419) : const Color(0xFFE8F5E9),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: AppColors.primary.withValues(alpha: 0.4),
+                    width: 1.2,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.playlist_add_check_rounded, color: AppColors.primary, size: 24),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Multi-Train Auto-Booking',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Select multiple trains on this route. Same API checks all. Each train auto-book to OTP send costs 1 credit.',
+                            style: TextStyle(
+                              color: AppColors.textSecondary(isDark),
+                              fontSize: 11,
+                              height: 1.3,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      icon: const Icon(Icons.tune_rounded, size: 14),
+                      label: const Text('Select', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      onPressed: () => _openMultiTrainAutoBook(context),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // ── Train Cards ──────────────────────────────────────────────────
           trains.isEmpty
               ? SliverFillRemaining(
@@ -458,8 +636,10 @@ class TrainSelectionScreen extends StatelessWidget {
                     delegate: SliverChildBuilderDelegate(
                       (ctx, i) {
                         final isMon = monitor.isMonitoring &&
-                            monitor.targetTrain != null &&
-                            monitor.targetTrain!.toLowerCase() == trains[i].tripNumber.toLowerCase();
+                            (fromCity.toLowerCase() == monitor.fromCity.toLowerCase() &&
+                             toCity.toLowerCase() == monitor.toCity.toLowerCase() &&
+                             dateOfJourney == monitor.dateOfJourney) &&
+                            monitor.isTrainMonitored(trains[i].tripNumber);
                         return _TrainCard(
                           train: trains[i],
                           isDark: isDark,
@@ -1024,6 +1204,149 @@ class _ClassSheet extends StatelessWidget {
                 ),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MultiTrainSheet extends StatefulWidget {
+  final List<TrainTrip> trains;
+  final List<String> initialSelected;
+  const _MultiTrainSheet({required this.trains, required this.initialSelected});
+
+  @override
+  State<_MultiTrainSheet> createState() => _MultiTrainSheetState();
+}
+
+class _MultiTrainSheetState extends State<_MultiTrainSheet> {
+  late final Set<String> _selected;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = Set<String>.from(
+      widget.initialSelected.isNotEmpty
+          ? widget.initialSelected
+          : widget.trains.map((t) => t.tripNumber),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              const Icon(Icons.playlist_add_check_rounded, color: AppColors.primary, size: 24),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Select Trains for Auto-Book',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    if (_selected.length == widget.trains.length) {
+                      _selected.clear();
+                    } else {
+                      _selected.addAll(widget.trains.map((t) => t.tripNumber));
+                    }
+                  });
+                },
+                child: Text(
+                  _selected.length == widget.trains.length ? 'Deselect All' : 'Select All',
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.bolt_rounded, color: AppColors.primary, size: 18),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'All selected trains are checked together in each search. Reserving seats and sending OTP costs 1 credit per train.',
+                    style: TextStyle(fontSize: 11, height: 1.3),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: ListView.separated(
+              itemCount: widget.trains.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (ctx, i) {
+                final train = widget.trains[i];
+                final isChecked = _selected.contains(train.tripNumber);
+                return CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: isChecked,
+                  activeColor: AppColors.primary,
+                  onChanged: (val) {
+                    setState(() {
+                      if (val == true) {
+                        _selected.add(train.tripNumber);
+                      } else {
+                        _selected.remove(train.tripNumber);
+                      }
+                    });
+                  },
+                  title: Text(
+                    train.tripNumber,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                  subtitle: Text(
+                    '${train.departureDateTime} → ${train.arrivalDateTime} • ${train.totalOnlineSeats} seats',
+                    style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 11),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          PrimaryButton(
+            label: _selected.isEmpty
+                ? 'Select At Least 1 Train'
+                : 'Auto-Book (${_selected.length} Train${_selected.length > 1 ? 's' : ''})',
+            icon: Icons.check_circle_rounded,
+            onPressed: _selected.isEmpty
+                ? null
+                : () => Navigator.pop(context, _selected.toList()),
           ),
         ],
       ),

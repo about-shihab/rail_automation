@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 // ─── Design Tokens ──────────────────────────────────────────────────────────
 
@@ -389,61 +390,377 @@ class StatusBadge extends StatelessWidget {
   }
 }
 
-/// Gradient app bar
+// ─── App bar ────────────────────────────────────────────────────────────────
+
+/// Header backdrop shared by every top bar: deep green gradient, fine
+/// concentric rings, a soft top sheen and a glowing hairline along the base.
+/// Use as `flexibleSpace` in any AppBar / SliverAppBar.
+class NavBackdrop extends StatelessWidget {
+  final double radius;
+  const NavBackdrop({super.key, this.radius = 22});
+
+  @override
+  Widget build(BuildContext context) {
+    final r = BorderRadius.vertical(bottom: Radius.circular(radius));
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: r,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.appBarGradientStart,
+            AppColors.appBarGradientEnd,
+            Color(0xFF00876A),
+          ],
+          stops: [0.0, 0.62, 1.0],
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.appBarGradientStart.withValues(alpha: 0.32),
+            blurRadius: 18,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: r,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            Positioned(
+              right: -56,
+              top: -84,
+              child: _ring(230, 0.07),
+            ),
+            Positioned(
+              right: 4,
+              top: -40,
+              child: _ring(120, 0.06),
+            ),
+            Positioned.fill(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.white.withValues(alpha: 0.09),
+                      Colors.white.withValues(alpha: 0),
+                    ],
+                    stops: const [0, 0.6],
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: Container(
+                height: 1.5,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      AppColors.accent.withValues(alpha: 0),
+                      AppColors.accent.withValues(alpha: 0.55),
+                      AppColors.primary.withValues(alpha: 0.55),
+                      AppColors.primary.withValues(alpha: 0),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  static Widget _ring(double size, double alpha) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: alpha), width: 1.2),
+        ),
+      );
+}
+
+/// Frosted square icon button for app bars (optionally with a status dot).
+class NavAction extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback? onTap;
+  final String? tooltip;
+  final bool dot;
+  final Color? color;
+
+  const NavAction({
+    super.key,
+    required this.icon,
+    this.onTap,
+    this.tooltip,
+    this.dot = false,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final shape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(12),
+      side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+    );
+    Widget btn = Material(
+      color: Colors.white.withValues(alpha: 0.12),
+      shape: shape,
+      child: InkWell(
+        customBorder: shape,
+        onTap: onTap,
+        child: SizedBox(
+          width: 38,
+          height: 38,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(icon, size: 20, color: color ?? Colors.white),
+              if (dot)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      color: AppColors.gold,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.appBarGradientEnd, width: 1.5),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (tooltip != null) btn = Tooltip(message: tooltip!, child: btn);
+    return Center(
+      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: btn),
+    );
+  }
+}
+
+/// Frosted pill for app bars: credits, language, "Guide"…
+/// Pass [tint] to colour it (gold for credits, amber for warnings).
+class NavPill extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final Color? iconColor;
+  final Color? tint;
+  final VoidCallback? onTap;
+
+  const NavPill({
+    super.key,
+    required this.label,
+    this.icon,
+    this.iconColor,
+    this.tint,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final t = tint;
+    final shape = StadiumBorder(
+      side: BorderSide(
+        color: t != null ? t.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.18),
+      ),
+    );
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: Material(
+          color: t != null ? t.withValues(alpha: 0.20) : Colors.white.withValues(alpha: 0.12),
+          shape: shape,
+          child: InkWell(
+            customBorder: shape,
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (icon != null) ...[
+                    Icon(icon, size: 15, color: iconColor ?? Colors.white),
+                    const SizedBox(width: 5),
+                  ],
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                      fontSize: 12.5,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Credits pill used in every app bar. Turns amber with a "Buy" hint at zero.
+class NavCreditPill extends StatelessWidget {
+  final int credits;
+  final VoidCallback? onTap;
+  const NavCreditPill({super.key, required this.credits, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final zero = credits <= 0;
+    final c = zero ? AppColors.warning : AppColors.gold;
+    return NavPill(
+      icon: Icons.bolt_rounded,
+      iconColor: c,
+      tint: c,
+      label: zero ? '0 • Buy' : '$credits',
+      onTap: onTap,
+    );
+  }
+}
+
+/// Rounded app-mark tile for the leading slot of an app bar.
+class NavLogo extends StatelessWidget {
+  final IconData icon;
+  final double size;
+  const NavLogo({super.key, this.icon = Icons.train_rounded, this.size = 38});
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 12),
+        child: Container(
+          width: size,
+          height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white.withValues(alpha: 0.26),
+                Colors.white.withValues(alpha: 0.08),
+              ],
+            ),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
+          ),
+          child: Icon(icon, color: Colors.white, size: size * 0.54),
+        ),
+      ),
+    );
+  }
+}
+
+/// Top bar used across the app: one consistent look for every screen.
+///
+/// * [icon] shows a logo tile in the leading slot (tab screens).
+/// * With no [leading] or [icon], a glass back button appears when the
+///   screen can be popped.
+/// * [subtitleWidget] replaces [subtitle] for richer status lines.
 class GradientAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String title;
   final String? subtitle;
+  final Widget? subtitleWidget;
+  final IconData? icon;
   final List<Widget>? actions;
   final Widget? leading;
+  final PreferredSizeWidget? bottom;
 
   const GradientAppBar({
     super.key,
     required this.title,
     this.subtitle,
+    this.subtitleWidget,
+    this.icon,
     this.actions,
     this.leading,
+    this.bottom,
   });
 
+  static const double _toolbar = 64;
+
   @override
-  Size get preferredSize => const Size.fromHeight(kToolbarHeight);
+  Size get preferredSize =>
+      Size.fromHeight(_toolbar + (bottom?.preferredSize.height ?? 0));
 
   @override
   Widget build(BuildContext context) {
+    final canPop = Navigator.of(context).canPop();
+    Widget? lead = leading;
+    if (lead == null && icon != null && !canPop) {
+      lead = NavLogo(icon: icon!);
+    } else if (lead == null && canPop) {
+      lead = NavAction(
+        icon: Icons.arrow_back_ios_new_rounded,
+        onTap: () => Navigator.maybePop(context),
+      );
+    }
+
     return AppBar(
       backgroundColor: Colors.transparent,
-      flexibleSpace: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [AppColors.appBarGradientStart, AppColors.appBarGradientEnd],
-          ),
-        ),
-      ),
+      surfaceTintColor: Colors.transparent,
+      foregroundColor: Colors.white,
+      systemOverlayStyle: SystemUiOverlayStyle.light,
+      iconTheme: const IconThemeData(color: Colors.white),
+      actionsIconTheme: const IconThemeData(color: Colors.white),
       elevation: 0,
-      leading: leading,
+      scrolledUnderElevation: 0,
+      automaticallyImplyLeading: false,
+      toolbarHeight: _toolbar,
+      centerTitle: false,
+      flexibleSpace: const NavBackdrop(),
+      leading: lead,
+      leadingWidth: lead == null ? 0 : 54,
+      titleSpacing: lead == null ? 18 : 8,
       title: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
           Text(
             title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Colors.white,
-              fontSize: 17,
-              fontWeight: FontWeight.bold,
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
             ),
           ),
-          if (subtitle != null)
-            Text(
-              subtitle!,
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.75),
-                fontSize: 11,
+          if (subtitleWidget != null)
+            Padding(padding: const EdgeInsets.only(top: 2), child: subtitleWidget!)
+          else if (subtitle != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                subtitle!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.78),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
         ],
       ),
-      actions: actions,
+      actions: [...?actions, const SizedBox(width: 10)],
+      bottom: bottom,
     );
   }
 }

@@ -227,18 +227,39 @@ class CreditService extends ChangeNotifier {
       debugPrint('[CreditService] Firestore sync error: $e');
     }
 
-    // Fetch token buy packages and payment settings from DB (Firestore: app_config/credit_packages)
+    // Fetch token buy packages and payment settings from DB
+    unawaited(syncPackagesFromFirestore());
+  }
+
+  StreamSubscription? _packagesCollectionSubscription;
+
+  /// Sync credit packages from Firestore (works whether user is logged in or not)
+  Future<void> syncPackagesFromFirestore() async {
+    final firestore = FirebaseUserService().firestore;
+    if (firestore == null) return;
+
     try {
-      final configDoc = await firestore.collection('app_config').doc('credit_packages').get();
+      // 1. Check if user configured packages as individual documents in 'credit_packages' collection
+      final colRef = firestore.collection('credit_packages');
+      final colSnap = await colRef.get();
+      if (colSnap.docs.isNotEmpty) {
+        await _applyPackagesFromDocs(colSnap.docs);
+      }
+      _packagesCollectionSubscription?.cancel();
+      _packagesCollectionSubscription = colRef.snapshots().listen((snap) {
+        if (snap.docs.isNotEmpty) {
+          unawaited(_applyPackagesFromDocs(snap.docs));
+        }
+      }, onError: (_) {});
+
+      // 2. Also check if user configured packages in 'app_config/credit_packages' document
+      final docRef = firestore.collection('app_config').doc('credit_packages');
+      final configDoc = await docRef.get();
       if (configDoc.exists && configDoc.data() != null) {
         await _applyPackagesData(configDoc.data()!);
       }
       _packageSubscription?.cancel();
-      _packageSubscription = firestore
-          .collection('app_config')
-          .doc('credit_packages')
-          .snapshots()
-          .listen((doc) {
+      _packageSubscription = docRef.snapshots().listen((doc) {
         if (doc.exists && doc.data() != null) {
           unawaited(_applyPackagesData(doc.data()!));
         }
@@ -248,12 +269,35 @@ class CreditService extends ChangeNotifier {
     }
   }
 
+  Future<void> _applyPackagesFromDocs(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) async {
+    try {
+      final list = <CreditPackage>[];
+      for (final doc in docs) {
+        final data = doc.data();
+        list.add(CreditPackage.fromJson(data, docId: doc.id));
+      }
+      if (list.isNotEmpty) {
+        list.sort((a, b) => a.amount.compareTo(b.amount));
+        _packages = list;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString(
+          _prefPackagesKey,
+          jsonEncode(_packages.map((p) => p.toJson()).toList()),
+        );
+        notifyListeners();
+      }
+    } catch (e) {
+      debugPrint('[CreditService] Error applying packages from collection: $e');
+    }
+  }
+
   Future<void> _applyPackagesData(Map<String, dynamic> data) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       bool changed = false;
-      if (data['bkash_number'] is String && (data['bkash_number'] as String).trim().isNotEmpty) {
-        final newBkash = (data['bkash_number'] as String).trim();
+      final rawBkash = data['bkash_number'] ?? data['bkash'] ?? data['phone'];
+      if (rawBkash is String && rawBkash.trim().isNotEmpty) {
+        final newBkash = rawBkash.trim();
         if (newBkash != _bkashNumber) {
           _bkashNumber = newBkash;
           await prefs.setString(_prefBkashNumberKey, _bkashNumber);
@@ -265,6 +309,21 @@ class CreditService extends ChangeNotifier {
             .map((item) => CreditPackage.fromJson(Map<String, dynamic>.from(item as Map)))
             .toList();
         if (list.isNotEmpty) {
+          list.sort((a, b) => a.amount.compareTo(b.amount));
+          _packages = list;
+          await prefs.setString(
+            _prefPackagesKey,
+            jsonEncode(_packages.map((p) => p.toJson()).toList()),
+          );
+          changed = true;
+        }
+      } else if (data['packages'] is Map) {
+        final map = data['packages'] as Map;
+        final list = map.entries
+            .map((e) => CreditPackage.fromJson(Map<String, dynamic>.from(e.value as Map), docId: e.key.toString()))
+            .toList();
+        if (list.isNotEmpty) {
+          list.sort((a, b) => a.amount.compareTo(b.amount));
           _packages = list;
           await prefs.setString(
             _prefPackagesKey,

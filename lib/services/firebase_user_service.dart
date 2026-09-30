@@ -38,6 +38,7 @@ class FirebaseUserService extends ChangeNotifier {
       }
       _isFirebaseReady = true;
       debugPrint('[FirebaseUserService] Firebase initialized successfully.');
+      unawaited(CreditService().syncPackagesFromFirestore());
     } catch (e) {
       _isFirebaseReady = false;
       debugPrint('[FirebaseUserService] Firebase initialize skipped or offline: $e');

@@ -13,15 +13,36 @@ class CreditPackage {
     this.popular = false,
   });
 
-  factory CreditPackage.fromJson(Map<String, dynamic> json) {
-    final amount = (json['amount'] as num?)?.toDouble() ?? 50.0;
-    final credits = (json['credits'] as num?)?.toInt() ?? 10;
+  factory CreditPackage.fromJson(Map<String, dynamic> json, {String? docId}) {
+    final rawAmount = json['amount'] ?? json['price'] ?? json['taka'] ?? json['tk'] ?? 50;
+    final amount = (rawAmount is num)
+        ? rawAmount.toDouble()
+        : double.tryParse(rawAmount.toString().replaceAll(RegExp(r'[^0-9.]'), '')) ?? 50.0;
+
+    final rawCredits = json['credits'] ?? json['credit'] ?? json['tokens'] ?? json['token'] ?? json['count'] ?? 10;
+    final credits = (rawCredits is num)
+        ? rawCredits.toInt()
+        : int.tryParse(rawCredits.toString().replaceAll(RegExp(r'[^0-9]'), '')) ?? 10;
+
+    final id = json['id']?.toString().isNotEmpty == true
+        ? json['id'].toString()
+        : (docId?.isNotEmpty == true ? docId! : 'pkg_${credits}_${amount.toInt()}');
+
+    final popular = json['popular'] == true ||
+        json['popular']?.toString().toLowerCase() == 'true' ||
+        json['is_popular'] == true ||
+        json['badge']?.toString().toLowerCase() == 'popular';
+
+    final label = json['label']?.toString().trim().isNotEmpty == true
+        ? json['label'].toString().trim()
+        : '$credits ক্রেডিট (৳${amount.toInt()})';
+
     return CreditPackage(
-      id: json['id'] as String? ?? 'pkg_${credits}_${amount.toInt()}',
+      id: id,
       amount: amount,
       credits: credits,
-      label: json['label'] as String? ?? '$credits ক্রেডিট (৳${amount.toInt()})',
-      popular: json['popular'] == true,
+      label: label,
+      popular: popular,
     );
   }
 

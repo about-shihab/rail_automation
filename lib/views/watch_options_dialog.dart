@@ -10,17 +10,25 @@ import 'recharge_credit_dialog.dart';
 Future<BookingIntent?> showWatchOptions(
   BuildContext context, {
   String? seatClass,
+  String? trainName,
+  List<String>? targetTrains,
 }) => showModalBottomSheet<BookingIntent>(
   context: context,
   isScrollControlled: true,
   showDragHandle: true,
   useSafeArea: true,
-  builder: (_) => _WatchSheet(seatClass: seatClass),
+  builder: (_) => _WatchSheet(
+    seatClass: seatClass,
+    trainName: trainName,
+    targetTrains: targetTrains,
+  ),
 );
 
 class _WatchSheet extends StatefulWidget {
   final String? seatClass;
-  const _WatchSheet({this.seatClass});
+  final String? trainName;
+  final List<String>? targetTrains;
+  const _WatchSheet({this.seatClass, this.trainName, this.targetTrains});
   @override
   State<_WatchSheet> createState() => _WatchSheetState();
 }
@@ -40,9 +48,17 @@ class _WatchSheetState extends State<_WatchSheet> {
     setState(() => _busy = true);
     final verify = _autoVerify && await SmsService().requestSmsPermission();
     if (!mounted) return;
+    final effectiveTrains = widget.targetTrains != null && widget.targetTrains!.isNotEmpty
+        ? widget.targetTrains!
+        : (widget.trainName != null && widget.trainName!.isNotEmpty ? [widget.trainName!] : const <String>[]);
     Navigator.pop(
       context,
-      BookingIntent(autoReserve: true, quantity: _quantity, autoVerify: verify),
+      BookingIntent(
+        autoReserve: true,
+        quantity: _quantity,
+        autoVerify: verify,
+        targetTrains: effectiveTrains,
+      ),
     );
   }
 
@@ -74,25 +90,68 @@ class _WatchSheetState extends State<_WatchSheet> {
           'We’ll watch your journey and try to reserve seats as soon as they’re available. You finish the payment.',
           style: TextStyle(height: 1.6),
         ),
-        const SizedBox(height: 20),
-        Chip(
-          avatar: Icon(
-            (widget.seatClass == null ||
-                    widget.seatClass == 'ALL' ||
-                    widget.seatClass == 'RANDOM')
-                ? Icons.shuffle_rounded
-                : Icons.event_seat_outlined,
-            size: 18,
-            color: AppColors.primary,
+        const SizedBox(height: 14),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
           ),
-          label: Text(
-            (widget.seatClass == null ||
-                    widget.seatClass == 'ALL' ||
-                    widget.seatClass == 'RANDOM')
-                ? 'Random Class (Any Available)'
-                : widget.seatClass!,
-            style: const TextStyle(fontWeight: FontWeight.w600),
+          child: const Row(
+            children: [
+              Icon(Icons.bolt_rounded, color: AppColors.primary, size: 18),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Each train auto-book to OTP send costs 1 credit.',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
           ),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (widget.targetTrains != null && widget.targetTrains!.isNotEmpty)
+              Chip(
+                avatar: const Icon(Icons.train_rounded, size: 18, color: AppColors.primary),
+                label: Text(
+                  '${widget.targetTrains!.length} Trains (${widget.targetTrains!.join(", ")})',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              )
+            else if (widget.trainName != null && widget.trainName!.isNotEmpty)
+              Chip(
+                avatar: const Icon(Icons.train_rounded, size: 18, color: AppColors.primary),
+                label: Text(
+                  widget.trainName!,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+            Chip(
+              avatar: Icon(
+                (widget.seatClass == null ||
+                        widget.seatClass == 'ALL' ||
+                        widget.seatClass == 'RANDOM')
+                    ? Icons.shuffle_rounded
+                    : Icons.event_seat_outlined,
+                size: 18,
+                color: AppColors.primary,
+              ),
+              label: Text(
+                (widget.seatClass == null ||
+                        widget.seatClass == 'ALL' ||
+                        widget.seatClass == 'RANDOM')
+                    ? 'Random Class (Any Available)'
+                    : widget.seatClass!,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 18),
         Row(

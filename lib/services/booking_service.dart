@@ -172,6 +172,7 @@ class BookingService {
     int quantity = 1,
     double? maxFare,
     bool autoVerify = false,
+    bool isAutoBook = false,
     List<SeatItem>? selectedSeats,
     Future<bool> Function()? canReserve,
     String? cftResponse,
@@ -234,29 +235,47 @@ class BookingService {
         }
       }
     }
-    candidates.shuffle(Random.secure());
-    // A single coach avoids mixing additional-coach surcharges and booking rules.
-    final coaches = candidates.map((c) => c.$1).toSet().toList()
-      ..shuffle(Random.secure());
-    final eligible = coaches
-        .where(
-          (c) => candidates.where((s) => identical(s.$1, c)).length >= quantity,
-        )
-        .toList();
-    if (eligible.isEmpty)
-      throw StateError(
-        'Not enough matching seats remain in one coach. Monitoring can continue.',
-      );
-    final chosen = candidates
-        .where((s) => identical(s.$1, eligible.first))
-        .take(quantity)
-        .toList();
+    final List<(CoachLayout, SeatItem)> chosen;
+    if (selectedSeats != null && selectedSeats.isNotEmpty) {
+      if (candidates.length < quantity) {
+        throw StateError(
+          'Selected seats are no longer available. Please select available seats.',
+        );
+      }
+      chosen = candidates.take(quantity).toList();
+    } else {
+      candidates.shuffle(Random.secure());
+      final coaches = candidates.map((c) => c.$1).toSet().toList()
+        ..shuffle(Random.secure());
+      final sameCoach = coaches
+          .where(
+            (c) => candidates.where((s) => identical(s.$1, c)).length >= quantity,
+          )
+          .toList();
+      if (sameCoach.isNotEmpty) {
+        chosen = candidates
+            .where((s) => identical(s.$1, sameCoach.first))
+            .take(quantity)
+            .toList();
+      } else if (candidates.length >= quantity) {
+        chosen = candidates.take(quantity).toList();
+      } else {
+        throw StateError(
+          'Not enough matching seats remain. Monitoring can continue.',
+        );
+      }
+    }
+    final coachNames = chosen
+        .map((s) => s.$1.floorName.isNotEmpty ? s.$1.floorName : '${s.$1.seatFloor}')
+        .toSet()
+        .join(', ');
     final state = <String, dynamic>{
       'id': AuthSession.generateUuid(),
       'status': 'reserving',
       'train': train.toJson(),
       'seatClass': seat.toJson(),
-      'coach': eligible.first.toJson(),
+      'coach': chosen.first.$1.toJson(),
+      'coach_names': coachNames,
       'seats': chosen
           .map(
             (s) => {
@@ -324,14 +343,27 @@ class BookingService {
             .toUtc()
             .toIso8601String();
       }
+      final seatsList = chosen.map((s) => s.$2.seatNumber).toList();
+      final coachName = coachNames.isNotEmpty
+          ? coachNames
+          : (chosen.first.$1.floorName.isNotEmpty
+              ? chosen.first.$1.floorName
+              : '${chosen.first.$1.seatFloor}');
+      final fareNum = double.tryParse(chosen.first.$1.seatFare) ??
+          (double.tryParse(seat.fare) ?? 0.0);
+
+      // Auto-book to OTP send costs 1 credit
+      if (isAutoBook || autoVerify) {
+        state['isAutoBook'] = true;
+        await CreditService().deductBookingCredit(
+          trainName: train.tripNumber,
+          seatInfo: '$coachName (${seatsList.join(", ")})',
+        );
+        state['credit_deducted'] = true;
+      }
       await save(state);
+
       try {
-        final seatsList = chosen.map((s) => s.$2.seatNumber).toList();
-        final coachName = eligible.first.floorName.isNotEmpty
-            ? eligible.first.floorName
-            : '${eligible.first.seatFloor}';
-        final fareNum = double.tryParse(eligible.first.seatFare) ??
-            (double.tryParse(seat.fare) ?? 0.0);
         await TripHistoryService().recordTrip(
           TripRecord(
             id: state['id']?.toString() ?? '',
@@ -346,7 +378,7 @@ class BookingService {
                 fareNum * (seatsList.isNotEmpty ? seatsList.length : quantity),
             status: TripBookingStatus.awaitingOtp,
             createdAt: DateTime.now(),
-            isAutoBook: autoVerify,
+            isAutoBook: isAutoBook || autoVerify,
           ),
         );
       } catch (_) {}
@@ -397,9 +429,11 @@ class BookingService {
     final trainName = state['train']?['trip_number']?.toString() ??
         state['train']?['train_name']?.toString() ??
         'Train';
-    final coach = state['coach']?['floor_name']?.toString() ??
-        state['coach']?['seat_floor']?.toString() ??
-        '';
+    final coach = (state['coach_names'] as String?)?.isNotEmpty == true
+        ? (state['coach_names'] as String)
+        : (state['coach']?['floor_name']?.toString() ??
+            state['coach']?['seat_floor']?.toString() ??
+            '');
     final seats = (state['seats'] as List?)
             ?.map((s) => s['seat_number']?.toString() ?? '')
             .where((s) => s.isNotEmpty)
@@ -407,11 +441,14 @@ class BookingService {
         '';
     final seatInfo = coach.isNotEmpty ? '$coach ($seats)' : seats;
 
-    // 1. Deduct exactly 1 credit for successful booking
-    await CreditService().deductBookingCredit(
-      trainName: trainName,
-      seatInfo: seatInfo,
-    );
+    // 1. Deduct exactly 1 credit for successful booking (if not already deducted at OTP send)
+    if (state['credit_deducted'] != true) {
+      await CreditService().deductBookingCredit(
+        trainName: trainName,
+        seatInfo: seatInfo,
+      );
+      state['credit_deducted'] = true;
+    }
 
     // 2. Mark as SUCCESSFUL in trip history
     await TripHistoryService().updateTripStatus(
