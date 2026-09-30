@@ -704,11 +704,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             onPressed: themeService.toggleTheme,
           ),
           IconButton(
-            tooltip: langService.t('autofill_btn'),
-            icon: const Icon(Icons.edit_note_rounded, color: Colors.white),
-            onPressed: () => _insertSavedCredentials(silent: false),
-          ),
-          IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
             onPressed: () => _controller?.reload(),
           ),

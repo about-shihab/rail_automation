@@ -27,7 +27,7 @@ class CreditService extends ChangeNotifier {
     CreditPackage(id: 'pkg_60', amount: 200.0, credits: 60, label: '৬০ ক্রেডিট (৳২০০)'),
   ];
 
-  int _credits = 10; // Controlled from DB; synced via syncFromFirestore()
+  int _credits = 2; // Default 2 credits given to each user
   List<CreditTransaction> _transactions = [];
   List<CreditPackage> _packages = defaultPackages;
   String _bkashNumber = defaultBkashNumber;
@@ -54,11 +54,21 @@ class CreditService extends ChangeNotifier {
       final isTest =
           WidgetsBinding.instance.runtimeType.toString().contains('Test');
       if (prefs.containsKey(_prefCreditsKey)) {
-        _credits = prefs.getInt(_prefCreditsKey) ?? 0;
+        final current = prefs.getInt(_prefCreditsKey) ?? 0;
+        final upgraded = prefs.getBool('rps_default_2_credits_granted') ?? false;
+        if (!upgraded && current < 2) {
+          _credits = 2;
+          await prefs.setInt(_prefCreditsKey, 2);
+          await prefs.setBool('rps_default_2_credits_granted', true);
+        } else {
+          _credits = current;
+        }
       } else if (isTest) {
         _credits = 10;
       } else {
-        _credits = 0;
+        _credits = 2;
+        await prefs.setInt(_prefCreditsKey, 2);
+        await prefs.setBool('rps_default_2_credits_granted', true);
       }
 
       // Load cached packages from DB if present

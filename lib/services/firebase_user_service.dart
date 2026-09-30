@@ -103,7 +103,7 @@ class FirebaseUserService extends ChangeNotifier {
           'phone': phone,
           'displayName': session.displayName ?? '',
           'email': session.email ?? '',
-          'credits': 0, // Controlled from DB; defaults to 0 until recharged or granted by admin
+          'credits': 2, // By default each user is given 2 credits
           'isPro': false, // Admin can toggle this in Firebase console
           'isActive': true,
           'createdAt': now,

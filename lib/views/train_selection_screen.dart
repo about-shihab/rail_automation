@@ -148,6 +148,7 @@ class TrainSelectionScreen extends StatelessWidget {
       seatClass: effectiveClass,
     );
     if (intent == null || !context.mounted) return;
+    final selectedTrain = searchResponse.trains.where((t) => t.tripNumber == train).firstOrNull;
     monitor.startMonitoring(
       intent: intent,
       fromCity: fromCity,
@@ -155,6 +156,8 @@ class TrainSelectionScreen extends StatelessWidget {
       dateOfJourney: dateOfJourney,
       targetTrain: train,
       targetSeatClass: effectiveClass,
+      departureDateTimeJd: selectedTrain?.departureDateTimeJd,
+      departureDateTime: selectedTrain?.departureDateTime,
     );
     AppShell.goTo(context, AppShell.tabMonitor);
   }

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'app_shell.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -38,8 +39,8 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
   }
   List<String> get _classes => AppConfig.instance.strings('seat_classes');
 
-  String _fromCity = 'Dhaka';
-  String _toCity = 'Chattogram';
+  String _fromCity = '';
+  String _toCity = '';
   DateTime _date = DateTime.now().add(const Duration(days: 3));
   String _selectedClass = 'ALL';
   AuthSession? _auth;
@@ -73,11 +74,41 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     }
     setState(() => _auth = session);
     unawaited(FirebaseUserService().syncUserOnLogin(session));
+
+    // Load user's previous search station history if available
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedFrom = prefs.getString('rps_last_from_station');
+      final savedTo = prefs.getString('rps_last_to_station');
+      if (mounted) {
+        setState(() {
+          if (savedFrom != null && savedFrom.trim().isNotEmpty) {
+            _fromCity = savedFrom.trim();
+          }
+          if (savedTo != null && savedTo.trim().isNotEmpty) {
+            _toCity = savedTo.trim();
+          }
+        });
+      }
+    } catch (_) {}
+
     // If monitor active, jump straight to dashboard
     final monitor = context.read<MonitorService>();
     if (monitor.dateOfJourney.isNotEmpty && mounted) {
       AppShell.tab.value = AppShell.tabMonitor;
     }
+  }
+
+  Future<void> _saveStationHistory(String from, String to) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (from.trim().isNotEmpty) {
+        await prefs.setString('rps_last_from_station', from.trim());
+      }
+      if (to.trim().isNotEmpty) {
+        await prefs.setString('rps_last_to_station', to.trim());
+      }
+    } catch (_) {}
   }
 
   Future<void> _logout() async {
@@ -109,6 +140,16 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       );
       return;
     }
+    if (_fromCity.trim().isEmpty || _toCity.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select both departure and arrival stations.'),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
     if (_fromCity.trim().toLowerCase() == _toCity.trim().toLowerCase()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -119,6 +160,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       );
       return;
     }
+    await _saveStationHistory(_fromCity, _toCity);
     if (_auth == null || !_auth!.isValid) { _logout(); return; }
     setState(() => _loading = true);
     final date = DateFormat('dd-MMM-yyyy').format(_date);
@@ -149,12 +191,13 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
   }
 
   void _handleFromChanged(String station) {
-    if (station.trim().toLowerCase() == _toCity.trim().toLowerCase()) {
+    if (station.trim().isNotEmpty && station.trim().toLowerCase() == _toCity.trim().toLowerCase()) {
       setState(() {
         final prev = _fromCity;
         _fromCity = station;
         _toCity = prev;
       });
+      _saveStationHistory(_fromCity, _toCity);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Swapped stations: From and To cannot be the same.'),
@@ -164,16 +207,18 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       );
     } else {
       setState(() => _fromCity = station);
+      _saveStationHistory(station, _toCity);
     }
   }
 
   void _handleToChanged(String station) {
-    if (station.trim().toLowerCase() == _fromCity.trim().toLowerCase()) {
+    if (station.trim().isNotEmpty && station.trim().toLowerCase() == _fromCity.trim().toLowerCase()) {
       setState(() {
         final prev = _toCity;
         _toCity = station;
         _fromCity = prev;
       });
+      _saveStationHistory(_fromCity, _toCity);
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Swapped stations: From and To cannot be the same.'),
@@ -183,10 +228,18 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       );
     } else {
       setState(() => _toCity = station);
+      _saveStationHistory(_fromCity, station);
     }
   }
 
-  void _swap() => setState(() { final t = _fromCity; _fromCity = _toCity; _toCity = t; });
+  void _swap() {
+    setState(() {
+      final t = _fromCity;
+      _fromCity = _toCity;
+      _toCity = t;
+    });
+    _saveStationHistory(_fromCity, _toCity);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -200,18 +253,63 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
       backgroundColor: AppColors.scaffoldBg(isDark),
       body: Stack(children: [
         CustomScrollView(slivers: [
-          // ── Sticky gradient header ──────────────────────────────────
+          // ── Professional pinned gradient header ──────────────────
           SliverAppBar(
-            expandedHeight: 170,
             pinned: true,
-            stretch: true,
+            elevation: 2,
+            toolbarHeight: 64,
             backgroundColor: AppColors.appBarGradientStart,
-            flexibleSpace: FlexibleSpaceBar(
-              stretchModes: const [StretchMode.zoomBackground],
-              background: _HeroHeader(
-                fromCity: _fromCity, toCity: _toCity,
-                auth: _auth, onLogout: _logout,
+            flexibleSpace: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    AppColors.appBarGradientStart,
+                    AppColors.appBarGradientEnd,
+                    Color(0xFF00C896),
+                  ],
+                  stops: [0.0, 0.55, 1.0],
+                ),
               ),
+            ),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(7.5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.22), width: 1),
+                  ),
+                  child: const Icon(Icons.train_rounded, color: Colors.white, size: 21),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Rail Pro',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    Text(
+                      'Smart Rail Automation',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.8),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.1,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
             actions: [
               // Credit pill
@@ -224,7 +322,7 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
                 icon: isDark ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
                 onTap: themeService.toggleTheme,
               ),
-              // Dashboard
+              // Dashboard / Live Monitor
               _IconAction(
                 icon: Icons.radar_rounded,
                 onTap: () => AppShell.goTo(context, AppShell.tabMonitor),
@@ -469,85 +567,6 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
 // Sub-widgets
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _HeroHeader extends StatelessWidget {
-  final String fromCity;
-  final String toCity;
-  final AuthSession? auth;
-  final VoidCallback onLogout;
-
-  const _HeroHeader({required this.fromCity, required this.toCity, this.auth, required this.onLogout});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [AppColors.appBarGradientStart, AppColors.appBarGradientEnd, Color(0xFF00C896)],
-          stops: [0.0, 0.55, 1.0],
-        ),
-      ),
-      child: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              // App identity row
-              Row(children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.train_rounded, color: Colors.white, size: 22),
-                ),
-                const SizedBox(width: 10),
-                const Text('Rail Pro',
-                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                const Spacer(),
-                // Account avatar
-                GestureDetector(
-                  onTap: onLogout,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      const Icon(Icons.person_rounded, color: Colors.white70, size: 15),
-                      const SizedBox(width: 5),
-                      Text(
-                        auth?.phoneNumber?.replaceRange(6, null, '…') ?? '—',
-                        style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
-                      ),
-                    ]),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 16),
-              // Route preview
-              Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-                Text(fromCity, style: const TextStyle(
-                  color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Icon(Icons.east_rounded, color: Colors.white.withValues(alpha: 0.7), size: 20),
-                ),
-                Text(toCity, style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.85), fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: -0.5)),
-              ]),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 class _StationPicker extends StatelessWidget {
   final String fromCity, toCity;
@@ -718,6 +737,7 @@ class _SearchAutoSelectFieldState extends State<_SearchAutoSelectField> {
                         color: widget.isDark ? Colors.white38 : Colors.black38,
                         onPressed: () {
                           controller.clear();
+                          widget.onSelected('');
                         },
                       ),
                     IconButton(

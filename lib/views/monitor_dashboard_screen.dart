@@ -1006,7 +1006,7 @@ class _CockpitHudCard extends StatelessWidget {
 
           // ── C. Illuminated Queue / Scanner Chamber ──
           Container(
-            height: 172,
+            height: 186,
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF081220) : const Color(0xFFF7FAFD),
               borderRadius: BorderRadius.circular(16),
@@ -1020,7 +1020,7 @@ class _CockpitHudCard extends StatelessWidget {
               children: [
                 // Fancy animated ticket loader depicting queue & illuminated counter
                 FancyTrainLoader(
-                  height: 160,
+                  height: 176,
                   showCard: false,
                   message: _statusTitle,
                 ),

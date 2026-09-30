@@ -10,6 +10,7 @@ import 'otp_verifier.dart';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart';
+import 'package:intl/intl.dart';
 
 import '../models/auth_session.dart';
 import '../models/train_trip.dart';
@@ -64,6 +65,7 @@ class MonitorService extends ChangeNotifier {
   static const preferenceKey = 'active_ticket_search';
   String? _searchId;
   DateTime? _expiresAt;
+  DateTime? _startedAt;
   bool _checking = false;
   int _generation = 0;
   bool _disposed = false;
@@ -98,6 +100,12 @@ class MonitorService extends ChangeNotifier {
         _lastCheckedAt = DateTime.tryParse(savedStatus['checkedAt'] ?? '');
       }
       _expiresAt = DateTime.tryParse(data['expires'] ?? '');
+      if (_expiresAt == null || _expiresAt!.difference(DateTime.now()).inHours <= 1) {
+        final dep = parseDepartureDateTime(dateOfJourney: _dateOfJourney);
+        if (dep != null && dep.isAfter(DateTime.now())) {
+          _expiresAt = dep;
+        }
+      }
       _isMonitoring = data['active'] == true;
       bookingIntent = BookingIntent.fromJson(
         Map<String, dynamic>.from(data['bookingIntent'] ?? {}),
@@ -318,27 +326,97 @@ class MonitorService extends ChangeNotifier {
   List<TrainTrip> get lastTrains => List.unmodifiable(_lastTrains);
   List<MonitorLog> get logs => List.unmodifiable(_logs);
 
+  /// Parses departure date and time from various Bangladesh Railway formats.
+  static DateTime? parseDepartureDateTime({
+    String? departureDateTimeJd,
+    String? departureDateTime,
+    String? dateOfJourney,
+    String? departureFullDate,
+  }) {
+    if (departureDateTimeJd != null && departureDateTimeJd.trim().isNotEmpty) {
+      final s = departureDateTimeJd.trim();
+      final withoutDay = s.replaceAll(RegExp(r'^[A-Za-z]+,\s*'), '').trim();
+      for (final pattern in [
+        'dd MMM yyyy, hh:mm a',
+        'dd MMM yyyy, HH:mm',
+        'EEE, dd MMM yyyy, hh:mm a',
+        'yyyy-MM-dd HH:mm:ss',
+        'yyyy-MM-ddTHH:mm:ss',
+      ]) {
+        try {
+          return DateFormat(pattern).parse(withoutDay);
+        } catch (_) {}
+        try {
+          return DateFormat(pattern).parse(s);
+        } catch (_) {}
+      }
+    }
+
+    DateTime? baseDate;
+    if (dateOfJourney != null && dateOfJourney.trim().isNotEmpty) {
+      for (final pattern in ['dd-MMM-yyyy', 'yyyy-MM-dd', 'dd/MM/yyyy']) {
+        try {
+          baseDate = DateFormat(pattern).parse(dateOfJourney.trim());
+          break;
+        } catch (_) {}
+      }
+    }
+    if (baseDate == null && departureFullDate != null && departureFullDate.trim().isNotEmpty) {
+      for (final pattern in ['yyyy-MM-dd', 'dd-MMM-yyyy']) {
+        try {
+          baseDate = DateFormat(pattern).parse(departureFullDate.trim());
+          break;
+        } catch (_) {}
+      }
+    }
+
+    if (baseDate != null) {
+      if (departureDateTime != null && departureDateTime.trim().isNotEmpty) {
+        final match = RegExp(r'(\d{1,2}):(\d{2})\s*(am|pm)?', caseSensitive: false)
+            .firstMatch(departureDateTime);
+        if (match != null) {
+          int hour = int.parse(match.group(1)!);
+          final minute = int.parse(match.group(2)!);
+          final period = match.group(3)?.toLowerCase();
+          if (period == 'pm' && hour < 12) hour += 12;
+          if (period == 'am' && hour == 12) hour = 0;
+          return DateTime(baseDate.year, baseDate.month, baseDate.day, hour, minute);
+        }
+      }
+      return DateTime(baseDate.year, baseDate.month, baseDate.day, 23, 59, 59);
+    }
+    return null;
+  }
+
   int get elapsedMonitoringSeconds => _elapsedMonitoringSeconds;
   bool get isLimitReached => _isLimitReached;
 
   int get remainingFreeSeconds {
-    if (proService.isPro) return -1; // Unlimited
     final remaining = _expiresAt?.difference(DateTime.now()).inSeconds ?? 0;
     return remaining > 0 ? remaining : 0;
   }
 
   double get freeProgressFraction {
-    if (proService.isPro) return 1.0;
-    return (_elapsedMonitoringSeconds /
-            AppConfig.instance.number('free_monitor_seconds'))
-        .clamp(0.0, 1.0);
+    if (_expiresAt == null) return 1.0;
+    final totalSecs = _expiresAt!.difference(_startedAt ?? DateTime.now()).inSeconds;
+    if (totalSecs <= 0) return 1.0;
+    final remaining = remainingFreeSeconds;
+    return (1.0 - (remaining / totalSecs)).clamp(0.0, 1.0);
   }
 
   String get remainingTimeFormatted {
-    if (proService.isPro) return 'UNLIMITED (PRO)';
     final seconds = remainingFreeSeconds;
-    final mins = seconds ~/ 60;
+    if (seconds <= 0) return 'Departed';
+    final days = seconds ~/ 86400;
+    final hours = (seconds % 86400) ~/ 3600;
+    final mins = (seconds % 3600) ~/ 60;
     final secs = seconds % 60;
+    if (days > 0) {
+      return '${days}d ${hours}h remaining';
+    }
+    if (hours > 0) {
+      return '${hours}h ${mins.toString().padLeft(2, '0')}m remaining';
+    }
     return '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')} remaining';
   }
 
@@ -357,6 +435,9 @@ class MonitorService extends ChangeNotifier {
     String? targetTrain,
     String? targetSeatClass,
     BookingIntent intent = const BookingIntent(),
+    DateTime? departureTime,
+    String? departureDateTime,
+    String? departureDateTimeJd,
   }) {
     // ── SINGLE ACTIVE NOTIFIER RULE ──────────────────────────────────────────
     // If a previous monitoring session is running, stop it first before
@@ -395,13 +476,26 @@ class MonitorService extends ChangeNotifier {
         : targetSeatClass.trim().toUpperCase();
     _generation++;
     _searchId = DateTime.now().microsecondsSinceEpoch.toString();
-    _expiresAt = proService.isPro
-        ? null
-        : DateTime.now().add(
-            Duration(
-              seconds: AppConfig.instance.number('free_monitor_seconds'),
-            ),
-          );
+
+    // ── Search time limit: until train departure time ──
+    DateTime? calculatedDeparture = departureTime;
+    if (calculatedDeparture == null) {
+      if (targetTrain != null && _lastTrains.isNotEmpty) {
+        final matched = _lastTrains.where((t) => t.tripNumber == targetTrain).firstOrNull;
+        if (matched != null) {
+          departureDateTimeJd ??= matched.departureDateTimeJd;
+          departureDateTime ??= matched.departureDateTime;
+        }
+      }
+      calculatedDeparture = parseDepartureDateTime(
+        departureDateTimeJd: departureDateTimeJd,
+        departureDateTime: departureDateTime,
+        dateOfJourney: dateOfJourney,
+      );
+    }
+    // Default search time: until train departure time
+    _expiresAt = calculatedDeparture ?? DateTime.now().add(const Duration(hours: 24));
+    _startedAt = DateTime.now();
     _elapsedMonitoringSeconds = 0;
     _lastTrains = [];
     backgroundError = null;
@@ -415,7 +509,7 @@ class MonitorService extends ChangeNotifier {
     _addLog(
       'Started monitoring: $fromCity ➔ $toCity ($dateOfJourney) '
       '| Train: ${_targetTrain ?? "ALL"} | Class: ${_targetSeatClass ?? "ANY"}'
-      '${proService.isPro ? " [PRO UNLIMITED]" : " [1-HOUR FREE LIMIT]"}',
+      ' [UNTIL TRAIN DEPARTURE]',
     );
 
     unawaited(
@@ -464,12 +558,12 @@ class MonitorService extends ChangeNotifier {
         _secondsUntilNextCheck = _intervalSeconds;
       }
 
-      // Check 1-hour limit for free users
+      // Check if train departure time reached
       if (_expiresAt != null && DateTime.now().isAfter(_expiresAt!)) {
         _isLimitReached = true;
         stopMonitoring();
         _addLog(
-          'Monitoring time limit reached. Start a new search to continue.',
+          'Train departure time reached. Monitoring ended.',
           isAlert: true,
         );
       }
@@ -608,6 +702,21 @@ class MonitorService extends ChangeNotifier {
         if (!_isMonitoring || generation != _generation || _disposed) return;
         if (!await _savedSearchIsActive()) return;
         _lastError = null;
+        _lastTrains = response.trains;
+        if (_targetTrain != null) {
+          final matched = response.trains.where((t) => t.tripNumber == _targetTrain).firstOrNull;
+          if (matched != null) {
+            final dep = parseDepartureDateTime(
+              departureDateTimeJd: matched.departureDateTimeJd,
+              departureDateTime: matched.departureDateTime,
+              dateOfJourney: _dateOfJourney,
+            );
+            if (dep != null && dep != _expiresAt) {
+              _expiresAt = dep;
+              unawaited(_saveAndSchedule());
+            }
+          }
+        }
         if (bookingIntent.autoReserve &&
             await BookingService.pending() == null) {
           final chosen = bookingIntent.choose(
