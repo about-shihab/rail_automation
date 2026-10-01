@@ -149,7 +149,7 @@ class _BookingScreenState extends State<BookingScreen> {
       if (done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('🎉 Booking Successful! 1 Credit Deducted.'),
+            content: Text('🎉 Booking Successful! Ticket ready in Trips.'),
             backgroundColor: Color(0xFF059669),
             behavior: SnackBarBehavior.floating,
           ),
@@ -159,24 +159,12 @@ class _BookingScreenState extends State<BookingScreen> {
   }
 
   Future<void> _confirmPaymentManual() async {
-    if (CreditService().credits <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('⚠️ You have 0 credits. Please buy credits to confirm booking.'),
-          backgroundColor: Color(0xFFF59E0B),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      await RechargeCreditDialog.show(context);
-      return;
-    }
-
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Confirm Successful Booking?'),
         content: const Text(
-          'Did you successfully complete payment on Bangladesh Railway?\n\nExactly 1 credit will be deducted from your account.',
+          'Did you successfully complete payment on Bangladesh Railway?\n\nYour ticket will be marked confirmed in Trips.',
         ),
         actions: [
           TextButton(
@@ -189,7 +177,7 @@ class _BookingScreenState extends State<BookingScreen> {
               foregroundColor: Colors.black,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Yes, Deduct 1 Credit'),
+            child: const Text('Yes, Confirmed'),
           ),
         ],
       ),
@@ -197,17 +185,13 @@ class _BookingScreenState extends State<BookingScreen> {
 
     if (confirmed == true && mounted) {
       _completedHandled = true;
-      final done = await BookingService.completeSuccessfulBooking();
+      await BookingService.completeSuccessfulBooking();
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              done
-                  ? '🎉 Booking Confirmed! 1 Credit Deducted.'
-                  : 'Booking finalized.',
-            ),
-            backgroundColor: const Color(0xFF059669),
+          const SnackBar(
+            content: Text('🎉 Booking Confirmed! Ticket ready in Trips.'),
+            backgroundColor: Color(0xFF059669),
             behavior: SnackBarBehavior.floating,
           ),
         );

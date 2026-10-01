@@ -11,7 +11,6 @@ import '../services/credit_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/seat_badge.dart';
 import '../services/app_config.dart';
-import 'monitor_dashboard_screen.dart';
 import 'webview_login_screen.dart';
 import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
@@ -598,7 +597,7 @@ class TrainSelectionScreen extends StatelessWidget {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       icon: const Icon(Icons.tune_rounded, size: 14),
-                      label: const Text('Select', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      label: const Text('Select Train', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                       onPressed: () => _openMultiTrainAutoBook(context),
                     ),
                   ],

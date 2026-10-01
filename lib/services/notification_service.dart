@@ -3,8 +3,11 @@ import 'package:provider/provider.dart';
 import '../views/booking_screen.dart';
 import 'booking_service.dart';
 import '../views/reservation_screen.dart';
+import '../views/app_shell.dart';
 import '../widgets/turnstile_sheet.dart';
 import 'monitor_service.dart';
+import 'overlay_service.dart';
+import 'secure_store.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
@@ -28,8 +31,23 @@ class NotificationService {
         'class': seat,
       }).toString();
 
+  static const int idSeatFound = 800;
+  static const int idHumanCheck = 801;
+  static const int idOtp = 802;
+  static const int idPurchaseSuccess = 803;
+
   void openBooking(String? payload) {
     if (payload == null) return;
+    if (payload == 'rail://trips') {
+      final navigator = navigatorKey.currentState;
+      if (navigator == null) { _pendingBooking = payload; return; }
+      _pendingBooking = null;
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AppShell(initialTab: AppShell.tabTrips)),
+        (_) => false,
+      );
+      return;
+    }
     if (payload == 'rail://reservation') {
       final navigator = navigatorKey.currentState;
       if (navigator == null) { _pendingBooking = payload; return; }
@@ -38,19 +56,10 @@ class NotificationService {
       return;
     }
     if (payload == 'rail://turnstile') {
-      final navigator = navigatorKey.currentState;
-      if (navigator == null) {
-        _pendingBooking = payload;
-        return;
-      }
+      // Try the system-overlay first (works when another app is in front).
+      // Fall back to in-app dialog when overlay permission is not granted.
       _pendingBooking = null;
-      TurnstileDialog.show(navigator.context).then((token) {
-        if (token != null && token.isNotEmpty && navigator.mounted) {
-          try {
-            navigator.context.read<MonitorService>().onTurnstileSolved(token);
-          } catch (_) {}
-        }
-      });
+      _handleTurnstileRequest(payload);
       return;
     }
     final uri = Uri.tryParse(payload);
@@ -75,25 +84,156 @@ class NotificationService {
     if (_isInitialized) await _notificationsPlugin.cancelAll();
   }
 
+  /// Cancels previous human check or seat alert notifications to maintain clean sequence
+  Future<void> cancelVerificationAndSearchAlerts() async {
+    try {
+      await _notificationsPlugin.cancel(id: idHumanCheck);
+      await _notificationsPlugin.cancel(id: idSeatFound);
+      await _notificationsPlugin.cancel(id: 99991);
+    } catch (_) {}
+  }
+
+  /// Cancels all reservation & OTP related alerts
+  Future<void> cancelReservationAlerts() async {
+    try {
+      await _notificationsPlugin.cancel(id: idOtp);
+      await _notificationsPlugin.cancel(id: idHumanCheck);
+      await _notificationsPlugin.cancel(id: idSeatFound);
+      await _notificationsPlugin.cancel(id: 99991);
+    } catch (_) {}
+  }
+
   Future<void> showReservation(Map<String, dynamic> state) async {
+    // Sequence Rule: When OTP is sent / ready for payment, clean previous verification alert
+    await cancelVerificationAndSearchAlerts();
+
     final expiry = DateTime.tryParse(state['expiresAt'] ?? '');
     final ready = state['status'] == 'readyForPayment';
+    final trainName = state['train']?['trip_number']?.toString() ??
+        state['train']?['train_name']?.toString() ??
+        'Train';
+    final seatType = state['seatClass']?['type']?.toString() ?? '';
+    final title = ready ? 'OTP Verified • Pay Now' : 'Verify OTP & Pay';
+    final body = ready
+        ? '$trainName • $seatType\nOTP verified! Tap to pay & confirm ticket.'
+        : '$trainName • $seatType\nOTP sent to mobile. Tap to verify & pay.';
+
+    final androidDetails = AndroidNotificationDetails(
+      'br_reservations',
+      'Reserved tickets',
+      importance: Importance.max,
+      priority: Priority.high,
+      when: expiry?.millisecondsSinceEpoch,
+      usesChronometer: expiry != null,
+      chronometerCountDown: expiry != null,
+      timeoutAfter: expiry?.difference(DateTime.now()).inMilliseconds.clamp(1, 3600000),
+      actions: [
+        AndroidNotificationAction(
+          'purchase',
+          ready ? 'Pay now' : 'Verify & Pay',
+          showsUserInterface: true,
+        ),
+      ],
+      styleInformation: BigTextStyleInformation(body),
+    );
+
     await _notificationsPlugin.show(
-      id: 772,
-      title: ready ? 'OTP verified • Purchase your ticket' : 'Seats reserved • Verify OTP',
-      body: '${state['train']['trip_number']} • ${state['seatClass']['type']}',
+      id: idOtp,
+      title: title,
+      body: body,
       payload: ready ? BookingService.tripInfoUrl : 'rail://reservation',
-      notificationDetails: NotificationDetails(android: AndroidNotificationDetails(
-        'br_reservations', 'Reserved tickets', importance: Importance.max, priority: Priority.high,
-        when: expiry?.millisecondsSinceEpoch,
-        usesChronometer: expiry != null, chronometerCountDown: expiry != null,
-        timeoutAfter: expiry?.difference(DateTime.now()).inMilliseconds.clamp(1, 3600000),
-        actions: [AndroidNotificationAction('purchase', ready ? 'Purchase ticket' : 'Verify OTP', showsUserInterface: true)],
-      ), iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true)),
+      notificationDetails: NotificationDetails(
+        android: androidDetails,
+        iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true),
+      ),
     );
   }
 
+  /// Sequence Rule: After complete purchase, clear OTP notification and show success notification
+  Future<void> showPurchaseSuccessAlert({
+    required String trainName,
+    String? pnr,
+  }) async {
+    try {
+      await _notificationsPlugin.cancel(id: idOtp);
+      await _notificationsPlugin.cancel(id: idHumanCheck);
+      await _notificationsPlugin.cancel(id: idSeatFound);
+      await _notificationsPlugin.cancel(id: 772);
+      await _notificationsPlugin.cancel(id: 99991);
+    } catch (_) {}
+
+    final pnrStr = (pnr != null && pnr.isNotEmpty) ? 'PNR: $pnr • ' : '';
+    final body = '$trainName • ${pnrStr}Payment completed. Ticket confirmed!';
+
+    final androidDetails = AndroidNotificationDetails(
+      'br_booking_success',
+      'Booking Success',
+      importance: Importance.max,
+      priority: Priority.high,
+      playSound: true,
+      enableVibration: true,
+      actions: [
+        const AndroidNotificationAction('view_ticket', 'View Ticket', showsUserInterface: true),
+      ],
+      styleInformation: BigTextStyleInformation(body),
+    );
+
+    try {
+      await _notificationsPlugin.show(
+        id: idPurchaseSuccess,
+        title: 'Ticket Booked Successfully! 🚆',
+        body: body,
+        payload: 'rail://trips',
+        notificationDetails: NotificationDetails(
+          android: androidDetails,
+          iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true),
+        ),
+      );
+    } catch (_) {}
+  }
+
   void openPendingBooking() => openBooking(_pendingBooking);
+
+  // ── Turnstile: overlay-first, in-app fallback ────────────────────────────
+
+  /// Attempt to show the Turnstile challenge as a system window overlay that
+  /// floats over any app. Falls back to an in-app modal dialog if the
+  /// SYSTEM_ALERT_WINDOW permission has not been granted.
+  void _handleTurnstileRequest(String payload) {
+    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
+    // Read stored context label if available (set before triggering notification)
+    SecureStore.read('rail_turnstile_context').then((label) async {
+      if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
+      final contextLabel = label ?? '';
+      // Try overlay path first
+      final canOverlay = await OverlayService.canDrawOverlays();
+      if (canOverlay) {
+        final token = await OverlayService.showTurnstile(contextLabel: contextLabel);
+        if (token != null && token.isNotEmpty) {
+          _onTurnstileSolved(token);
+        }
+        return;
+      }
+      // Fall back: bring app to foreground and show in-app dialog
+      final navigator = navigatorKey.currentState;
+      if (navigator == null) {
+        _pendingBooking = payload;
+        return;
+      }
+      if (!navigator.mounted) return;
+      TurnstileDialog.show(navigator.context, contextLabel: contextLabel).then((token) {
+        if (token != null && token.isNotEmpty) _onTurnstileSolved(token);
+      });
+    });
+  }
+
+  void _onTurnstileSolved(String token) {
+    final navigator = navigatorKey.currentState;
+    if (navigator == null || !navigator.mounted) return;
+    try {
+      navigator.context.read<MonitorService>().onTurnstileSolved(token);
+    } catch (_) {}
+  }
 
   Future<void> initialize({bool background = false}) async {
     if (_isInitialized) return;
@@ -116,7 +256,13 @@ class NotificationService {
       await _notificationsPlugin.initialize(
         settings: initSettings,
         onDidReceiveNotificationResponse: (details) {
-          openBooking(details.payload);
+          if (details.actionId == 'verify_human' ||
+              details.actionId == 'solve_turnstile' ||
+              details.payload == 'rail://turnstile') {
+            openBooking('rail://turnstile');
+          } else {
+            openBooking(details.payload);
+          }
         },
       );
       _isInitialized = true;
@@ -125,16 +271,16 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin
           >();
       if (androidImpl != null) {
-        const securityChannel = AndroidNotificationChannel(
-          'br_security_alerts',
-          'Railway Security Verification',
+        const verificationChannel = AndroidNotificationChannel(
+          'br_verification_alerts',
+          'Human Verification',
           description:
-              'Urgent alerts when Cloudflare Turnstile verification is required to reserve seats',
-          importance: Importance.max,
+              'Notifications when human verification is required to reserve seats',
+          importance: Importance.high,
           playSound: true,
           enableVibration: true,
         );
-        await androidImpl.createNotificationChannel(securityChannel);
+        await androidImpl.createNotificationChannel(verificationChannel);
       }
       if (!background) {
         final launch = await _notificationsPlugin
@@ -165,20 +311,27 @@ class NotificationService {
     required int seatCount,
     required String travelDate,
     String? bookingLink,
+    bool needsHumanVerification = false,
   }) async {
-    // Show system notification
-    final body = '$travelDate • $seatCount আসন / seats • $seatType\nবুক করতে চাপুন • Tap to book';
+    final String title;
+    final String body;
+    if (needsHumanVerification) {
+      title = 'Seat found — Action needed';
+      body = '$trainName · $seatType · $travelDate\nTap to complete booking now.';
+    } else {
+      title = 'Seats available — $trainName';
+      body = '$seatCount seat${seatCount == 1 ? '' : 's'} · $seatType · $travelDate';
+    }
     final androidDetails = AndroidNotificationDetails(
       'br_seat_alerts',
-      'Train Seat Availability Alerts',
-      channelDescription:
-          'Alerts when train seats become available for booking',
+      'Seat Availability',
+      channelDescription: 'Alerts when train seats become available for booking',
       importance: Importance.max,
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
-      ticker: 'Seat Alert',
-      actions: const [AndroidNotificationAction('book', 'Purchase ticket', showsUserInterface: true)],
+      ticker: needsHumanVerification ? 'Seat found — action needed' : 'Seats available',
+      actions: const [AndroidNotificationAction('book', 'Book now', showsUserInterface: true)],
       styleInformation: BigTextStyleInformation(body),
     );
 
@@ -195,7 +348,7 @@ class NotificationService {
       await _notificationsPlugin.show(
         id: '$trainName:$seatType:$travelDate'.codeUnits.fold<int>(
           0, (value, char) => (value * 31 + char) & 0x7fffffff),
-        title: 'টিকেট পাওয়া গেছে! • Seats found! $trainName',
+        title: title,
         body: body,
         payload: bookingLink ?? 'https://eticket.railway.gov.bd/',
         notificationDetails: notificationDetails,
@@ -207,24 +360,30 @@ class NotificationService {
     required String trainName,
     required String seatType,
   }) async {
-    final body = '$trainName • $seatType\nRailway Cloudflare verification required! Tap to solve.';
+    // Sequence Rule: When human check is needed, clear any previous alerts
+    try {
+      await _notificationsPlugin.cancel(id: idSeatFound);
+      await _notificationsPlugin.cancel(id: idOtp);
+      await _notificationsPlugin.cancel(id: idPurchaseSuccess);
+      await _notificationsPlugin.cancel(id: 772);
+      await _notificationsPlugin.cancel(id: 99991);
+    } catch (_) {}
+
+    final body = '$trainName • $seatType\nTap to verify and continue booking.';
     final androidDetails = AndroidNotificationDetails(
-      'br_security_alerts',
-      'Railway Security Verification',
+      'br_verification_alerts',
+      'Human Verification',
       channelDescription:
-          'Urgent alerts when Cloudflare Turnstile verification is required to reserve seats',
-      importance: Importance.max,
-      priority: Priority.max,
-      fullScreenIntent: true,
-      category: AndroidNotificationCategory.alarm,
-      visibility: NotificationVisibility.public,
+          'Notifications when human verification is required to reserve seats',
+      importance: Importance.high,
+      priority: Priority.high,
       playSound: true,
       enableVibration: true,
-      ticker: 'Security Verification Required',
+      ticker: 'Seat found — Human check needed',
       actions: const [
         AndroidNotificationAction(
-          'solve_turnstile',
-          'Solve Security Now',
+          'verify_human',
+          'Verify now',
           showsUserInterface: true,
         ),
       ],
@@ -242,8 +401,8 @@ class NotificationService {
 
     try {
       await _notificationsPlugin.show(
-        id: 99991,
-        title: '⚠️ Solve Security to Reserve Ticket!',
+        id: idHumanCheck,
+        title: 'Seat Found! Human Check Needed',
         body: body,
         payload: 'rail://turnstile',
         notificationDetails: notificationDetails,

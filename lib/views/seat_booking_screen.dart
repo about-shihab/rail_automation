@@ -15,6 +15,7 @@ import '../utils/app_theme.dart';
 import '../widgets/turnstile_sheet.dart';
 import 'booking_screen.dart';
 import 'reservation_screen.dart';
+import 'webview_login_screen.dart';
 
 class SeatBookingScreen extends StatefulWidget {
   final TrainTrip train;
@@ -67,6 +68,25 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       if (mounted) setState(() { _layout = layout; _selected.clear(); });
     } catch (e) {
       final errStr = e.toString().replaceAll('Exception: ', '');
+      final lower = errStr.toLowerCase();
+      if ((lower.contains('401') ||
+              lower.contains('session expired') ||
+              lower.contains('sign in') ||
+              lower.contains('re-login') ||
+              lower.contains('authenticate')) &&
+          mounted) {
+        await AuthSession.clear();
+        if (mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(
+              builder: (_) => const WebviewLoginScreen(clearSession: true),
+            ),
+            (_) => false,
+          );
+        }
+        return;
+      }
       if (errStr.contains('422') && cftToken == null && mounted) {
         setState(() => _busy = false);
         final token = await TurnstileSheet.show(context);

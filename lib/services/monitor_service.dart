@@ -22,6 +22,11 @@ import 'firebase_user_service.dart';
 import 'secure_store.dart';
 import 'trip_history_service.dart';
 import '../models/trip_record.dart';
+import 'package:flutter/material.dart';
+import '../widgets/turnstile_sheet.dart';
+import '../views/reservation_screen.dart';
+import 'overlay_service.dart';
+import '../utils/friendly_error.dart';
 
 class MonitorLog {
   final DateTime time;
@@ -50,7 +55,18 @@ class MonitorService extends ChangeNotifier {
       defaultTargetPlatform == TargetPlatform.android &&
       ForegroundMonitor.initialized &&
       backgroundError == null;
+  Timer? _autoClearSearchTimer;
+
+  void _scheduleAutoClearSearchAfter5Minutes() {
+    _autoClearSearchTimer?.cancel();
+    _autoClearSearchTimer = Timer(const Duration(minutes: 5), () async {
+      await clearSearch();
+      _addLog('⏱️ 5 minutes passed after booking/OTP. Search cleared automatically.', isAlert: true);
+    });
+  }
+
   Future<void> clearSearch() async {
+    _autoClearSearchTimer?.cancel();
     stopMonitoring();
     await _persistence;
     final prefs = await SharedPreferences.getInstance();
@@ -59,6 +75,10 @@ class MonitorService extends ChangeNotifier {
     _lastTrains = [];
     _lastError = null;
     _lastBookingError = null;
+    try {
+      await BookingService.clear();
+      await NotificationService().cancelReservationAlerts();
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -299,6 +319,13 @@ class MonitorService extends ChangeNotifier {
       _lastError = null;
     }
     notifyListeners();
+    unawaited(SecureStore.write('rail_cft_token', token));
+    unawaited(SecureStore.write(
+      'rail_cft_token_time',
+      DateTime.now().millisecondsSinceEpoch.toString(),
+    ));
+    unawaited(OverlayService.dismiss());
+    TurnstileDialog.dismiss();
     checkNow();
   }
 
@@ -333,12 +360,12 @@ class MonitorService extends ChangeNotifier {
   bool get needsTurnstile =>
       (_lastBookingError != null &&
           RegExp(
-            r'422|turnstile|verification|cft_response',
+            r'422|turnstile|verification|human check|cft_response',
             caseSensitive: false,
           ).hasMatch(_lastBookingError!)) ||
       (_lastError != null &&
           RegExp(
-            r'422|turnstile|cft_response',
+            r'422|turnstile|verification|human check|cft_response',
             caseSensitive: false,
           ).hasMatch(_lastError!));
   bool get needsLogin =>
@@ -674,9 +701,9 @@ class MonitorService extends ChangeNotifier {
         _lastReservationExpired = true;
         _turnstileRequestedForBooking = false;
         bookingIntent = bookingIntent.copyWith(autoReserve: false);
-        await _saveAndSchedule();
+        await clearSearch();
         _addLog(
-          '⏱️ 5-minute reservation window expired. Live reservation and alerts cleared.',
+          '⏱️ 5 minutes passed after booking/OTP. Search cleared automatically.',
           isAlert: true,
         );
         notifyListeners();
@@ -705,27 +732,26 @@ class MonitorService extends ChangeNotifier {
     final generation = _generation;
     try {
       // Check for held or pending reservation
-      if (bookingIntent.autoReserve) {
-        final pendingReservation = await BookingService.pending();
-        if (pendingReservation != null) {
-          final expiry = DateTime.tryParse('${pendingReservation['expiresAt'] ?? ''}');
-          final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
-          if (isExpired) {
-            // Automatically clear timed out reservation
-            await BookingService.clear();
-            _lastReservationExpired = true;
-            // Each auto-book books only one time; user must explicitly re-autobook
-            bookingIntent = bookingIntent.copyWith(autoReserve: false);
-            await _saveAndSchedule();
-            _addLog(
-              '⏱️ Reservation timed out waiting for OTP. Cleared automatically. User must re-auto book.',
-              isAlert: true,
-            );
-            notifyListeners();
-          } else {
-            await OtpVerifier.listen();
-            return;
-          }
+      final pendingReservation = await BookingService.pending();
+      if (pendingReservation != null) {
+        final expiry = DateTime.tryParse('${pendingReservation['expiresAt'] ?? ''}');
+        final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
+        if (isExpired) {
+          await BookingService.clear();
+          _lastReservationExpired = true;
+          bookingIntent = bookingIntent.copyWith(autoReserve: false);
+          await clearSearch();
+          _addLog(
+            '⏱️ 5 minutes passed after booking/OTP. Search cleared automatically.',
+            isAlert: true,
+          );
+          notifyListeners();
+          return;
+        } else {
+          stopMonitoring();
+          _scheduleAutoClearSearchAfter5Minutes();
+          await OtpVerifier.listen();
+          return;
         }
       }
       final session = await AuthSession.load();
@@ -812,9 +838,16 @@ class MonitorService extends ChangeNotifier {
               _lastReservationExpired = false;
               // Each auto-book books only ONE time. Disable autoReserve so it never re-books without explicit user re-autobook
               bookingIntent = bookingIntent.copyWith(autoReserve: false);
+              stopMonitoring();
               await _saveAndSchedule();
               await _notificationService.showReservation(reservation);
               await OtpVerifier.listen();
+              _scheduleAutoClearSearchAfter5Minutes();
+              // Sequence Rule: after OTP is sent, directly present user with verify & pay process
+              final nav = NotificationService.navigatorKey.currentState;
+              if (nav != null && nav.mounted) {
+                nav.push(MaterialPageRoute(builder: (_) => const ReservationScreen()));
+              }
               notifyListeners();
               return;
             } catch (error) {
@@ -824,12 +857,37 @@ class MonitorService extends ChangeNotifier {
                   !await _savedSearchIsActive()) {
                 return;
               }
-              final clean = error
-                  .toString()
-                  .replaceAll('Exception: ', '')
-                  .replaceAll('StateError: ', '');
+              final clean = friendlyErrorMessage(error);
               _lastError = clean;
               _lastBookingError = clean;
+
+              final isTurnstile = RegExp(
+                r'422|turnstile|cft_response|verification|human check',
+                caseSensitive: false,
+              ).hasMatch(error.toString()) || RegExp(
+                r'422|turnstile|cft_response|verification|human check',
+                caseSensitive: false,
+              ).hasMatch(clean);
+
+              if (isTurnstile) {
+                _addLog('Human check needed to reserve seats for ${chosen.$1.tripNumber}');
+                // Security check should be triggered only ONCE per booking attempt
+                if (!_turnstileRequestedForBooking) {
+                  _turnstileRequestedForBooking = true;
+                  // Save context so overlay/dialog can show "TRAIN · SEAT"
+                  await SecureStore.write(
+                    'rail_turnstile_context',
+                    '${chosen.$1.tripNumber} · ${chosen.$2.type}',
+                  );
+                  await _notificationService.triggerTurnstileRequiredAlert(
+                    trainName: chosen.$1.tripNumber,
+                    seatType: chosen.$2.type,
+                  );
+                }
+                notifyListeners();
+                return;
+              }
+
               _addLog(
                 'Automatic reservation needs attention: $clean',
                 isError: true,
@@ -855,22 +913,7 @@ class MonitorService extends ChangeNotifier {
               } catch (_) {}
               notifyListeners();
 
-              final isTurnstile = RegExp(
-                r'422|turnstile|cft_response|verification',
-                caseSensitive: false,
-              ).hasMatch(clean);
-
-              if (isTurnstile) {
-                // Security check should be triggered only ONCE per booking attempt
-                if (!_turnstileRequestedForBooking) {
-                  _turnstileRequestedForBooking = true;
-                  await _notificationService.triggerTurnstileRequiredAlert(
-                    trainName: chosen.$1.tripNumber,
-                    seatType: chosen.$2.type,
-                  );
-                }
-              } else {
-                final prefs = await SharedPreferences.getInstance();
+              final prefs = await SharedPreferences.getInstance();
                 final alertKey = 'ticket_attention_$_searchId';
                 if (prefs.getBool(alertKey) != true) {
                   await _notificationService.triggerSeatAvailableAlert(
@@ -887,7 +930,6 @@ class MonitorService extends ChangeNotifier {
                   );
                   await prefs.setBool(alertKey, true);
                 }
-              }
             }
           }
         }
@@ -948,6 +990,7 @@ class MonitorService extends ChangeNotifier {
                   seatType: seat.displayName,
                   seatCount: seat.seatCounts.online,
                   travelDate: _dateOfJourney,
+                  needsHumanVerification: true,
                   bookingLink: NotificationService.bookingUrl(
                     _fromCity,
                     _toCity,
@@ -1031,6 +1074,7 @@ class MonitorService extends ChangeNotifier {
     _disposed = true;
     _checkTimer?.cancel();
     _secondTicker?.cancel();
+    _autoClearSearchTimer?.cancel();
     super.dispose();
   }
 }

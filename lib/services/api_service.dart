@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
 import 'app_config.dart';
 import 'secure_store.dart';
 
 import 'package:http/http.dart' as http;
 
 import '../models/auth_session.dart';
+import '../models/purchased_ticket.dart';
 import '../models/train_trip.dart';
 import '../models/seat_layout.dart';
 
@@ -486,15 +488,15 @@ class ApiService {
       }
       final detail = (serverMsg != null && serverMsg.isNotEmpty) ? ': $serverMsg' : '';
       if (response.statusCode == 401) {
-        throw Exception('Session expired (401)$detail. Please sign in to Railway again.');
+        throw Exception('Railway session expired • Please sign in again');
       }
       if (response.statusCode == 403 || response.statusCode == 422) {
-        throw Exception('Seat layout rejected (${response.statusCode})$detail. Cloudflare Turnstile token required.');
+        throw Exception('Human check needed • Cloudflare Turnstile verification required');
       }
       if (response.statusCode == 429) {
-        throw Exception('Railway rate limit (429)$detail. Please wait.');
+        throw Exception('Railway server busy (429) • Please wait a moment');
       }
-      throw Exception('Seat layout request failed (${response.statusCode})$detail');
+      throw Exception('Seat layout request failed (${response.statusCode})');
     }
     dynamic decoded;
     try {
@@ -649,5 +651,94 @@ class ApiService {
         ]
       }
     });
+  }
+
+  /// Fetches official purchase history from Bangladesh Railway / Shohoz.
+  static Future<List<PurchasedTicket>> getPurchaseHistory({
+    required AuthSession authSession,
+  }) async {
+    final uri = Uri.parse('$baseUrl/purchase-history');
+
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Origin': 'https://eticket.railway.gov.bd',
+      'Referer': 'https://eticket.railway.gov.bd/',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+      'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua':
+          '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-ch-ua-mobile': '?0',
+    };
+
+    if (authSession.token.isNotEmpty) {
+      headers['Authorization'] = authSession.token.startsWith('Bearer ')
+          ? authSession.token
+          : 'Bearer ${authSession.token}';
+    }
+    if (authSession.deviceKey.isNotEmpty) {
+      headers['X-Device-Key'] = authSession.deviceKey;
+    }
+    if (authSession.deviceId.isNotEmpty) {
+      headers['X-Device-Id'] = authSession.deviceId;
+    }
+
+    final response = await http.get(uri, headers: headers);
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = json['data'] as List<dynamic>? ?? [];
+      return data
+          .map((item) => PurchasedTicket.fromJson(item as Map<String, dynamic>))
+          .toList();
+    } else {
+      throw Exception(
+        'Failed to fetch purchase history (${response.statusCode}): ${response.body}',
+      );
+    }
+  }
+
+  /// Downloads the official PDF ticket for a given order ID.
+  static Future<Uint8List> downloadTicketPdf({
+    required int orderId,
+    required AuthSession authSession,
+  }) async {
+    final uri = Uri.parse('$baseUrl/trips/download-ticket/$orderId');
+
+    final headers = <String, String>{
+      'Accept': 'application/json',
+      'Content-Type': 'application/pdf',
+      'Origin': 'https://eticket.railway.gov.bd',
+      'Referer': 'https://eticket.railway.gov.bd/',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+      'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua':
+          '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+      'sec-ch-ua-platform': '"Windows"',
+      'sec-ch-ua-mobile': '?0',
+    };
+
+    if (authSession.token.isNotEmpty) {
+      headers['Authorization'] = authSession.token.startsWith('Bearer ')
+          ? authSession.token
+          : 'Bearer ${authSession.token}';
+    }
+    if (authSession.deviceKey.isNotEmpty) {
+      headers['X-Device-Key'] = authSession.deviceKey;
+    }
+    if (authSession.deviceId.isNotEmpty) {
+      headers['X-Device-Id'] = authSession.deviceId;
+    }
+
+    final response = await http.get(uri, headers: headers);
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    } else {
+      throw Exception(
+        'Failed to download ticket (${response.statusCode}): ${response.body}',
+      );
+    }
   }
 }

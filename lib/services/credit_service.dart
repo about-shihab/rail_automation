@@ -54,15 +54,7 @@ class CreditService extends ChangeNotifier {
       final isTest =
           WidgetsBinding.instance.runtimeType.toString().contains('Test');
       if (prefs.containsKey(_prefCreditsKey)) {
-        final current = prefs.getInt(_prefCreditsKey) ?? 0;
-        final upgraded = prefs.getBool('rps_default_2_credits_granted') ?? false;
-        if (!upgraded && current < 2) {
-          _credits = 2;
-          await prefs.setInt(_prefCreditsKey, 2);
-          await prefs.setBool('rps_default_2_credits_granted', true);
-        } else {
-          _credits = current;
-        }
+        _credits = prefs.getInt(_prefCreditsKey) ?? 2;
       } else if (isTest) {
         _credits = 10;
       } else {
@@ -132,8 +124,9 @@ class CreditService extends ChangeNotifier {
         final data = snapshot.data();
         if (data != null && data.containsKey('credits')) {
           final serverCredits = (data['credits'] as num).toInt();
-          _credits = serverCredits;
           final prefs = await SharedPreferences.getInstance();
+          // Firestore is the source of truth (admin can change the balance).
+          _credits = serverCredits;
           await prefs.setInt(_prefCreditsKey, _credits);
           notifyListeners();
         }
@@ -147,6 +140,8 @@ class CreditService extends ChangeNotifier {
           if (data.containsKey('credits')) {
             final serverCredits = (data['credits'] as num).toInt();
             if (_credits != serverCredits) {
+              // Always follow the server value so admin increases/decreases
+              // are never overwritten by a stale local balance.
               _credits = serverCredits;
               final prefs = await SharedPreferences.getInstance();
               await prefs.setInt(_prefCreditsKey, _credits);
@@ -204,14 +199,10 @@ class CreditService extends ChangeNotifier {
               'lastCreditRechargedAt': FieldValue.serverTimestamp(),
             }, SetOptions(merge: true));
 
-            // 2. Increment local _credits immediately
-            _credits += newlyApprovedCredits;
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setInt(_prefCreditsKey, _credits);
-
+            // 2. Local balance follows via the users/{phone} listener above.
             await FirebaseUserService().logActivity(
               action: 'RECHARGE_CREDITED',
-              details: 'Added $newlyApprovedCredits credits from approved bKash transaction(s). New balance: $_credits',
+              details: 'Added $newlyApprovedCredits credits from approved bKash transaction(s).',
             );
 
             notifyListeners();
@@ -352,14 +343,24 @@ class CreditService extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_prefCreditsKey, _credits);
+      await prefs.setBool('rps_default_2_credits_granted', true);
 
       // Log in Firestore
-      final phone = FirebaseUserService().currentPhone;
+      String? phone = FirebaseUserService().currentPhone;
+      if (phone == null || phone.isEmpty) {
+        final session = await AuthSession.load();
+        if (session != null) {
+          phone = FirebaseUserService.normalizePhone(session.phoneNumber);
+          if (phone.isEmpty) phone = FirebaseUserService.normalizePhone(session.displayName);
+        }
+      }
+
       final firestore = FirebaseUserService().firestore;
       if (phone != null && phone.isNotEmpty && firestore != null) {
         final docRef = firestore.collection('users').doc(phone);
+        // Atomic decrement so it composes with admin adjustments.
         await docRef.set({
-          'credits': _credits,
+          'credits': FieldValue.increment(-1),
           'lastCreditUsedAt': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
 

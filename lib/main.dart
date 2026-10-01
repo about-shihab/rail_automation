@@ -5,12 +5,12 @@ import 'package:provider/provider.dart';
 import 'models/auth_session.dart';
 import 'services/monitor_service.dart';
 import 'services/notification_service.dart';
+import 'services/overlay_service.dart';
 import 'services/pro_service.dart';
 import 'services/theme_service.dart';
 import 'services/language_service.dart';
 import 'services/background_monitor.dart';
 import 'services/firebase_user_service.dart';
-import 'views/monitor_dashboard_screen.dart';
 import 'utils/app_theme.dart';
 import 'services/credit_service.dart';
 import 'services/trip_history_service.dart';
@@ -26,6 +26,8 @@ void main() async {
   final notificationService = NotificationService();
   await notificationService.initialize();
   await notificationService.requestPermissions();
+  // Request overlay (SYSTEM_ALERT_WINDOW) permission for Turnstile overlay
+  await OverlayService.requestPermission();
 
   final session = await AuthSession.load();
   final isLoggedIn = session != null && session.isValid;
@@ -44,7 +46,7 @@ void main() async {
   await firebaseUserService.initialize(proService: proService);
   await AppConfig.instance.initialize();
   unawaited(creditService.syncPackagesFromFirestore());
-  if (isLoggedIn) {
+  if (session != null && isLoggedIn) {
     unawaited(firebaseUserService.syncUserOnLogin(session));
   }
 
@@ -107,24 +109,48 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
 
   DateTime? _lastTurnstileDismissed;
 
-  void _triggerTurnstilePopup(MonitorService monitor) {
-    if (!monitor.needsTurnstile || TurnstileDialog.isShowing) return;
+  void _triggerTurnstilePopup(MonitorService monitor) async {
+    if (!monitor.needsTurnstile) return;
+    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
     if (_lastTurnstileDismissed != null &&
         DateTime.now().difference(_lastTurnstileDismissed!).inSeconds < 8) {
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final navContext = NotificationService.navigatorKey.currentContext;
-      if (navContext != null && !TurnstileDialog.isShowing && monitor.needsTurnstile) {
-        TurnstileDialog.show(navContext).then((token) {
-          if (token != null && token.isNotEmpty) {
-            monitor.onTurnstileSolved(token);
-          } else {
-            _lastTurnstileDismissed = DateTime.now();
-          }
-        });
+
+    final label = [
+      if (monitor.targetTrain != null && monitor.targetTrain!.isNotEmpty)
+        monitor.targetTrain!,
+      if (monitor.targetSeatClass != null && monitor.targetSeatClass!.isNotEmpty)
+        monitor.targetSeatClass!,
+    ].join(' · ');
+
+    final canOverlay = await OverlayService.canDrawOverlays();
+    if (canOverlay) {
+      // Use system overlay ONLY — never show dialog when overlay is supported
+      final token = await OverlayService.showTurnstile(contextLabel: label);
+      if (token != null && token.isNotEmpty) {
+        monitor.onTurnstileSolved(token);
+      } else {
+        _lastTurnstileDismissed = DateTime.now();
       }
-    });
+    } else {
+      // Fallback: in-app dialog only when overlay permission is not granted
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final navContext = NotificationService.navigatorKey.currentContext;
+        if (navContext != null &&
+            !TurnstileDialog.isShowing &&
+            !OverlayService.isShowing &&
+            monitor.needsTurnstile) {
+          TurnstileDialog.show(navContext, contextLabel: label).then((token) {
+            if (token != null && token.isNotEmpty) {
+              monitor.onTurnstileSolved(token);
+            } else {
+              _lastTurnstileDismissed = DateTime.now();
+            }
+          });
+        }
+      });
+    }
   }
 
   @override

@@ -19,11 +19,15 @@ class FirebaseUserService extends ChangeNotifier {
   FirebaseUserService._internal();
 
   bool _isFirebaseReady = false;
+  bool _isAdmin = false;
   String? _currentPhone;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSubscription;
   ProService? _proService;
 
   bool get isFirebaseReady => _isFirebaseReady;
+
+  /// True when users/{phone}.role == 'admin' (set manually in the Firebase console).
+  bool get isAdmin => _isAdmin;
   String? get currentPhone => _currentPhone;
   FirebaseFirestore? get firestore => _isFirebaseReady ? FirebaseFirestore.instance : null;
 
@@ -104,7 +108,7 @@ class FirebaseUserService extends ChangeNotifier {
           'phone': phone,
           'displayName': session.displayName ?? '',
           'email': session.email ?? '',
-          'credits': 2, // By default each user is given 2 credits
+          'credits': CreditService().credits, // Preserve current credits (default 2 or deducted)
           'isPro': false, // Admin can toggle this in Firebase console
           'isActive': true,
           'createdAt': now,
@@ -145,6 +149,7 @@ class FirebaseUserService extends ChangeNotifier {
   void _startListeningToUserDoc(String phone) {
     if (!_isFirebaseReady) return;
 
+    _isAdmin = false;
     _userDocSubscription?.cancel();
     _userDocSubscription = FirebaseFirestore.instance
         .collection('users')
@@ -156,6 +161,7 @@ class FirebaseUserService extends ChangeNotifier {
           final data = snapshot.data();
           final isPro = data?['isPro'] == true;
           _proService?.updateProStatus(isPro);
+          _isAdmin = data?['role']?.toString().toLowerCase() == 'admin';
           notifyListeners();
         }
       },
@@ -303,6 +309,7 @@ class FirebaseUserService extends ChangeNotifier {
     _userDocSubscription?.cancel();
     _userDocSubscription = null;
     _currentPhone = null;
+    _isAdmin = false;
     _proService?.updateProStatus(false);
     notifyListeners();
   }

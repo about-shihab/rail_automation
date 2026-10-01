@@ -9,12 +9,14 @@ import '../services/firebase_user_service.dart';
 import '../services/language_service.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
+import '../services/overlay_service.dart';
 import '../services/secure_store.dart';
 import '../services/theme_service.dart';
 import '../services/web_session_service.dart';
 import '../widgets/train_navigation_bar.dart';
 import '../widgets/turnstile_sheet.dart';
 import '../utils/app_theme.dart';
+import 'admin_screen.dart';
 import 'monitor_dashboard_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'search_screen.dart';
@@ -26,7 +28,7 @@ class AppShell extends StatefulWidget {
   final int initialTab;
   const AppShell({super.key, this.initialTab = 0});
 
-  static const tabSearch = 0, tabMonitor = 1, tabAlerts = 2, tabMore = 3;
+  static const tabSearch = 0, tabMonitor = 1, tabAlerts = 2, tabTrips = 2, tabMore = 3;
   static final ValueNotifier<int> tab = ValueNotifier<int>(0);
   static bool _alive = false;
 
@@ -75,7 +77,14 @@ class _AppShellState extends State<AppShell> {
                 elevation: 4,
                 child: InkWell(
                   onTap: () async {
-                    final token = await TurnstileDialog.show(context);
+                    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
+                    final label = [
+                      if (monitor.targetTrain != null && monitor.targetTrain!.isNotEmpty)
+                        monitor.targetTrain!,
+                      if (monitor.targetSeatClass != null && monitor.targetSeatClass!.isNotEmpty)
+                        monitor.targetSeatClass!,
+                    ].join(' · ');
+                    final token = await TurnstileDialog.show(context, contextLabel: label);
                     if (token != null && token.isNotEmpty && context.mounted) {
                       context.read<MonitorService>().onTurnstileSolved(token);
                     }
@@ -90,7 +99,7 @@ class _AppShellState extends State<AppShell> {
                           const SizedBox(width: 10),
                           const Expanded(
                             child: Text(
-                              'Security Verification Required • Tap to solve & auto-book',
+                              'Human verification required • Tap to continue booking',
                               style: TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
@@ -218,6 +227,7 @@ class ProfileTab extends StatelessWidget {
     final theme = context.watch<ThemeService>();
     final credit = context.watch<CreditService>();
     final lang = context.watch<LanguageService>();
+    final isAdmin = context.watch<FirebaseUserService>().isAdmin;
     final userPhone = FirebaseUserService().currentPhone ?? 'Railway User';
 
     Widget tile(
@@ -337,6 +347,23 @@ class ProfileTab extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 14),
+
+          // ── Admin Panel (visible to admins only) ──
+          if (isAdmin) ...[
+            AppCard(
+              child: tile(
+                Icons.admin_panel_settings_rounded,
+                'Admin Panel',
+                sub: 'Manage users, credits & recharge requests',
+                trailing: const AdminPendingBadge(),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminScreen()),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+          ],
 
           // ── Settings (Dark mode & Language only - NO mock data, NO test notification) ──
           AppCard(

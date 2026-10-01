@@ -10,6 +10,7 @@ import '../services/booking_service.dart';
 import '../services/credit_service.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
+import '../services/overlay_service.dart';
 import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 import '../utils/app_theme.dart';
@@ -19,6 +20,7 @@ import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
 import '../widgets/fancy_train_loader.dart';
 import '../widgets/turnstile_sheet.dart';
+import '../utils/friendly_error.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
 
@@ -63,6 +65,26 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     _reading = true;
     try {
       final value = await BookingService.pending();
+      if (value != null) {
+        final started = DateTime.tryParse('${value['startedAt'] ?? ''}');
+        final expiry = DateTime.tryParse('${value['expiresAt'] ?? ''}');
+        final now = DateTime.now();
+        final is5MinElapsed = (started != null && now.difference(started).inMinutes >= 5) ||
+            (expiry != null && !now.isBefore(expiry));
+        if (is5MinElapsed) {
+          await BookingService.clear();
+          if (mounted) {
+            context.read<MonitorService>().clearSearch();
+            setState(() => _reservation = null);
+          }
+          return;
+        }
+      } else if (_reservation != null) {
+        // Reservation expired / removed externally after 5 minutes
+        if (mounted) {
+          context.read<MonitorService>().clearSearch();
+        }
+      }
       if (mounted) setState(() => _reservation = value);
       await _checkSession();
     } finally {
@@ -127,16 +149,29 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   }
 
   Future<void> _handleSolveTurnstile() async {
-    final token = await TurnstileSheet.show(context);
+    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
+    final m = context.read<MonitorService>();
+    final label = [
+      if (m.targetTrain != null && m.targetTrain!.isNotEmpty) m.targetTrain!,
+      if (m.targetSeatClass != null && m.targetSeatClass!.isNotEmpty) m.targetSeatClass!,
+    ].join(' · ');
+    final canOverlay = await OverlayService.canDrawOverlays();
+    if (!mounted) return;
+    final String? token;
+    if (canOverlay) {
+      token = await OverlayService.showTurnstile(contextLabel: label);
+    } else {
+      token = await TurnstileSheet.show(context, contextLabel: label);
+    }
     if (token != null && token.isNotEmpty && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Security token captured. Retrying auto-booking...'),
+          content: Text('Verification completed. Retrying auto-booking...'),
           backgroundColor: AppColors.primaryDark,
           behavior: SnackBarBehavior.floating,
         ),
       );
-      context.read<MonitorService>().onTurnstileSolved(token);
+      m.onTurnstileSolved(token);
     }
   }
 
@@ -403,7 +438,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                         // ── Exact Error Banner (if any) ──
                         if (exactError != null && exactError.isNotEmpty) ...[
                           _ErrorBanner(
-                            message: exactError,
+                            message: friendlyErrorMessage(exactError),
                             onVerifyTurnstile: _handleSolveTurnstile,
                             onDismiss: () => m.clearBookingError(),
                             isDark: isDark,
@@ -804,9 +839,9 @@ class _CockpitHudCard extends StatelessWidget {
   });
 
   String get _statusTitle {
-    if (credits <= 0) return 'ZERO CREDITS • RECHARGE REQUIRED';
     if (ready) return 'SEATS RESERVED • READY TO PAY';
     if (otp) return 'AWAITING OTP VERIFICATION';
+    if (credits <= 0) return 'ZERO CREDITS • RECHARGE REQUIRED';
     switch (step) {
       case _BookingStep.searching:
         return 'SCANNING COACH BERTH INVENTORY';
@@ -822,9 +857,9 @@ class _CockpitHudCard extends StatelessWidget {
   }
 
   Color get _statusColor {
-    if (credits <= 0) return AppColors.warning;
     if (ready) return AppColors.gold;
     if (otp) return AppColors.warning;
+    if (credits <= 0) return AppColors.warning;
     if (step == _BookingStep.reserving) return AppColors.accent;
     return AppColors.primary;
   }
@@ -1070,9 +1105,11 @@ class _CockpitHudCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          credits <= 0
-                              ? 'ZERO CREDITS • RECHARGE'
-                              : (isActive ? 'ACTIVE QUEUE SEARCH' : 'SEARCH PAUSED'),
+                          (ready || otp)
+                              ? (ready ? 'READY TO PAY' : 'AWAITING OTP')
+                              : (credits <= 0
+                                  ? 'ZERO CREDITS • RECHARGE'
+                                  : (isActive ? 'ACTIVE QUEUE SEARCH' : 'SEARCH PAUSED')),
                           style: TextStyle(
                             color: _statusColor,
                             fontSize: 10.5,
@@ -1128,6 +1165,7 @@ class _CockpitHudCard extends StatelessWidget {
 
   Widget _hudPill({required IconData icon, required String text, required bool isDark}) {
     return Container(
+      constraints: const BoxConstraints(maxWidth: 280),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF132238) : const Color(0xFFEFF5FC),
@@ -1141,12 +1179,16 @@ class _CockpitHudCard extends StatelessWidget {
         children: [
           Icon(icon, size: 12, color: isDark ? AppColors.primary : AppColors.primaryDark),
           const SizedBox(width: 4),
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textSecondary(isDark),
+          Flexible(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary(isDark),
+              ),
             ),
           ),
         ],
@@ -1438,7 +1480,35 @@ class _TrainActionButtons extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // If credits are 0 in DB, user is shown ONLY the Buy Credit button
+    // If a ticket is reserved or awaiting OTP/payment, user can ALWAYS proceed to pay even with 0 credits
+    if (p != null && !expired) {
+      return Column(
+        children: [
+          _MasterButton(
+            label: ready ? 'Pay Now' : (otp ? 'Enter OTP' : 'View Reservation'),
+            icon: ready
+                ? Icons.payment_rounded
+                : (otp ? Icons.sms_rounded : Icons.confirmation_number_outlined),
+            gradientColors: ready
+                ? const [Color(0xFFFBBF24), Color(0xFFD97706)]
+                : (otp
+                    ? const [Color(0xFF38BDF8), Color(0xFF0284C7)]
+                    : [AppColors.primary, AppColors.primaryDark]),
+            textColor: ready ? Colors.black : Colors.white,
+            onTap: onReservation,
+          ),
+          const SizedBox(height: 10),
+          _SecondaryTrainButton(
+            label: 'Railway Site',
+            icon: Icons.open_in_new_rounded,
+            onTap: onRailway,
+            isDark: isDark,
+          ),
+        ],
+      );
+    }
+
+    // If credits are 0 in DB and no active reservation, user is shown ONLY the Buy Credit button
     if (credits <= 0) {
       return Column(
         children: [
@@ -1453,9 +1523,7 @@ class _TrainActionButtons extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            p != null
-                ? 'Credit balance is 0. Buy credit to confirm your booked ticket.'
-                : 'Credit balance is 0. Please buy credit to activate auto-booking.',
+            'Credit balance is 0. Please buy credit to activate auto-booking.',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 12,
@@ -1789,7 +1857,7 @@ class _ErrorBanner extends StatelessWidget {
                     Icon(Icons.security_rounded, size: 13, color: Colors.white),
                     SizedBox(width: 6),
                     Text(
-                      'Solve Cloudflare Security',
+                      'Verify Human',
                       style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                   ],

@@ -65,6 +65,32 @@ class BookingService {
         await clear();
         return null;
       }
+
+      // If OTP was sent and credit was not deducted yet, deduct 1 credit immediately
+      if (map['credit_deducted'] != true &&
+          (map['status'] == 'awaitingOtp' || map['status'] == 'readyForPayment')) {
+        map['credit_deducted'] = true;
+        await save(map);
+        final trainName = map['train']?['trip_number']?.toString() ??
+            map['train']?['train_name']?.toString() ??
+            'Train';
+        final coach = (map['coach_names'] as String?)?.isNotEmpty == true
+            ? (map['coach_names'] as String)
+            : (map['coach']?['floor_name']?.toString() ??
+                map['coach']?['seat_floor']?.toString() ??
+                '');
+        final seats = (map['seats'] as List?)
+                ?.map((s) => s['seat_number']?.toString() ?? '')
+                .where((s) => s.isNotEmpty)
+                .join(', ') ??
+            '';
+        final seatInfo = coach.isNotEmpty ? '$coach ($seats)' : seats;
+        await CreditService().deductBookingCredit(
+          trainName: trainName,
+          seatInfo: seatInfo,
+        );
+      }
+
       return map;
     } catch (_) {
       await clear();
@@ -352,15 +378,15 @@ class BookingService {
       final fareNum = double.tryParse(chosen.first.$1.seatFare) ??
           (double.tryParse(seat.fare) ?? 0.0);
 
-      // Auto-book to OTP send costs 1 credit
+      // When OTP is sent, reservation costs 1 credit. User can proceed to pay with 0 credit.
+      state['credit_deducted'] = true;
       if (isAutoBook || autoVerify) {
         state['isAutoBook'] = true;
-        await CreditService().deductBookingCredit(
-          trainName: train.tripNumber,
-          seatInfo: '$coachName (${seatsList.join(", ")})',
-        );
-        state['credit_deducted'] = true;
       }
+      await CreditService().deductBookingCredit(
+        trainName: train.tripNumber,
+        seatInfo: '$coachName (${seatsList.join(", ")})',
+      );
       await save(state);
 
       try {
@@ -458,6 +484,15 @@ class BookingService {
 
     // 3. Clear active reservation and notifications
     await clear();
+
+    // 4. Sequence Rule: Show clean ticket booked successfully notification
+    try {
+      await NotificationService().showPurchaseSuccessAlert(
+        trainName: trainName,
+        pnr: state['pnr']?.toString() ?? '',
+      );
+    } catch (_) {}
+
     return true;
   }
 

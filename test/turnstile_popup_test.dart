@@ -63,13 +63,13 @@ void main() {
       // Dialog must be visible on screen over the app
       expect(TurnstileDialog.isShowing, isTrue);
       expect(find.byType(TurnstileDialog), findsOneWidget);
-      expect(find.text('Security Verification'), findsOneWidget);
-      expect(find.text('Turnstile'), findsOneWidget);
+      expect(find.text('Processing Ticket • Boarding'), findsOneWidget);
+      expect(find.text('BOARDING PASS'), findsOneWidget);
       expect(find.text('Cancel'), findsOneWidget);
       expect(find.text('Retry'), findsOneWidget);
 
-      // Tap Cancel to dismiss
-      await tester.tap(find.text('Cancel'));
+      // Tap close button in header to dismiss
+      await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pumpAndSettle();
 
       expect(find.byType(TurnstileDialog), findsNothing);
@@ -148,7 +148,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       // No alert bar initially
-      expect(find.text('Security Verification Required • Tap to solve & auto-book'), findsNothing);
+      expect(find.text('Human verification required • Tap to continue booking'), findsNothing);
 
       // Trigger Turnstile requirement
       monitor.setErrorForTesting(
@@ -157,16 +157,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       // Alert bar is now visible over the app
-      expect(find.text('Security Verification Required • Tap to solve & auto-book'), findsOneWidget);
+      expect(find.text('Human verification required • Tap to continue booking'), findsOneWidget);
 
       // Tap alert bar to trigger the Turnstile dialog popup
-      await tester.tap(find.text('Security Verification Required • Tap to solve & auto-book'));
+      await tester.tap(find.text('Human verification required • Tap to continue booking'));
       await tester.pump(const Duration(milliseconds: 300));
 
       expect(find.byType(TurnstileDialog), findsOneWidget);
 
       // Dismiss dialog
-      await tester.tap(find.text('Cancel'));
+      await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pump(const Duration(milliseconds: 300));
 
       // Solve turnstile
@@ -174,7 +174,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
 
       // Alert bar disappears
-      expect(find.text('Security Verification Required • Tap to solve & auto-book'), findsNothing);
+      expect(find.text('Human verification required • Tap to continue booking'), findsNothing);
     });
   });
 }

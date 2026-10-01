@@ -30,8 +30,42 @@ class _ReservationScreenState extends State<ReservationScreen> {
   }
 
   Future<void> _load() async {
+    final previousStatus = _state?['status'] as String?;
     final state = await BookingService.pending();
+    if (state != null && state['credit_deducted'] != true) {
+      state['credit_deducted'] = true;
+      await BookingService.save(state);
+      final trainName = state['train']?['trip_number']?.toString() ??
+          state['train']?['train_name']?.toString() ??
+          'Train';
+      final coach = (state['coach_names'] as String?)?.isNotEmpty == true
+          ? (state['coach_names'] as String)
+          : (state['coach']?['floor_name']?.toString() ??
+              state['coach']?['seat_floor']?.toString() ??
+              '');
+      final seats = (state['seats'] as List?)
+              ?.map((s) => s['seat_number']?.toString() ?? '')
+              .where((s) => s.isNotEmpty)
+              .join(', ') ??
+          '';
+      final seatInfo = coach.isNotEmpty ? '$coach ($seats)' : seats;
+      await CreditService().deductBookingCredit(
+        trainName: trainName,
+        seatInfo: seatInfo,
+      );
+    }
     if (mounted) setState(() => _state = state);
+    // If OTP was auto-verified in the background, navigate straight to payment
+    if (mounted &&
+        previousStatus == 'awaitingOtp' &&
+        state?['status'] == 'readyForPayment') {
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => BookingScreen(url: BookingService.tripInfoUrl),
+        ),
+      );
+    }
   }
 
   Future<void> _verify({bool resend = false}) async {
@@ -54,6 +88,15 @@ class _ReservationScreenState extends State<ReservationScreen> {
       } else {
         final state = await BookingService.verifyOtp(_otpCtrl.text.trim(), auth);
         await NotificationService().showReservation(state);
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => BookingScreen(url: BookingService.tripInfoUrl),
+            ),
+          );
+          return;
+        }
       }
       await _load();
     } catch (e) {
@@ -157,90 +200,34 @@ class _ReservationScreenState extends State<ReservationScreen> {
                 ],
 
                 // ── Action Button ────────────────────────────────────────
-                PrimaryButton(
-                  label: ready && !expired ? 'Pay Now' : 'Open Booking',
-                  icon: ready && !expired ? Icons.payment_rounded : Icons.open_in_new_rounded,
-                  loading: _busy,
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => BookingScreen(url: BookingService.tripInfoUrl)),
+                if (awaitingOtp && !expired) ...[
+                  PrimaryButton(
+                    label: 'Verify OTP & Proceed to Payment',
+                    icon: Icons.check_circle_rounded,
+                    loading: _busy,
+                    onPressed: _busy ? null : _verify,
                   ),
-                ),
-                if (ready && !expired) ...[
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF059669),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      icon: Icon(
-                        CreditService().credits <= 0
-                            ? Icons.bolt_rounded
-                            : Icons.check_circle_outline_rounded,
-                        size: 18,
-                      ),
-                      label: Text(
-                        CreditService().credits <= 0
-                            ? 'Buy Credit to Confirm (0 Left)'
-                            : 'Mark as Paid & Confirmed (1 Credit)',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      onPressed: () async {
-                        if (CreditService().credits <= 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('⚠️ You have 0 credits. Please buy credits to confirm booking.'),
-                              backgroundColor: Color(0xFFF59E0B),
-                              behavior: SnackBarBehavior.floating,
-                            ),
-                          );
-                          await RechargeCreditDialog.show(context);
-                          return;
-                        }
-
-                        final confirm = await showDialog<bool>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('Confirm Successful Booking?'),
-                            content: const Text(
-                              'Did you successfully complete payment for these seats on Bangladesh Railway?\n\nExactly 1 credit will be deducted.',
-                            ),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('Cancel'),
-                              ),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
-                                  foregroundColor: Colors.black,
-                                ),
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text('Yes, Confirm (Deduct 1 Credit)'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (confirm == true && mounted) {
-                          await BookingService.completeSuccessfulBooking();
-                          if (mounted) {
-                            Navigator.pop(context);
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('🎉 Booking marked as successful! 1 credit deducted.'),
-                                backgroundColor: Color(0xFF059669),
-                                behavior: SnackBarBehavior.floating,
-                              ),
-                            );
-                          }
-                        }
-                      },
+                  TextButton.icon(
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.primary,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
+                    icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+                    label: const Text('Open Railway Booking Page', style: TextStyle(fontSize: 13)),
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => BookingScreen(url: BookingService.tripInfoUrl)),
+                    ),
+                  ),
+                ] else ...[
+                  PrimaryButton(
+                    label: ready && !expired ? 'Pay Now' : 'Open Booking',
+                    icon: ready && !expired ? Icons.payment_rounded : Icons.open_in_new_rounded,
+                    loading: _busy,
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => BookingScreen(url: BookingService.tripInfoUrl)),
                     ),
                   ),
                 ],

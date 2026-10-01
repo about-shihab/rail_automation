@@ -180,6 +180,15 @@ class _SearchScreenState extends State<SearchScreen> with TickerProviderStateMix
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
+        final errStr = e.toString().toLowerCase();
+        if (errStr.contains('401') ||
+            errStr.contains('session expired') ||
+            errStr.contains('re-login') ||
+            errStr.contains('authenticate') ||
+            errStr.contains('unauthorized')) {
+          _logout();
+          return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(e.toString().replaceAll('Exception: ', '')),
           backgroundColor: AppColors.error,
