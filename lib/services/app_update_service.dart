@@ -33,9 +33,7 @@ class UpdatePolicy {
         uri == null ||
         uri.scheme != 'https' ||
         uri.host.isEmpty ||
-        uri.userInfo.isNotEmpty ||
-        uri.host == 'github.com' ||
-        uri.host == 'api.github.com') {
+        uri.userInfo.isNotEmpty) {
       return null;
     }
     return UpdatePolicy(version, build, minimum, uri);

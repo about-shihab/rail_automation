@@ -1,7 +1,7 @@
 {
   "hosting": {
     "public": "build/public-site",
-    "ignore": ["firebase.json", "**/.*"],
+    "ignore": ["firebase.json", "**/.*", "**/*.apk"],
     "headers": [
       {"source": "/update.json", "headers": [{"key": "Cache-Control", "value": "no-store"}]},
       {"source": "/downloads/**", "headers": [{"key": "Cache-Control", "value": "no-store"}, {"key": "Content-Type", "value": "application/vnd.android.package-archive"}]}

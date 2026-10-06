@@ -12,7 +12,6 @@
     }).then(release => {
       const url = new URL(release.apk_url);
       if (url.protocol !== 'https:' || url.username || url.password ||
-          ['github.com', 'api.github.com'].includes(url.hostname) ||
           !/^\d+\.\d+\.\d+$/.test(release.version) ||
           !Number.isSafeInteger(release.build_number) || release.build_number < 1 ||
           !Number.isSafeInteger(release.size_bytes) || release.size_bytes < 1) return;

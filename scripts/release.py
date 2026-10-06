@@ -16,9 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def public_url(value):
     parsed = urlparse(value)
-    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.query or parsed.fragment or
-            parsed.hostname in ('github.com', 'api.github.com')):
-        raise ValueError('Use a public HTTPS hosting URL, independent of GitHub.')
+    if (parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.query or parsed.fragment):
+        raise ValueError('Use a public HTTPS URL.')
     return value.rstrip('/')
 
 

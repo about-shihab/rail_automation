@@ -32,9 +32,13 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(result['build_number'], 21)
 
     def test_private_or_insecure_download_hosts_are_rejected(self):
-        for value in ['http://example.com', 'https://github.com/private', 'https://token@example.com']:
+        for value in ['http://example.com', 'https://token@example.com', 'ftp://example.com']:
             with self.assertRaises(ValueError):
                 release.public_url(value)
+        self.assertEqual(
+            release.public_url('https://github.com/about-shihab/rail_automation'),
+            'https://github.com/about-shihab/rail_automation'
+        )
 
 
 if __name__ == '__main__':

@@ -37,6 +37,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
+
+      - name: Cache Android CMake
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/cmake
+          key: android-cmake-3.22.1
+
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: flutter-pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            flutter-pub-${{ runner.os }}-
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.47.1'
@@ -97,11 +116,12 @@ jobs:
         run: |
           cp build/app/outputs/flutter-apk/app-release.apk Rail-Pro.apk
           gh release create "v$VERSION" Rail-Pro.apk \
-            --target "$GITHUB_SHA" --title "Rail Pro $VERSION" --generate-notes
+            --target "$GITHUB_SHA" --title "Rail Pro $VERSION" --generate-notes || \
+          gh release upload "v$VERSION" Rail-Pro.apk --clobber
 
       - name: Remove the APK from the site and point links at the release
         run: |
-          rm -f build/public-site/downloads/*.apk
+          rm -rf build/public-site/downloads
           sed -i "s#$SITE_URL/downloads/Rail-Pro.apk#$APK_URL#g; s#/downloads/Rail-Pro.apk#$APK_URL#g" \
             build/public-site/index.html build/public-site/update.json
 
@@ -111,3 +131,10 @@ jobs:
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           projectId: ${{ env.FIREBASE_PROJECT }}
           channelId: live
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-${{ steps.version.outputs.version }}
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/public-site/update.json

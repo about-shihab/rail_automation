@@ -45,11 +45,16 @@ void main() {
       {...manifest(), 'version': 'latest'},
       {...manifest(), 'apk_url': 'http://rail.example/app.apk'},
       {...manifest(), 'apk_url': 'https://secret@rail.example/app.apk'},
-      {...manifest(), 'apk_url': 'https://github.com/private/repo/releases'},
       {...manifest(), 'apk_url': 'javascript:alert(1)'},
     ]) {
       expect(UpdatePolicy.parse(value), isNull);
     }
+    final githubPolicy = UpdatePolicy.parse({
+      ...manifest(),
+      'apk_url': 'https://github.com/about-shihab/rail_automation/releases/latest/download/Rail-Pro.apk',
+    });
+    expect(githubPolicy, isNotNull);
+    expect(githubPolicy!.download.host, 'github.com');
   });
 
   test(
