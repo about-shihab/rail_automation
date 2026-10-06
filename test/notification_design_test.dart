@@ -64,7 +64,25 @@ void main() {
       'status': 'awaitingOtp',
       'autoVerify': true,
     });
-    expect(calls.where((call) => call.method == 'show'), isEmpty);
+    expect(latest()['id'], NotificationService.idSeatFound);
+    expect(latest()['title'], 'Seats held · Booking in progress');
+    expect(latest()['payload'], 'rail://booking-progress');
+    expect(
+      calls.where(
+        (call) =>
+            call.method == 'show' &&
+            (call.arguments as Map)['id'] == NotificationService.idOtp,
+      ),
+      isEmpty,
+    );
+    expect(
+      calls.where(
+        (call) =>
+            call.method == 'cancel' &&
+            (call.arguments as Map)['id'] == NotificationService.idSeatFound,
+      ),
+      isEmpty,
+    );
     await NotificationService().showReservation({
       'status': 'readyForPayment',
       'autoVerify': true,
@@ -72,17 +90,33 @@ void main() {
     expect(latest()['title'], 'Seats held · Pay now');
   });
 
-  test('foreground monitoring suppresses seat alerts', () async {
+  test('seat alerts are delivered even while the app is visible', () async {
     NotificationService().appVisible = true;
     try {
       await NotificationService().triggerTurnstileRequiredAlert(
         trainName: 'DEMO',
         seatType: 'SNIGDHA',
       );
-      expect(calls.where((call) => call.method == 'show'), isEmpty);
+      expect(latest()['id'], NotificationService.idSeatFound);
+      expect(latest()['payload'], 'rail://turnstile');
     } finally {
       NotificationService().appVisible = false;
     }
+  });
+
+  test('automatic booking seat alert opens progress instead of a competing booking', () async {
+    await NotificationService().triggerSeatAvailableAlert(
+      trainName: 'DEMO',
+      seatType: 'SNIGDHA',
+      seatCount: 2,
+      travelDate: '23-Sep-2026',
+      automaticBooking: true,
+    );
+    expect(latest()['payload'], 'rail://booking-progress');
+    expect(latest()['title'], 'Seat found · Booking in progress');
+    final details = latest()['platformSpecifics'] as Map;
+    expect(details['sound'], 'seat_found');
+    expect((details['actions'] as List).first['title'], 'View progress');
   });
 
   test('alerts follow saved Bangla language and retain destinations', () async {

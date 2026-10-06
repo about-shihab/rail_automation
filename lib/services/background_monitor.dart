@@ -6,6 +6,7 @@ import 'notification_service.dart';
 import 'pro_service.dart';
 import 'foreground_monitor.dart';
 import 'app_config.dart';
+import 'app_update_service.dart';
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
@@ -13,6 +14,7 @@ void callbackDispatcher() {
     final pro = ProService();
     final monitor = MonitorService(proService: pro, backgroundWorker: true);
     try {
+      await AppUpdateService.instance.refresh();
       await AppConfig.instance.reloadCache();
       await NotificationService().initialize(background: true);
       await monitor.restore(startTimers: false);
@@ -59,7 +61,9 @@ class BackgroundMonitor {
   }
 
   static Future<void> cancel() async {
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) await ForegroundMonitor.stop();
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      await ForegroundMonitor.stop();
+    }
     if (supported) await Workmanager().cancelByUniqueName(taskName);
   }
 }

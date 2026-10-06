@@ -5,6 +5,8 @@ import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'app_config.dart';
+import 'booking_activity.dart';
+import 'app_update_service.dart';
 import 'firebase_user_service.dart';
 import 'monitor_service.dart';
 import 'notification_service.dart';
@@ -22,6 +24,15 @@ void monitoringEntryPoint(ServiceInstance service) async {
   Timer? timer;
   bool stopped = false;
   bool busy = false;
+  void reportActivity() {
+    final activity = BookingActivity.instance;
+    service.invoke('booking-activity', {
+      'stage': activity.busy ? activity.stage.name : null,
+    });
+  }
+
+  BookingActivity.instance.addListener(reportActivity);
+  service.on('booking-activity-request').listen((_) => reportActivity());
   // A service isolate cannot own a visible platform view. Reuse the rendered
   // browser in the UI engine via service messages, including while it is idle.
   TurnstileGate.instance.workerAcquire = (label) async {
@@ -35,6 +46,8 @@ void monitoringEntryPoint(ServiceInstance service) async {
   service.on('stop').listen((_) async {
     stopped = true;
     timer?.cancel();
+    BookingActivity.instance.removeListener(reportActivity);
+    service.invoke('booking-activity', {'stage': null});
     SmsService().stopListening();
     monitor.dispose();
     pro.dispose();
@@ -44,6 +57,8 @@ void monitoringEntryPoint(ServiceInstance service) async {
   Timer(const Duration(hours: 5), () async {
     stopped = true;
     timer?.cancel();
+    BookingActivity.instance.removeListener(reportActivity);
+    service.invoke('booking-activity', {'stage': null});
     SmsService().stopListening();
     monitor.stopMonitoring();
     await service.stopSelf();
@@ -55,6 +70,7 @@ void monitoringEntryPoint(ServiceInstance service) async {
     if (busy || stopped) return;
     busy = true;
     try {
+      await AppUpdateService.instance.refresh();
       final visibility = Completer<bool>();
       final visibilityId = DateTime.now().microsecondsSinceEpoch.toString();
       final visibilitySub = service.on('ui-visibility-result').listen((event) {
@@ -75,6 +91,8 @@ void monitoringEntryPoint(ServiceInstance service) async {
       if (!monitor.isMonitoring) {
         stopped = true;
         timer?.cancel();
+        BookingActivity.instance.removeListener(reportActivity);
+        service.invoke('booking-activity', {'stage': null});
         await service.stopSelf();
         return;
       }
@@ -160,10 +178,22 @@ class ForegroundMonitor {
   static StreamSubscription<Map<String, dynamic>?>? _verificationCancellations;
   static String? _activeVerificationId;
   static StreamSubscription<Map<String, dynamic>?>? _visibilityRequests;
+  static StreamSubscription<Map<String, dynamic>?>? _bookingActivity;
 
   /// Install before starting the service. The browser is preloaded by the
   /// MaterialApp host and survives navigation and app backgrounding in memory.
   static void connectVerificationUi() {
+    _bookingActivity ??= FlutterBackgroundService()
+        .on('booking-activity')
+        .listen((event) {
+          final name = event?['stage'];
+          BookingActivity.instance.setWorkerStage(
+            BookingActivityStage.values
+                .where((stage) => stage.name == name)
+                .firstOrNull,
+          );
+        });
+    FlutterBackgroundService().invoke('booking-activity-request');
     _visibilityRequests ??= FlutterBackgroundService()
         .on('ui-visibility-request')
         .listen((event) {
@@ -250,6 +280,9 @@ class ForegroundMonitor {
   }
 
   static Future<void> disconnectVerificationUi() async {
+    await _bookingActivity?.cancel();
+    _bookingActivity = null;
+    BookingActivity.instance.setWorkerStage(null);
     await _visibilityRequests?.cancel();
     _visibilityRequests = null;
     await _verificationRequests?.cancel();
@@ -258,6 +291,15 @@ class ForegroundMonitor {
     _verificationCancellations = null;
     _activeVerificationId = null;
     TurnstileSession.instance.cancel();
+  }
+
+  static Future<void> syncBookingActivity() async {
+    if (!initialized) return;
+    if (await FlutterBackgroundService().isRunning()) {
+      FlutterBackgroundService().invoke('booking-activity-request');
+    } else {
+      BookingActivity.instance.setWorkerStage(null);
+    }
   }
 
   static Stream<Map<String, dynamic>?> get updates =>
@@ -308,6 +350,7 @@ class ForegroundMonitor {
     if (!initialized) return;
     TurnstileGate.instance.dismiss();
     FlutterBackgroundService().invoke('stop');
+    BookingActivity.instance.setWorkerStage(null);
     for (var i = 0; i < 30; i++) {
       if (!await FlutterBackgroundService().isRunning()) return;
       await Future<void>.delayed(const Duration(milliseconds: 100));

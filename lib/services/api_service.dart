@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'app_config.dart';
+import 'booking_activity.dart';
 import 'secure_store.dart';
 import 'seat_layout_challenge.dart';
 
@@ -34,77 +35,79 @@ class ApiService {
     String? seatClass,
     required AuthSession authSession,
   }) async {
-    final queryParams = <String, String>{
-      'from_city': fromCity.trim(),
-      'to_city': toCity.trim(),
-      'date_of_journey': dateOfJourney.trim(),
-    };
-    queryParams['seat_class'] = requestSeatClass(seatClass);
+    return BookingActivity.instance.run(BookingActivityStage.searching, () async {
+      final queryParams = <String, String>{
+        'from_city': fromCity.trim(),
+        'to_city': toCity.trim(),
+        'date_of_journey': dateOfJourney.trim(),
+      };
+      queryParams['seat_class'] = requestSeatClass(seatClass);
 
-    final uri = Uri.parse('$baseUrl/bookings/search-trips-v2')
-        .replace(queryParameters: queryParams);
+      final uri = Uri.parse('$baseUrl/bookings/search-trips-v2')
+          .replace(queryParameters: queryParams);
 
-    final headers = <String, String>{
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Origin': 'https://eticket.railway.gov.bd',
-      'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua':
-          '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-      'sec-ch-ua-platform': '"Windows"',
-      'sec-ch-ua-mobile': '?0',
-      'Sec-Fetch-Site': 'same-site',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Dest': 'empty',
-    };
+      final headers = <String, String>{
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://eticket.railway.gov.bd',
+        'Referer': 'https://eticket.railway.gov.bd/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua':
+            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+        'Sec-Fetch-Site': 'same-site',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
+      };
 
-    if (authSession.token.isNotEmpty) {
-      headers['Authorization'] = authSession.token.startsWith('Bearer ')
-          ? authSession.token
-          : 'Bearer ${authSession.token}';
-    }
+      if (authSession.token.isNotEmpty) {
+        headers['Authorization'] = authSession.token.startsWith('Bearer ')
+            ? authSession.token
+            : 'Bearer ${authSession.token}';
+      }
 
-    final devId = authSession.deviceId.isNotEmpty
-        ? authSession.deviceId
-        : AuthSession.generateUuid();
-    headers['X-Device-Id'] = devId;
+      final devId = authSession.deviceId.isNotEmpty
+          ? authSession.deviceId
+          : AuthSession.generateUuid();
+      headers['X-Device-Id'] = devId;
 
-    if (authSession.deviceKey.isNotEmpty) {
-      headers['X-Device-Key'] = authSession.deviceKey;
-    }
+      if (authSession.deviceKey.isNotEmpty) {
+        headers['X-Device-Key'] = authSession.deviceKey;
+      }
 
-    if (authSession.cookie != null && authSession.cookie!.isNotEmpty) {
-      headers['Cookie'] = authSession.cookie!;
-    }
+      if (authSession.cookie != null && authSession.cookie!.isNotEmpty) {
+        headers['Cookie'] = authSession.cookie!;
+      }
 
-    final response = await http
-        .get(uri, headers: headers)
-        .timeout(
-          Duration(
-            seconds: AppConfig.instance.number('request_timeout_seconds'),
-          ),
-          onTimeout: () =>
-              throw Exception('Connection timed out. Shohoz server is slow.'),
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(
+            Duration(
+              seconds: AppConfig.instance.number('request_timeout_seconds'),
+            ),
+            onTimeout: () =>
+                throw Exception('Connection timed out. Shohoz server is slow.'),
+          );
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        return TripSearchResponse.fromJson(decoded);
+      } else if (response.statusCode == 401) {
+        throw Exception(
+          'Session expired (401). Please re-login via Railway Webview.',
         );
-
-    if (response.statusCode == 200) {
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      return TripSearchResponse.fromJson(decoded);
-    } else if (response.statusCode == 401) {
-      throw Exception(
-        'Session expired (401). Please re-login via Railway Webview.',
-      );
-    } else if (response.statusCode == 403) {
-      throw Exception(
-        'Access Denied (403). Cloudflare/Device integrity check required.',
-      );
-    } else {
-      throw Exception(
-        'Server returned code ${response.statusCode}: ${response.body.isNotEmpty ? response.body : "Unknown error"}',
-      );
-    }
+      } else if (response.statusCode == 403) {
+        throw Exception(
+          'Access Denied (403). Cloudflare/Device integrity check required.',
+        );
+      } else {
+        throw Exception(
+          'Server returned code ${response.statusCode}: ${response.body.isNotEmpty ? response.body : "Unknown error"}',
+        );
+      }
+    });
   }
 
   /// Provides realistic Bangladesh Railway train trips matching the official Shohoz search-trips-v2 schema.
@@ -424,121 +427,123 @@ class ApiService {
     required AuthSession authSession,
     String? cftResponse,
   }) async {
-    final queryParams = <String, String>{
-      'trip_id': tripId.toString(),
-      'trip_route_id': tripRouteId.toString(),
-    };
-    if (cftResponse != null && cftResponse.isNotEmpty) {
-      queryParams['cft_response'] = cftResponse;
-    }
+    return BookingActivity.instance.run(BookingActivityStage.layout, () async {
+      final queryParams = <String, String>{
+        'trip_id': tripId.toString(),
+        'trip_route_id': tripRouteId.toString(),
+      };
+      if (cftResponse != null && cftResponse.isNotEmpty) {
+        queryParams['cft_response'] = cftResponse;
+      }
 
-    final uri = Uri.parse('$baseUrl/bookings/seat-layout')
-        .replace(queryParameters: queryParams);
+      final uri = Uri.parse('$baseUrl/bookings/seat-layout')
+          .replace(queryParameters: queryParams);
 
-    final headers = <String, String>{
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Origin': 'https://eticket.railway.gov.bd',
-      'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua':
-          '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-      'sec-ch-ua-platform': '"Windows"',
-      'sec-ch-ua-mobile': '?0',
-      'Sec-Fetch-Site': 'same-site',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Dest': 'empty',
-    };
+      final headers = <String, String>{
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Origin': 'https://eticket.railway.gov.bd',
+        'Referer': 'https://eticket.railway.gov.bd/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua':
+            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+        'Sec-Fetch-Site': 'same-site',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Dest': 'empty',
+      };
 
-    if (authSession.token.isNotEmpty) {
-      headers['Authorization'] = authSession.token.startsWith('Bearer ')
-          ? authSession.token
-          : 'Bearer ${authSession.token}';
-    }
+      if (authSession.token.isNotEmpty) {
+        headers['Authorization'] = authSession.token.startsWith('Bearer ')
+            ? authSession.token
+            : 'Bearer ${authSession.token}';
+      }
 
-    final devId = authSession.deviceId.isNotEmpty
-        ? authSession.deviceId
-        : AuthSession.generateUuid();
-    headers['X-Device-Id'] = devId;
+      final devId = authSession.deviceId.isNotEmpty
+          ? authSession.deviceId
+          : AuthSession.generateUuid();
+      headers['X-Device-Id'] = devId;
 
-    if (authSession.deviceKey.isNotEmpty) {
-      headers['X-Device-Key'] = authSession.deviceKey;
-    }
+      if (authSession.deviceKey.isNotEmpty) {
+        headers['X-Device-Key'] = authSession.deviceKey;
+      }
 
-    // Send stored action-token from a previous session if available
-    final storedActionToken = await SecureStore.read('rail_action_token');
-    if (storedActionToken != null && storedActionToken.isNotEmpty) {
-      headers['X-Action-Token'] = storedActionToken;
-    }
+      // Send stored action-token from a previous session if available
+      final storedActionToken = await SecureStore.read('rail_action_token');
+      if (storedActionToken != null && storedActionToken.isNotEmpty) {
+        headers['X-Action-Token'] = storedActionToken;
+      }
 
-    if (authSession.cookie?.isNotEmpty == true) {
-      headers['Cookie'] = authSession.cookie!;
-    }
-    final response = await http
-        .get(uri, headers: headers)
-        .timeout(
-          Duration(
-            seconds: AppConfig.instance.number('request_timeout_seconds'),
-          ),
+      if (authSession.cookie?.isNotEmpty == true) {
+        headers['Cookie'] = authSession.cookie!;
+      }
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(
+            Duration(
+              seconds: AppConfig.instance.number('request_timeout_seconds'),
+            ),
+          );
+      if (response.statusCode != 200) {
+        String? serverMsg;
+        try {
+          final parsed = jsonDecode(response.body);
+          if (parsed is Map) {
+            serverMsg =
+                parsed['message']?.toString() ??
+                parsed['error']?.toString() ??
+                parsed['detail']?.toString() ??
+                parsed['msg']?.toString();
+          }
+        } catch (_) {
+          if (response.body.isNotEmpty && response.body.length < 200) {
+            serverMsg = response.body;
+          }
+        }
+        final detail = (serverMsg != null && serverMsg.isNotEmpty)
+            ? ': $serverMsg'
+            : '';
+        if (response.statusCode == 401) {
+          throw Exception('Railway session expired • Please sign in again');
+        }
+        final challenge = RegExp(
+          r'turnstile|cft_response|human check|human verification',
+          caseSensitive: false,
+        ).hasMatch(response.body);
+        if (challenge &&
+            (response.statusCode == 403 || response.statusCode == 422)) {
+          throw const SeatLayoutChallenge();
+        }
+        if (response.statusCode == 429) {
+          throw Exception('Railway server busy (429) • Please wait a moment');
+        }
+        throw Exception(
+          'Seat layout request failed (${response.statusCode})$detail',
         );
-    if (response.statusCode != 200) {
-      String? serverMsg;
+      }
+      dynamic decoded;
       try {
-        final parsed = jsonDecode(response.body);
-        if (parsed is Map) {
-          serverMsg =
-              parsed['message']?.toString() ??
-              parsed['error']?.toString() ??
-              parsed['detail']?.toString() ??
-              parsed['msg']?.toString();
-        }
-      } catch (_) {
-        if (response.body.isNotEmpty && response.body.length < 200) {
-          serverMsg = response.body;
-        }
+        decoded = jsonDecode(response.body);
+      } on FormatException {
+        throw Exception(
+          'Railway returned an unreadable response. Open the official booking page to continue.',
+        );
       }
-      final detail = (serverMsg != null && serverMsg.isNotEmpty)
-          ? ': $serverMsg'
-          : '';
-      if (response.statusCode == 401) {
-        throw Exception('Railway session expired • Please sign in again');
+      if (decoded is! Map<String, dynamic> ||
+          decoded['data'] is! Map ||
+          decoded['data']['seatLayout'] is! List) {
+        throw const FormatException(
+          'Railway did not return a seat layout. Open the official booking page to continue.',
+        );
       }
-      final challenge = RegExp(
-        r'turnstile|cft_response|human check|human verification',
-        caseSensitive: false,
-      ).hasMatch(response.body);
-      if (challenge &&
-          (response.statusCode == 403 || response.statusCode == 422)) {
-        throw const SeatLayoutChallenge();
+      final actionToken = response.headers['x-action-token'];
+      if (actionToken != null) {
+        await SecureStore.write('rail_action_token', actionToken);
       }
-      if (response.statusCode == 429) {
-        throw Exception('Railway server busy (429) • Please wait a moment');
-      }
-      throw Exception(
-        'Seat layout request failed (${response.statusCode})$detail',
-      );
-    }
-    dynamic decoded;
-    try {
-      decoded = jsonDecode(response.body);
-    } on FormatException {
-      throw Exception(
-        'Railway returned an unreadable response. Open the official booking page to continue.',
-      );
-    }
-    if (decoded is! Map<String, dynamic> ||
-        decoded['data'] is! Map ||
-        decoded['data']['seatLayout'] is! List) {
-      throw const FormatException(
-        'Railway did not return a seat layout. Open the official booking page to continue.',
-      );
-    }
-    final actionToken = response.headers['x-action-token'];
-    if (actionToken != null) {
-      await SecureStore.write('rail_action_token', actionToken);
-    }
-    return SeatLayoutResponse.fromJson(decoded);
+      return SeatLayoutResponse.fromJson(decoded);
+    });
   }
 
   /// Provides realistic seat layout matching the official Shohoz seat-layout response
@@ -1106,51 +1111,55 @@ class ApiService {
   static Future<List<PurchasedTicket>> getPurchaseHistory({
     required AuthSession authSession,
   }) async {
-    final uri = Uri.parse('$baseUrl/purchase-history');
+    return BookingActivity.instance.run(BookingActivityStage.tickets, () async {
+      final uri = Uri.parse('$baseUrl/purchase-history');
 
-    final headers = <String, String>{
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'Origin': 'https://eticket.railway.gov.bd',
-      'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua':
-          '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
-      'sec-ch-ua-platform': '"Windows"',
-      'sec-ch-ua-mobile': '?0',
-    };
+      final headers = <String, String>{
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Origin': 'https://eticket.railway.gov.bd',
+        'Referer': 'https://eticket.railway.gov.bd/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua':
+            '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+      };
 
-    if (authSession.token.isNotEmpty) {
-      headers['Authorization'] = authSession.token.startsWith('Bearer ')
-          ? authSession.token
-          : 'Bearer ${authSession.token}';
-    }
-    if (authSession.deviceKey.isNotEmpty) {
-      headers['X-Device-Key'] = authSession.deviceKey;
-    }
-    if (authSession.deviceId.isNotEmpty) {
-      headers['X-Device-Id'] = authSession.deviceId;
-    }
+      if (authSession.token.isNotEmpty) {
+        headers['Authorization'] = authSession.token.startsWith('Bearer ')
+            ? authSession.token
+            : 'Bearer ${authSession.token}';
+      }
+      if (authSession.deviceKey.isNotEmpty) {
+        headers['X-Device-Key'] = authSession.deviceKey;
+      }
+      if (authSession.deviceId.isNotEmpty) {
+        headers['X-Device-Id'] = authSession.deviceId;
+      }
 
-    final response = await http
-        .get(uri, headers: headers)
-        .timeout(
-          Duration(
-            seconds: AppConfig.instance.number('request_timeout_seconds'),
-          ),
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(
+            Duration(
+              seconds: AppConfig.instance.number('request_timeout_seconds'),
+            ),
+          );
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = json['data'] as List<dynamic>? ?? [];
+        return data
+            .map(
+              (item) => PurchasedTicket.fromJson(item as Map<String, dynamic>),
+            )
+            .toList();
+      } else {
+        throw Exception(
+          'Failed to fetch purchase history (${response.statusCode}): ${response.body}',
         );
-    if (response.statusCode == 200) {
-      final json = jsonDecode(response.body) as Map<String, dynamic>;
-      final data = json['data'] as List<dynamic>? ?? [];
-      return data
-          .map((item) => PurchasedTicket.fromJson(item as Map<String, dynamic>))
-          .toList();
-    } else {
-      throw Exception(
-        'Failed to fetch purchase history (${response.statusCode}): ${response.body}',
-      );
-    }
+      }
+    });
   }
 
   /// Downloads the official PDF ticket for a given order ID.
@@ -1158,72 +1167,74 @@ class ApiService {
     required int orderId,
     required AuthSession authSession,
   }) async {
-    final uri = Uri.parse('$baseUrl/trips/download-ticket/$orderId');
+    return BookingActivity.instance.run(BookingActivityStage.tickets, () async {
+      final uri = Uri.parse('$baseUrl/trips/download-ticket/$orderId');
 
-    final headers = <String, String>{
-      'Accept': 'application/pdf, application/json, */*',
-      'Origin': 'https://eticket.railway.gov.bd',
-      'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua':
-          '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-      'sec-ch-ua-platform': '"Windows"',
-      'sec-ch-ua-mobile': '?0',
-    };
+      final headers = <String, String>{
+        'Accept': 'application/pdf, application/json, */*',
+        'Origin': 'https://eticket.railway.gov.bd',
+        'Referer': 'https://eticket.railway.gov.bd/',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua':
+            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+      };
 
-    if (authSession.token.isNotEmpty) {
-      headers['Authorization'] = authSession.token.startsWith('Bearer ')
-          ? authSession.token
-          : 'Bearer ${authSession.token}';
-    }
-    if (authSession.deviceKey.isNotEmpty) {
-      headers['X-Device-Key'] = authSession.deviceKey;
-    }
-    if (authSession.deviceId.isNotEmpty) {
-      headers['X-Device-Id'] = authSession.deviceId;
-    }
+      if (authSession.token.isNotEmpty) {
+        headers['Authorization'] = authSession.token.startsWith('Bearer ')
+            ? authSession.token
+            : 'Bearer ${authSession.token}';
+      }
+      if (authSession.deviceKey.isNotEmpty) {
+        headers['X-Device-Key'] = authSession.deviceKey;
+      }
+      if (authSession.deviceId.isNotEmpty) {
+        headers['X-Device-Id'] = authSession.deviceId;
+      }
 
-    final response = await http
-        .get(uri, headers: headers)
-        .timeout(
-          Duration(
-            seconds: AppConfig.instance.number('request_timeout_seconds'),
-          ),
-        );
-    if (response.statusCode == 200) {
-      final bytes = response.bodyBytes;
-      // If server returned a JSON wrapper containing the download URL:
-      if (bytes.isNotEmpty && bytes[0] == 0x7B) {
-        try {
-          final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
-          final url =
-              json['data']?['url'] ??
-              json['data']?['download_url'] ??
-              json['data']?['ticket_url'] ??
-              json['url'];
-          if (url != null && url.toString().isNotEmpty) {
-            final fileRes = await http.get(Uri.parse(url.toString()));
-            if (fileRes.statusCode == 200) {
-              return fileRes.bodyBytes;
+      final response = await http
+          .get(uri, headers: headers)
+          .timeout(
+            Duration(
+              seconds: AppConfig.instance.number('request_timeout_seconds'),
+            ),
+          );
+      if (response.statusCode == 200) {
+        final bytes = response.bodyBytes;
+        // If server returned a JSON wrapper containing the download URL:
+        if (bytes.isNotEmpty && bytes[0] == 0x7B) {
+          try {
+            final json = jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
+            final url =
+                json['data']?['url'] ??
+                json['data']?['download_url'] ??
+                json['data']?['ticket_url'] ??
+                json['url'];
+            if (url != null && url.toString().isNotEmpty) {
+              final fileRes = await http.get(Uri.parse(url.toString()));
+              if (fileRes.statusCode == 200) {
+                return fileRes.bodyBytes;
+              }
             }
-          }
-        } catch (_) {}
-      }
-      return bytes;
-    } else if (response.statusCode == 301 || response.statusCode == 302) {
-      final location = response.headers['location'];
-      if (location != null && location.isNotEmpty) {
-        final redirectRes = await http.get(Uri.parse(location));
-        if (redirectRes.statusCode == 200) {
-          return redirectRes.bodyBytes;
+          } catch (_) {}
         }
+        return bytes;
+      } else if (response.statusCode == 301 || response.statusCode == 302) {
+        final location = response.headers['location'];
+        if (location != null && location.isNotEmpty) {
+          final redirectRes = await http.get(Uri.parse(location));
+          if (redirectRes.statusCode == 200) {
+            return redirectRes.bodyBytes;
+          }
+        }
+        throw Exception('Redirected but could not download ticket');
+      } else {
+        throw Exception(
+          'Failed to download ticket (${response.statusCode}): ${response.body}',
+        );
       }
-      throw Exception('Redirected but could not download ticket');
-    } else {
-      throw Exception(
-        'Failed to download ticket (${response.statusCode}): ${response.body}',
-      );
-    }
+    });
   }
 }

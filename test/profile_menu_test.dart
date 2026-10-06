@@ -51,6 +51,9 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
+    expect(find.text('Follow us on Facebook'), findsOneWidget);
+    expect(find.text('facebook.com/railpro'), findsOneWidget);
+
     // Verify Developer Information is present and collapsed initially
     expect(find.text('Developer Information'), findsOneWidget);
     expect(find.text('Lead Developer & Creator'), findsNothing);

@@ -12,6 +12,7 @@ import 'turnstile_session.dart';
 /// Coordinates one in-app verification overlay for a pending seat-layout read.
 /// Unsubmitted tokens may be cached briefly; submitted tokens are consumed.
 class TurnstileGate {
+  bool get isPresenting => _route?.isActive ?? false;
   TurnstileGate._();
   static final TurnstileGate instance = TurnstileGate._();
 

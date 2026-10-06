@@ -1,6 +1,29 @@
 (() => {
   'use strict';
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const download = document.querySelector('#download-link');
+  if (download) {
+    download.addEventListener('click', event => {
+      if (download.getAttribute('aria-disabled') === 'true') event.preventDefault();
+    });
+    fetch(download.dataset.manifest, { cache: 'no-store' }).then(response => {
+      if (!response.ok) throw new Error('Release not published');
+      return response.json();
+    }).then(release => {
+      const url = new URL(release.apk_url);
+      if (url.protocol !== 'https:' || url.username || url.password ||
+          ['github.com', 'api.github.com'].includes(url.hostname) ||
+          !/^\d+\.\d+\.\d+$/.test(release.version) ||
+          !Number.isSafeInteger(release.build_number) || release.build_number < 1 ||
+          !Number.isSafeInteger(release.size_bytes) || release.size_bytes < 1) return;
+      download.href = url.href;
+      download.setAttribute('aria-disabled', 'false');
+      const detail = download.querySelector('small');
+      detail.removeAttribute('data-en');
+      detail.removeAttribute('data-bn');
+      detail.textContent = `v${release.version} · APK · ${(release.size_bytes / 1048576).toFixed(1)} MB`;
+    }).catch(() => { /* Keep an honest unavailable state until publication. */ });
+  }
   if ('IntersectionObserver' in window && !reducedMotion.matches) {
     const observer = new IntersectionObserver(entries => {
       entries.forEach(entry => {
@@ -28,8 +51,8 @@
   ];
   const bengaliFrames = [
     ['আসনের খোঁজ চলছে', 'বারবার নিজে চেক করার প্রয়োজন নেই।', '#i-radar'],
-    ['আসন পাওয়া গেছে!', 'একটি স্পষ্ট বার্তা। অটো বুকিং চালু থাকলে বুকিং শুরু।', '#i-bell'],
-    ['OTP যাচাই হয়েছে', 'আপনার SMS সম্মতি পেয়ে স্বয়ংক্রিয় যাচাই।', '#i-shield'],
+    ['আসন পাওয়া গেছে!', 'স্বয়ংক্রিয় বুকিং চালু থাকলে রিজার্ভেশন শুরু হবে।', '#i-bell'],
+    ['OTP যাচাই হয়েছে', 'আপনার অনুমতি নিয়ে কোড যাচাই করা হয়েছে।', '#i-shield'],
     ['আসন রিজার্ভ হয়েছে', 'টিকিট নিশ্চিত করতে রেলওয়ে পোর্টালে পেমেন্ট করুন।', '#i-check'],
   ];
   let locale = 'bn';
@@ -73,7 +96,7 @@
       image.alt = imageLabels[index];
     });
     document.title = locale === 'bn'
-      ? 'Rail Pro — বারবার চেক নয়, যাত্রার প্রস্তুতি নিন'
+      ? 'Rail Pro — আসনের খোঁজ রাখুন, যাত্রার প্রস্তুতি নিন'
       : 'Rail Pro — Stop refreshing. Start your journey.';
     document.querySelectorAll('[data-en][data-bn]').forEach(element => {
       element.textContent = element.dataset[locale];

@@ -24,6 +24,16 @@ class MainActivity : FlutterActivity() {
             OVERLAY_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                "appVersion" -> {
+                    val info = packageManager.getPackageInfo(packageName, 0)
+                    val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        info.longVersionCode
+                    } else {
+                        @Suppress("DEPRECATION")
+                        info.versionCode.toLong()
+                    }
+                    result.success(mapOf("version" to info.versionName, "build" to code))
+                }
 
                 // Saves PDF bytes to Downloads and opens the PDF viewer
                 "saveAndOpenPdf" -> {

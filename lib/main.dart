@@ -21,9 +21,14 @@ import 'services/overlay_service.dart';
 import 'views/app_shell.dart';
 import 'views/webview_login_screen.dart';
 import 'widgets/turnstile_host.dart';
+import 'widgets/app_update_gate.dart';
+import 'widgets/booking_activity_overlay.dart';
+import 'services/app_update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppUpdateService.instance.initialize();
+  unawaited(AppUpdateService.instance.refresh());
 
   // Initialize notifications
   final notificationService = NotificationService();
@@ -102,7 +107,9 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       await monitor.restore(startTimers: startTimers);
       if (!mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) monitor.resumePendingTurnstile();
+        if (mounted && !AppUpdateService.instance.required) {
+          monitor.resumePendingTurnstile();
+        }
       });
     } finally {
       _syncingMonitor = false;
@@ -129,8 +136,12 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      unawaited(ForegroundMonitor.syncBookingActivity());
+      unawaited(AppUpdateService.instance.refresh(force: true));
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) NotificationService().openPendingBooking();
+        if (mounted && !AppUpdateService.instance.required) {
+          NotificationService().openPendingBooking();
+        }
       });
       unawaited(_syncMonitor(startTimers: true));
       unawaited(OtpVerifier.listen());
@@ -158,7 +169,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final hasSearch = monitor.dateOfJourney.isNotEmpty;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
+      if (!mounted || AppUpdateService.instance.required) return;
       NotificationService().openPendingBooking();
       monitor.resumePendingTurnstile();
     });
@@ -170,7 +181,9 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       theme: AppThemes.lightTheme,
       darkTheme: AppThemes.darkTheme,
       themeMode: themeService.themeMode,
-      builder: (context, child) => TurnstileHost(child: child!),
+      builder: (context, child) => AppUpdateGate(
+        child: TurnstileHost(child: BookingActivityOverlay(child: child!)),
+      ),
       home: widget.startLoggedIn
           ? AppShell(
               initialTab: hasSearch ? AppShell.tabMonitor : AppShell.tabSearch,

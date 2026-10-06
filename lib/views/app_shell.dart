@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/auth_session.dart';
 import '../services/booking_service.dart';
+import '../services/app_update_service.dart';
 import '../services/credit_service.dart';
 import '../services/firebase_user_service.dart';
 import '../services/language_service.dart';
@@ -560,6 +562,35 @@ class ProfileTab extends StatelessWidget {
           const SizedBox(height: 14),
 
           // ── Developer Information (Expandable, Collapsed Initially) ──
+          AppCard(
+            child: tile(
+              Icons.facebook_rounded,
+              lang.tr('Follow us on Facebook', 'Facebook-এ আমাদের অনুসরণ করুন'),
+              sub: 'facebook.com/railpro',
+              onTap: () async {
+                var opened = false;
+                try {
+                  opened = await launchUrl(
+                    Uri.parse('https://www.facebook.com/railpro'),
+                    mode: LaunchMode.externalApplication,
+                  );
+                } catch (_) {}
+                if (!opened && context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        lang.tr(
+                          'Could not open Facebook. Please try again.',
+                          'Facebook খোলা যায়নি। আবার চেষ্টা করুন।',
+                        ),
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 14),
           _ExpandableDeveloperCard(isDark: isDark, lang: lang),
           const SizedBox(height: 14),
 
@@ -606,8 +637,8 @@ class ProfileTab extends StatelessWidget {
           Center(
             child: Text(
               lang.tr(
-                'Rail Pro v1.0.0 · Developed by Abdulla Al Mamun',
-                'রেল প্রো v১.০.০ · প্রস্তুতকারক: আবদুল্লাহ আল মামুন',
+                'Rail Pro v${AppUpdateService.instance.installedVersion} (${AppUpdateService.instance.installedBuild}) · Developed by Abdulla Al Mamun',
+                'রেল প্রো v${AppUpdateService.instance.installedVersion} (${AppUpdateService.instance.installedBuild}) · প্রস্তুতকারক: আবদুল্লাহ আল মামুন',
               ),
               style: TextStyle(
                 fontSize: 11.5,

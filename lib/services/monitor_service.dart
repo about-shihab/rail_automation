@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import '../models/booking_intent.dart';
 import 'app_config.dart';
+import 'app_update_service.dart';
 import 'booking_service.dart';
 import 'credit_service.dart';
 import 'foreground_monitor.dart';
@@ -898,6 +899,19 @@ class MonitorService extends ChangeNotifier {
 
   Future<void> _executeCheck() async {
     if (!_isMonitoring || _checking || _disposed) return;
+    final policyGeneration = _generation;
+    await AppUpdateService.instance.reloadCache();
+    if (!_isMonitoring ||
+        _checking ||
+        _disposed ||
+        policyGeneration != _generation) {
+      return;
+    }
+    if (AppUpdateService.instance.required) {
+      _lastError = 'Rail Pro আপডেট করুন • Update Rail Pro to continue';
+      notifyListeners();
+      return;
+    }
     if (_nativeMonitoring) {
       await restore(startTimers: false);
       resumePendingTurnstile();
@@ -991,6 +1005,95 @@ class MonitorService extends ChangeNotifier {
               unawaited(_saveAndSchedule());
             }
           }
+        }
+        _lastTrains = response.trains;
+        _seatsFoundCount = 0;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        final saved = prefs.getString(preferenceKey);
+        if (saved == null ||
+            jsonDecode(saved)['id'] != _searchId ||
+            jsonDecode(saved)['active'] != true) {
+          return;
+        }
+        final previous = Map<String, dynamic>.from(
+          jsonDecode(prefs.getString('ticket_availability_$_searchId') ?? '{}'),
+        );
+        final current = <String, int>{};
+
+        // Evaluate availability
+        bool foundSeats = false;
+        for (final train in response.trains) {
+          if (!isTrainMonitored(train.tripNumber)) {
+            continue;
+          }
+
+          for (final seat in train.seatTypes) {
+            if (_targetSeatClass != null &&
+                _targetSeatClass!.isNotEmpty &&
+                _targetSeatClass != 'ALL' &&
+                _targetSeatClass != 'RANDOM' &&
+                seat.type.toUpperCase() != _targetSeatClass!.toUpperCase()) {
+              continue;
+            }
+
+            final key = '${train.tripNumber}:${seat.type}';
+            current[key] = seat.seatCounts.online;
+            if (seat.seatCounts.online > 0) {
+              foundSeats = true;
+              _seatsFoundCount += seat.seatCounts.online;
+              if ((previous[key] as num? ?? 0) > 0) continue;
+              _addLog(
+                '🎉 SEATS FOUND! ${train.tripNumber} has ${seat.seatCounts.online} [${seat.type}] seats!',
+                isAlert: true,
+              );
+              unawaited(
+                FirebaseUserService().logSeatsFound(
+                  trainName: train.tripNumber,
+                  seatType: seat.type,
+                  seatCount: seat.seatCounts.online,
+                ),
+              );
+
+              try {
+                if (!isTrainMonitored(train.tripNumber)) continue;
+                await _notificationService.triggerSeatAvailableAlert(
+                  trainName: train.tripNumber,
+                  seatType: seat.displayName,
+                  seatCount: seat.seatCounts.online,
+                  travelDate: _dateOfJourney,
+                  needsHumanVerification: true,
+                  automaticBooking: bookingIntent.autoReserve,
+                  bookingLink: NotificationService.bookingUrl(
+                    _fromCity,
+                    _toCity,
+                    _dateOfJourney,
+                    seat.type,
+                  ),
+                );
+              } catch (_) {}
+            }
+          }
+        }
+        await prefs.setString(
+          'ticket_availability_$_searchId',
+          jsonEncode(current),
+        );
+        await prefs.setString(
+          'ticket_results_$_searchId',
+          jsonEncode(response.trains.map((t) => t.toJson()).toList()),
+        );
+
+        if (!foundSeats) {
+          _addLog(
+            '#$_totalChecksCount checked at ${_formatTime(_lastCheckedAt!)}: No online seats yet. Next in ${_intervalSeconds}s.',
+          );
+        }
+        if (!_isMonitoring ||
+            _disposed ||
+            generation != _generation ||
+            !await _savedSearchIsActive()) {
+          return;
         }
         if (bookingIntent.autoReserve &&
             await BookingService.pending() == null) {
@@ -1129,89 +1232,6 @@ class MonitorService extends ChangeNotifier {
               }
             }
           }
-        }
-        _lastTrains = response.trains;
-        _seatsFoundCount = 0;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.reload();
-        final saved = prefs.getString(preferenceKey);
-        if (saved == null ||
-            jsonDecode(saved)['id'] != _searchId ||
-            jsonDecode(saved)['active'] != true) {
-          return;
-        }
-        final previous = Map<String, dynamic>.from(
-          jsonDecode(prefs.getString('ticket_availability_$_searchId') ?? '{}'),
-        );
-        final current = <String, int>{};
-
-        // Evaluate availability
-        bool foundSeats = false;
-        for (final train in response.trains) {
-          if (!isTrainMonitored(train.tripNumber)) {
-            continue;
-          }
-
-          for (final seat in train.seatTypes) {
-            if (_targetSeatClass != null &&
-                _targetSeatClass!.isNotEmpty &&
-                _targetSeatClass != 'ALL' &&
-                _targetSeatClass != 'RANDOM' &&
-                seat.type.toUpperCase() != _targetSeatClass!.toUpperCase()) {
-              continue;
-            }
-
-            final key = '${train.tripNumber}:${seat.type}';
-            current[key] = seat.seatCounts.online;
-            if (seat.seatCounts.online > 0) {
-              foundSeats = true;
-              _seatsFoundCount += seat.seatCounts.online;
-              if ((previous[key] as num? ?? 0) > 0) continue;
-              _addLog(
-                '🎉 SEATS FOUND! ${train.tripNumber} has ${seat.seatCounts.online} [${seat.type}] seats!',
-                isAlert: true,
-              );
-              unawaited(
-                FirebaseUserService().logSeatsFound(
-                  trainName: train.tripNumber,
-                  seatType: seat.type,
-                  seatCount: seat.seatCounts.online,
-                ),
-              );
-
-              try {
-                if (bookingIntent.autoReserve) continue;
-                if (!isTrainMonitored(train.tripNumber)) continue;
-                await _notificationService.triggerSeatAvailableAlert(
-                  trainName: train.tripNumber,
-                  seatType: seat.displayName,
-                  seatCount: seat.seatCounts.online,
-                  travelDate: _dateOfJourney,
-                  needsHumanVerification: true,
-                  bookingLink: NotificationService.bookingUrl(
-                    _fromCity,
-                    _toCity,
-                    _dateOfJourney,
-                    seat.type,
-                  ),
-                );
-              } catch (_) {}
-            }
-          }
-        }
-        await prefs.setString(
-          'ticket_availability_$_searchId',
-          jsonEncode(current),
-        );
-        await prefs.setString(
-          'ticket_results_$_searchId',
-          jsonEncode(response.trains.map((t) => t.toJson()).toList()),
-        );
-
-        if (!foundSeats) {
-          _addLog(
-            '#$_totalChecksCount checked at ${_formatTime(_lastCheckedAt!)}: No online seats yet. Next in ${_intervalSeconds}s.',
-          );
         }
       } catch (e) {
         _lastError = e.toString();

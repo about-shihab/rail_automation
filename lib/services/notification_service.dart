@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -6,6 +7,8 @@ import 'package:provider/provider.dart';
 
 import '../views/booking_screen.dart';
 import 'booking_service.dart';
+import 'booking_activity.dart';
+import 'turnstile_gate.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
 import 'monitor_service.dart';
@@ -68,12 +71,14 @@ class NotificationService {
     icon: 'ic_stat_rail',
     largeIcon: const DrawableResourceAndroidBitmap('ic_notification_brand'),
     color: color,
-    importance: Importance.high,
-    priority: Priority.high,
+    importance: Importance.max,
+    priority: Priority.max,
     sound: seatAlert
         ? const RawResourceAndroidNotificationSound('seat_found')
         : null,
     onlyAlertOnce: seatAlert,
+    enableVibration: true,
+    vibrationPattern: Int64List.fromList([0, 800, 400, 800]),
     visibility: NotificationVisibility.private,
     category: category ?? AndroidNotificationCategory.status,
     subText: stage,
@@ -93,6 +98,20 @@ class NotificationService {
 
   void openBooking(String? payload) {
     if (payload == null) return;
+    if (payload == 'rail://booking-progress') {
+      if (navigatorKey.currentState == null ||
+          (WidgetsBinding.instance.lifecycleState != null &&
+              WidgetsBinding.instance.lifecycleState !=
+                  AppLifecycleState.resumed)) {
+        _pendingBooking = payload;
+      } else {
+        _pendingBooking = null;
+        // Bring the app forward without starting a competing manual booking.
+        // The active booking loader and normal reservation flow own navigation.
+        unawaited(_openActiveReservation());
+      }
+      return;
+    }
     if (payload == 'rail://trips') {
       final navigator = navigatorKey.currentState;
       if (navigator == null) {
@@ -152,6 +171,34 @@ class NotificationService {
     if (_isInitialized) await _notificationsPlugin.cancelAll();
   }
 
+  Future<void> _openActiveReservation() async {
+    if (BookingActivity.instance.busy || TurnstileGate.instance.isShowing) {
+      return;
+    }
+    final pending = await BookingService.pending();
+    final navigator = navigatorKey.currentState;
+    if (navigator == null ||
+        !navigator.mounted ||
+        BookingActivity.instance.busy ||
+        TurnstileGate.instance.isShowing) {
+      return;
+    }
+    if (pending?['status'] == 'awaitingOtp' ||
+        pending?['status'] == 'readyForPayment') {
+      if (!ReservationScreen.isActive) {
+        navigator.push(
+          MaterialPageRoute(builder: (_) => const ReservationScreen()),
+        );
+      }
+    } else {
+      navigator.push(
+        MaterialPageRoute(
+          builder: (_) => const AppShell(initialTab: AppShell.tabMonitor),
+        ),
+      );
+    }
+  }
+
   /// Cancels previous human check or seat alert notifications to maintain clean sequence
   Future<void> cancelVerificationAndSearchAlerts() async {
     try {
@@ -172,16 +219,28 @@ class NotificationService {
   }
 
   Future<void> showReservation(Map<String, dynamic> state) async {
-    // Sequence Rule: When OTP is sent / ready for payment, clean previous verification alert
-    await cancelVerificationAndSearchAlerts();
-
-    // Automatic SMS verification owns this step; alert only when payment is ready.
+    // Keep one visible booking alert while automatic OTP verification waits.
+    // Clearing the seat alert and returning here left the user with no alert.
     if (state['status'] == 'awaitingOtp' && state['autoVerify'] == true) {
       try {
         await _notificationsPlugin.cancel(id: idOtp);
+        await _notificationsPlugin.cancel(id: idHumanCheck);
       } catch (_) {}
+      await triggerSeatAvailableAlert(
+        trainName:
+            state['train']?['trip_number']?.toString() ??
+            state['train']?['train_name']?.toString() ??
+            'Train',
+        seatType: state['seatClass']?['type']?.toString() ?? '',
+        seatCount: (state['seats'] as List?)?.length ?? 0,
+        travelDate: state['date']?.toString() ?? '',
+        automaticBooking: true,
+        reservationHeld: true,
+      );
       return;
     }
+
+    await cancelVerificationAndSearchAlerts();
 
     final expiry = DateTime.tryParse(state['expiresAt'] ?? '');
     final ready = state['status'] == 'readyForPayment';
@@ -211,7 +270,8 @@ class NotificationService {
       stage: ready ? (bn ? 'পেমেন্ট' : 'Payment') : (bn ? 'ওটিপি' : 'OTP'),
       color: ready ? const Color(0xFFD39A26) : const Color(0xFF008CBA),
       expiry: expiry,
-      category: AndroidNotificationCategory.reminder,
+      seatAlert: true,
+      category: AndroidNotificationCategory.alarm,
       actions: [
         AndroidNotificationAction(
           'purchase',
@@ -347,7 +407,7 @@ class NotificationService {
             'br_seat_found_v2',
             'Seats found',
             description: 'Tap to book, with train whistle and Bangla voice',
-            importance: Importance.high,
+            importance: Importance.max,
             sound: RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
@@ -373,6 +433,7 @@ class NotificationService {
             'Reserved tickets',
             description: 'Reservation and OTP alerts',
             importance: Importance.max,
+            sound: RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
           ),
@@ -419,15 +480,19 @@ class NotificationService {
     required String travelDate,
     String? bookingLink,
     bool needsHumanVerification = false,
+    bool automaticBooking = false,
+    bool reservationHeld = false,
   }) async {
-    if (appVisible ||
-        (navigatorKey.currentState != null &&
-            WidgetsBinding.instance.lifecycleState ==
-                AppLifecycleState.resumed)) {
-      return;
-    }
     final bn = await prefersBangla();
-    final title = bn
+    final title = reservationHeld
+        ? (bn
+              ? 'আসন সংরক্ষিত · বুকিং চলছে'
+              : 'Seats held · Booking in progress')
+        : automaticBooking
+        ? (bn
+              ? 'আসন পাওয়া গেছে · বুকিং চলছে'
+              : 'Seat found · Booking in progress')
+        : bn
         ? 'আসন পাওয়া গেছে · বুক করতে চাপুন'
         : 'Seat found · Tap to book';
     final number = bn
@@ -451,7 +516,9 @@ class NotificationService {
       actions: [
         AndroidNotificationAction(
           'book',
-          bn ? 'বুক করুন' : 'Book now',
+          automaticBooking
+              ? (bn ? 'অগ্রগতি দেখুন' : 'View progress')
+              : (bn ? 'বুক করুন' : 'Book now'),
           showsUserInterface: true,
         ),
       ],
@@ -471,7 +538,9 @@ class NotificationService {
         id: idSeatFound,
         title: title,
         body: body,
-        payload: bookingLink ?? 'https://eticket.railway.gov.bd/',
+        payload: automaticBooking
+            ? 'rail://booking-progress'
+            : bookingLink ?? 'https://eticket.railway.gov.bd/',
         notificationDetails: notificationDetails,
       );
     } catch (_) {}
