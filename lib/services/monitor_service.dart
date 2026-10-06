@@ -338,8 +338,21 @@ class MonitorService extends ChangeNotifier {
             _targetTrain!.isEmpty)) {
       return true;
     }
-    return _targetTrains.any((t) => t.trim().toLowerCase() == clean) ||
-        (_targetTrain != null && _targetTrain!.trim().toLowerCase() == clean);
+    return _targetTrains.any((t) => _matchTrain(t, clean)) ||
+        (_targetTrain != null && _matchTrain(_targetTrain!, clean));
+  }
+
+  static bool _matchTrain(String target, String candidate) {
+    final t = target.trim().toLowerCase();
+    final c = candidate.trim().toLowerCase();
+    if (t == c || t == 'all') return true;
+    final numT = RegExp(r'\b\d{3,4}\b').firstMatch(t)?.group(0);
+    final numC = RegExp(r'\b\d{3,4}\b').firstMatch(c)?.group(0);
+    if (numT != null && numC != null && numT == numC) return true;
+    final nameT = t.replaceAll(RegExp(r'\s*\(\d+\)'), '').trim();
+    final nameC = c.replaceAll(RegExp(r'\s*\(\d+\)'), '').trim();
+    if (nameT.isNotEmpty && nameT == nameC) return true;
+    return c.contains(t) || t.contains(c);
   }
 
   void addTrainToMonitoring(String trainName) {
@@ -1032,9 +1045,16 @@ class MonitorService extends ChangeNotifier {
             if (_targetSeatClass != null &&
                 _targetSeatClass!.isNotEmpty &&
                 _targetSeatClass != 'ALL' &&
-                _targetSeatClass != 'RANDOM' &&
-                seat.type.toUpperCase() != _targetSeatClass!.toUpperCase()) {
-              continue;
+                _targetSeatClass != 'RANDOM') {
+              final allowed = _targetSeatClass!
+                  .split(',')
+                  .map((s) => s.trim().toUpperCase())
+                  .where((s) => s.isNotEmpty)
+                  .toSet();
+              if (allowed.isNotEmpty &&
+                  !allowed.contains(seat.type.trim().toUpperCase())) {
+                continue;
+              }
             }
 
             final key = '${train.tripNumber}:${seat.type}';
@@ -1056,7 +1076,6 @@ class MonitorService extends ChangeNotifier {
               );
 
               try {
-                if (!isTrainMonitored(train.tripNumber)) continue;
                 await _notificationService.triggerSeatAvailableAlert(
                   trainName: train.tripNumber,
                   seatType: seat.displayName,
@@ -1071,7 +1090,9 @@ class MonitorService extends ChangeNotifier {
                     seat.type,
                   ),
                 );
-              } catch (_) {}
+              } catch (err) {
+                _addLog('Seat notification alert error: $err', isError: true);
+              }
             }
           }
         }
