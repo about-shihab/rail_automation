@@ -7,6 +7,7 @@ import '../firebase_options.dart';
 import '../models/auth_session.dart';
 import 'pro_service.dart';
 import 'credit_service.dart';
+import 'notification_service.dart';
 
 /// Service responsible for managing user data in Firebase Firestore:
 /// - Stores and syncs user profiles in the 'users' collection (keyed by phone number).
@@ -20,14 +21,19 @@ class FirebaseUserService extends ChangeNotifier {
 
   bool _isFirebaseReady = false;
   bool _isAdmin = false;
+  bool _isBlocked = false;
   String? _currentPhone;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSubscription;
   ProService? _proService;
 
   bool get isFirebaseReady => _isFirebaseReady;
 
-  /// True when users/{phone}.role == 'admin' (set manually in the Firebase console).
+  /// True when users/{phone}.is_admin == true or users/{phone}.role == 'admin'.
   bool get isAdmin => _isAdmin;
+
+  /// True when users/{phone}.is_blocked == true (blocked by administrator).
+  bool get isBlocked => _isBlocked;
+
   String? get currentPhone => _currentPhone;
   FirebaseFirestore? get firestore => _isFirebaseReady ? FirebaseFirestore.instance : null;
 
@@ -110,6 +116,8 @@ class FirebaseUserService extends ChangeNotifier {
           'email': session.email ?? '',
           'credits': CreditService().credits, // Preserve current credits (default 2 or deducted)
           'isPro': false, // Admin can toggle this in Firebase console
+          'is_admin': false,
+          'is_blocked': false,
           'isActive': true,
           'createdAt': now,
           'lastActiveAt': now,
@@ -123,7 +131,7 @@ class FirebaseUserService extends ChangeNotifier {
         final currentPro = data?['isPro'] == true;
         _proService?.updateProStatus(currentPro);
 
-        await docRef.update({
+        final updateData = <String, dynamic>{
           'isActive': true,
           'lastActiveAt': now,
           'lastLoginAt': now,
@@ -132,7 +140,17 @@ class FirebaseUserService extends ChangeNotifier {
           if (session.email != null && session.email!.isNotEmpty)
             'email': session.email,
           'recentActivity': FieldValue.arrayUnion([loginLog]),
-        });
+        };
+
+        // Ensure is_admin and is_blocked exist in Firestore document
+        if (data != null && !data.containsKey('is_admin')) {
+          updateData['is_admin'] = false;
+        }
+        if (data != null && !data.containsKey('is_blocked')) {
+          updateData['is_blocked'] = false;
+        }
+
+        await docRef.set(updateData, SetOptions(merge: true));
         debugPrint('✅ [FirebaseUserService] Successfully updated user "$phone" in Firestore!');
       }
 
@@ -150,6 +168,7 @@ class FirebaseUserService extends ChangeNotifier {
     if (!_isFirebaseReady) return;
 
     _isAdmin = false;
+    _isBlocked = false;
     _userDocSubscription?.cancel();
     _userDocSubscription = FirebaseFirestore.instance
         .collection('users')
@@ -161,7 +180,18 @@ class FirebaseUserService extends ChangeNotifier {
           final data = snapshot.data();
           final isPro = data?['isPro'] == true;
           _proService?.updateProStatus(isPro);
-          _isAdmin = data?['role']?.toString().toLowerCase() == 'admin';
+          _isAdmin = data?['is_admin'] == true || data?['role']?.toString().toLowerCase() == 'admin';
+          _isBlocked = data?['is_blocked'] == true;
+
+          // Automatically populate is_admin and is_blocked if missing in Firestore
+          if (data != null && (!data.containsKey('is_admin') || !data.containsKey('is_blocked'))) {
+            unawaited(FirebaseFirestore.instance.collection('users').doc(phone).set({
+              if (!data.containsKey('is_admin')) 'is_admin': false,
+              if (!data.containsKey('is_blocked')) 'is_blocked': false,
+            }, SetOptions(merge: true)));
+          }
+
+          NotificationService().startListeningToFirebaseNotifications(phone);
           notifyListeners();
         }
       },

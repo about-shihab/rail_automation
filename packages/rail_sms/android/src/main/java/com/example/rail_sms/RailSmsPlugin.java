@@ -10,7 +10,6 @@ import android.os.Build;
 import android.os.Bundle;
 import androidx.annotation.NonNull;
 import com.google.android.gms.auth.api.phone.SmsRetriever;
-import com.google.android.gms.auth.api.phone.SmsRetrieverClient;
 import com.google.android.gms.common.api.CommonStatusCodes;
 import com.google.android.gms.common.api.Status;
 import io.flutter.embedding.engine.plugins.FlutterPlugin;
@@ -67,12 +66,6 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
     private void startRetriever() {
         stopReceiver();
         try {
-            SmsRetrieverClient client = SmsRetriever.getClient(context);
-            // Start standard SMS Retriever (if message includes app hash)
-            client.startSmsRetriever();
-            // Start SMS User Consent API (prompts consent dialog for any railway OTP without hash)
-            client.startSmsUserConsent(null);
-
             receiver = new BroadcastReceiver() {
                 @Override
                 public void onReceive(Context c, Intent intent) {
@@ -82,6 +75,11 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
                     Status status = (Status) extras.get(SmsRetriever.EXTRA_STATUS);
                     if (status == null) return;
 
+                    if (status.getStatusCode() == CommonStatusCodes.TIMEOUT) {
+                        if (currentSink != null) currentSink.error("SMS_TIMEOUT", "Enter the OTP manually or resend it.", null);
+                        stopReceiver();
+                        return;
+                    }
                     if (status.getStatusCode() == CommonStatusCodes.SUCCESS) {
                         // Directly retrieved (e.g. from startSmsRetriever with hash)
                         String message = extras.getString(SmsRetriever.EXTRA_SMS_MESSAGE);
@@ -113,13 +111,24 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
             } else {
                 context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null);
             }
-        } catch (Exception ignored) {}
+            // Register first so an immediate SMS cannot race receiver setup.
+            // Railway controls the SMS format, so it cannot contain our app hash.
+            SmsRetriever.getClient(context).startSmsUserConsent(null)
+                .addOnFailureListener(error -> {
+                    if (currentSink != null) currentSink.error("SMS_UNAVAILABLE", "Google SMS verification is unavailable. Enter the OTP manually.", null);
+                    stopReceiver();
+                });
+        } catch (Exception error) {
+            if (currentSink != null) currentSink.error("SMS_UNAVAILABLE", "Enter the OTP manually.", null);
+            stopReceiver();
+        }
     }
 
     private void deliverSms(String message) {
         if (currentSink == null) return;
         Map<String, Object> data = new HashMap<>();
-        data.put("sender", "RAILWAY");
+        // User Consent does not expose the sender. Validate Railway branding in Dart.
+        data.put("sender", "");
         data.put("body", message);
         currentSink.success(data);
     }
@@ -146,6 +155,8 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
                 if (message != null && !message.isEmpty()) {
                     deliverSms(message);
                 }
+            } else if (currentSink != null) {
+                currentSink.error("SMS_DECLINED", "SMS consent declined. Enter the OTP manually.", null);
             }
             return true;
         }

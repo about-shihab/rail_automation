@@ -57,10 +57,21 @@ class LanguageService extends ChangeNotifier {
     await setLanguage(isBangla ? AppLanguage.en : AppLanguage.bn);
   }
 
+  /// Convenience inline translation: returns [bn] if current language is Bangla, otherwise [en].
+  String tr(String en, String bn) => isBangla ? bn : en;
+
   String t(String key) {
-    final map = _translations[key];
-    if (map == null) return key;
-    return isBangla ? (map['bn'] ?? key) : (map['en'] ?? key);
+    final lower = key.trim().toLowerCase();
+    final map = _translations[key] ?? _translations[lower];
+    if (map != null) {
+      return isBangla ? (map['bn'] ?? key) : (map['en'] ?? key);
+    }
+    for (final entry in _translations.values) {
+      if (entry['en']?.toLowerCase() == lower) {
+        return isBangla ? (entry['bn'] ?? key) : (entry['en'] ?? key);
+      }
+    }
+    return key;
   }
 
   static const Map<String, Map<String, String>> _translations = {

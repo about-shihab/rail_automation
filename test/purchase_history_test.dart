@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:rail_automation/models/purchased_ticket.dart';
@@ -13,6 +15,11 @@ import 'package:rail_automation/views/trips_screen.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
+    FlutterSecureStorage.setMockInitialValues({});
+    await LanguageService().setLanguage(AppLanguage.en);
+  });
 
   group('PurchasedTicket Model Tests', () {
     test('Correctly parses Shohoz purchase-history API response payload', () {
@@ -84,39 +91,47 @@ void main() {
   });
 
   group('TripsScreen UI Tests', () {
-    testWidgets('Renders TripsScreen with Official Tickets and Auto-Book Logs tabs',
-        (WidgetTester tester) async {
-      final monitor = MonitorService(proService: ProService());
+    testWidgets(
+      'Renders TripsScreen with Official Tickets and Auto-Book Logs tabs',
+      (WidgetTester tester) async {
+        final monitor = MonitorService(proService: ProService());
 
-      await tester.pumpWidget(
-        MultiProvider(
-          providers: [
-            ChangeNotifierProvider<MonitorService>.value(value: monitor),
-            ChangeNotifierProvider<CreditService>.value(value: CreditService()),
-            ChangeNotifierProvider<ThemeService>.value(value: ThemeService()),
-            ChangeNotifierProvider<LanguageService>.value(value: LanguageService()),
-            ChangeNotifierProvider<FirebaseUserService>.value(value: FirebaseUserService()),
-          ],
-          child: MaterialApp(
-            theme: AppThemes.lightTheme,
-            home: const TripsScreen(),
+        await tester.pumpWidget(
+          MultiProvider(
+            providers: [
+              ChangeNotifierProvider<MonitorService>.value(value: monitor),
+              ChangeNotifierProvider<CreditService>.value(
+                value: CreditService(),
+              ),
+              ChangeNotifierProvider<ThemeService>.value(value: ThemeService()),
+              ChangeNotifierProvider<LanguageService>.value(
+                value: LanguageService(),
+              ),
+              ChangeNotifierProvider<FirebaseUserService>.value(
+                value: FirebaseUserService(),
+              ),
+            ],
+            child: MaterialApp(
+              theme: AppThemes.lightTheme,
+              home: const TripsScreen(),
+            ),
           ),
-        ),
-      );
+        );
 
-      await tester.pump(const Duration(milliseconds: 300));
+        await tester.pump(const Duration(milliseconds: 300));
 
-      expect(find.text('Trips & Tickets'), findsOneWidget);
-      expect(find.text('Official Tickets'), findsOneWidget);
-      expect(find.text('Auto-Book Logs'), findsOneWidget);
+        expect(find.text('Trips & Tickets'), findsOneWidget);
+        expect(find.text('Official Tickets'), findsOneWidget);
+        expect(find.text('Auto-Book Logs'), findsOneWidget);
 
-      // Switch to Auto-Book Logs tab
-      await tester.tap(find.text('Auto-Book Logs'));
-      await tester.pumpAndSettle();
+        // Switch to Auto-Book Logs tab
+        await tester.tap(find.text('Auto-Book Logs'));
+        await tester.pumpAndSettle();
 
-      expect(find.textContaining('All ('), findsOneWidget);
-      expect(find.textContaining('Successful ('), findsOneWidget);
-      expect(find.textContaining('Failed ('), findsOneWidget);
-    });
+        expect(find.textContaining('All ('), findsOneWidget);
+        expect(find.textContaining('Successful ('), findsOneWidget);
+        expect(find.textContaining('Failed ('), findsOneWidget);
+      },
+    );
   });
 }

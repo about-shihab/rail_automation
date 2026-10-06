@@ -18,6 +18,7 @@ class AdminUser {
   final int credits;
   final bool isActive;
   final bool isAdmin;
+  final bool isBlocked;
   final DateTime? lastActiveAt;
 
   const AdminUser({
@@ -27,6 +28,7 @@ class AdminUser {
     required this.credits,
     required this.isActive,
     required this.isAdmin,
+    required this.isBlocked,
     required this.lastActiveAt,
   });
 
@@ -39,8 +41,43 @@ class AdminUser {
       email: d['email']?.toString() ?? '',
       credits: (d['credits'] is num) ? (d['credits'] as num).toInt() : 0,
       isActive: d['isActive'] == true,
-      isAdmin: d['role']?.toString().toLowerCase() == 'admin',
+      isAdmin: d['is_admin'] == true || d['role']?.toString().toLowerCase() == 'admin',
+      isBlocked: d['is_blocked'] == true,
       lastActiveAt: last is Timestamp ? last.toDate() : null,
+    );
+  }
+}
+
+class AppNotification {
+  final String id;
+  final String title;
+  final String body;
+  final String target; // 'all' or specific phone
+  final String? targetPhone;
+  final String? sentBy;
+  final DateTime? createdAt;
+
+  const AppNotification({
+    required this.id,
+    required this.title,
+    required this.body,
+    required this.target,
+    this.targetPhone,
+    this.sentBy,
+    this.createdAt,
+  });
+
+  factory AppNotification.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final d = doc.data() ?? const <String, dynamic>{};
+    final ts = d['createdAt'];
+    return AppNotification(
+      id: doc.id,
+      title: d['title']?.toString() ?? '',
+      body: d['body']?.toString() ?? '',
+      target: d['target']?.toString() ?? 'all',
+      targetPhone: d['targetPhone']?.toString(),
+      sentBy: d['sentBy']?.toString(),
+      createdAt: ts is Timestamp ? ts.toDate() : null,
     );
   }
 }
@@ -236,5 +273,95 @@ class AdminService {
         'rejectedBy': _adminPhone,
       });
     });
+  }
+
+  // ── Block / Unblock User ──────────────────────────────────────────────────
+
+  Future<void> toggleBlockUser({
+    required String phone,
+    required bool block,
+    String? reason,
+  }) async {
+    _requireAdmin();
+    final cleanPhone = FirebaseUserService.normalizePhone(phone);
+    if (cleanPhone.isEmpty) throw AdminException('Invalid phone number');
+
+    final userRef = _db.collection('users').doc(cleanPhone);
+    final userSnap = await userRef.get();
+    if (!userSnap.exists) throw AdminException('User not found');
+
+    await userRef.set({
+      'is_blocked': block,
+      'blockedAt': block ? FieldValue.serverTimestamp() : null,
+      'blockedBy': block ? _adminPhone : null,
+      'blockedReason': block ? (reason ?? 'Blocked by administrator') : null,
+    }, SetOptions(merge: true));
+
+    await userRef.collection('activity_logs').doc().set({
+      'action': block ? 'USER_BLOCKED' : 'USER_UNBLOCKED',
+      'details': block
+          ? 'Admin blocked user. Reason: ${reason ?? 'Not specified'}'
+          : 'Admin unblocked user',
+      'timestamp': FieldValue.serverTimestamp(),
+    });
+  }
+
+  // ── Notifications ─────────────────────────────────────────────────────────
+
+  Stream<List<AppNotification>> watchNotifications() {
+    return _db
+        .collection('notifications')
+        .orderBy('createdAt', descending: true)
+        .limit(100)
+        .snapshots()
+        .map((snap) => snap.docs.map(AppNotification.fromDoc).toList());
+  }
+
+  Future<void> sendNotification({
+    required String title,
+    required String body,
+    required String target, // 'all' or phone number
+    String? targetPhone,
+  }) async {
+    _requireAdmin();
+    final cleanTitle = title.trim();
+    final cleanBody = body.trim();
+    if (cleanTitle.isEmpty) throw AdminException('Title cannot be empty');
+    if (cleanBody.isEmpty) throw AdminException('Message body cannot be empty');
+
+    String? normalizedTargetPhone;
+    if (target != 'all') {
+      normalizedTargetPhone = FirebaseUserService.normalizePhone(targetPhone ?? target);
+      if (normalizedTargetPhone.isEmpty) {
+        throw AdminException('Target phone number is invalid');
+      }
+    }
+
+    await _db.collection('notifications').add({
+      'title': cleanTitle,
+      'body': cleanBody,
+      'target': target == 'all' ? 'all' : normalizedTargetPhone,
+      'targetPhone': target == 'all' ? null : normalizedTargetPhone,
+      'sentBy': _adminPhone,
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  Future<void> deleteNotification(String notificationId) async {
+    _requireAdmin();
+    if (notificationId.isEmpty) return;
+    await _db.collection('notifications').doc(notificationId).delete();
+  }
+
+  Future<void> clearAllNotifications() async {
+    _requireAdmin();
+    final snap = await _db.collection('notifications').get();
+    if (snap.docs.isEmpty) return;
+
+    final batch = _db.batch();
+    for (final doc in snap.docs) {
+      batch.delete(doc.reference);
+    }
+    await batch.commit();
   }
 }

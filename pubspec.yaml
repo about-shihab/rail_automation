@@ -1,8 +1,8 @@
 name: rail_automation
-description: "A new Flutter project."
+description: "Rail Pro: Bangladesh Railway seat monitoring and booking assistant."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ^3.13.1
@@ -26,11 +26,15 @@ dependencies:
   cloud_firestore: ^6.10.0
   flutter_secure_storage: ^11.2.0
   flutter_background_service: ^5.1.0
+  url_launcher: ^6.3.3
+  # Pinned: 6.1.5's Android plugin uses a ProGuard file rejected by AGP 9.
+  flutter_inappwebview: 6.2.0-beta.3
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  webview_flutter_platform_interface: ^2.15.1
   flutter_launcher_icons: ^0.14.3
 
 flutter_launcher_icons:

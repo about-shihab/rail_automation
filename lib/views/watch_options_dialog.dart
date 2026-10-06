@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../models/booking_intent.dart';
 import '../services/app_config.dart';
 import '../services/credit_service.dart';
+import '../services/language_service.dart';
 import '../services/sms_service.dart';
 import '../utils/app_theme.dart';
+import '../widgets/journey_search_button.dart';
 import 'recharge_credit_dialog.dart';
 
 Future<BookingIntent?> showWatchOptions(
@@ -48,9 +50,12 @@ class _WatchSheetState extends State<_WatchSheet> {
     setState(() => _busy = true);
     final verify = _autoVerify && await SmsService().requestSmsPermission();
     if (!mounted) return;
-    final effectiveTrains = widget.targetTrains != null && widget.targetTrains!.isNotEmpty
+    final effectiveTrains =
+        widget.targetTrains != null && widget.targetTrains!.isNotEmpty
         ? widget.targetTrains!
-        : (widget.trainName != null && widget.trainName!.isNotEmpty ? [widget.trainName!] : const <String>[]);
+        : (widget.trainName != null && widget.trainName!.isNotEmpty
+              ? [widget.trainName!]
+              : const <String>[]);
     Navigator.pop(
       context,
       BookingIntent(
@@ -62,171 +67,311 @@ class _WatchSheetState extends State<_WatchSheet> {
     );
   }
 
+  String _number(int value, LanguageService lang) {
+    if (!lang.isBangla) return '$value';
+    const digits = '০১২৩৪৫৬৭৮৯';
+    return '$value'.split('').map((c) => digits[int.parse(c)]).join();
+  }
+
+  String _className(LanguageService lang) {
+    final code = widget.seatClass?.toUpperCase();
+    return switch (code) {
+      null || 'ALL' || 'RANDOM' => lang.tr('Any class', 'যেকোনো শ্রেণি'),
+      'SNIGDHA' => lang.tr('Snigdha', 'স্নিগ্ধা'),
+      'S_CHAIR' => lang.tr('Shovon Chair', 'শোভন চেয়ার'),
+      'AC_S' => lang.tr('AC Seat', 'এসি সিট'),
+      'AC_B' => lang.tr('AC Berth', 'এসি বার্থ'),
+      'F_SEAT' => lang.tr('First Class Seat', 'প্রথম শ্রেণি সিট'),
+      'F_BERTH' => lang.tr('First Class Berth', 'প্রথম শ্রেণি বার্থ'),
+      'SHOVON' => lang.tr('Shovon', 'শোভন'),
+      _ => widget.seatClass!,
+    };
+  }
+
   @override
-  Widget build(BuildContext context) => SingleChildScrollView(
-    padding: EdgeInsets.fromLTRB(
-      24,
-      8,
-      24,
-      24 + MediaQuery.viewInsetsOf(context).bottom,
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Icon(
-          Icons.auto_awesome_outlined,
-          size: 32,
-          color: AppColors.primaryDark,
-        ),
-        const SizedBox(height: 16),
-        Text(
-          'Let us find your seats',
-          style: Theme.of(context).textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 10),
-        const Text(
-          'We’ll watch your journey and try to reserve seats as soon as they’re available. You finish the payment.',
-          style: TextStyle(height: 1.6),
-        ),
-        const SizedBox(height: 14),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: AppColors.primary.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final credit = CreditService();
+    return ListenableBuilder(
+      listenable: Listenable.merge([lang, credit]),
+      builder: (context, _) {
+        final dark = Theme.of(context).brightness == Brightness.dark;
+        final trains = widget.targetTrains?.isNotEmpty == true
+            ? widget.targetTrains!
+            : widget.trainName?.isNotEmpty == true
+            ? [widget.trainName!]
+            : <String>[];
+        final cardColor = dark
+            ? const Color(0xFF142533)
+            : const Color(0xFFF3F8F6);
+        final borderColor = dark
+            ? const Color(0xFF25404A)
+            : const Color(0xFFDEEBE6);
+        return SingleChildScrollView(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            0,
+            20,
+            20 +
+                MediaQuery.viewInsetsOf(context).bottom +
+                MediaQuery.paddingOf(context).bottom,
           ),
-          child: const Row(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Icon(Icons.bolt_rounded, color: AppColors.primary, size: 18),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Each train auto-book to OTP send costs 1 credit.',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: AppColors.primary,
+                      size: 23,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      lang.tr('Auto-booking', 'অটো-বুকিং'),
+                      style: Theme.of(context).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: lang.tr('Close', 'বন্ধ করুন'),
+                    onPressed: _busy ? null : () => Navigator.pop(context),
+                    icon: Icon(
+                      Icons.close_rounded,
+                      color: AppColors.textMuted(dark),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: cardColor,
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(color: borderColor),
                 ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(
+                            Icons.train_rounded,
+                            color: AppColors.primary,
+                            size: 21,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            trains.isEmpty
+                                ? lang.tr('All trains', 'সব ট্রেন')
+                                : trains.join('\n'),
+                            style: TextStyle(
+                              color: AppColors.textPrimary(dark),
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              height: 1.5,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.event_seat_outlined,
+                          size: 17,
+                          color: AppColors.textSecondary(dark),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _className(lang),
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.textSecondary(dark),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              Material(
+                color: cardColor,
+                clipBehavior: Clip.antiAlias,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  side: BorderSide(color: borderColor),
+                ),
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 12),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              lang.tr('Seats', 'আসন'),
+                              style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          Material(
+                            color: AppColors.cardBg(dark),
+                            clipBehavior: Clip.antiAlias,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(13),
+                              side: BorderSide(color: borderColor),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: lang.tr('Fewer seats', 'আসন কমান'),
+                                  onPressed: !_busy && _quantity > 1
+                                      ? () => setState(() => _quantity--)
+                                      : null,
+                                  icon: const Icon(
+                                    Icons.remove_rounded,
+                                    size: 19,
+                                  ),
+                                ),
+                                SizedBox(
+                                  width: 28,
+                                  child: Text(
+                                    _number(_quantity, lang),
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 19,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  tooltip: lang.tr('More seats', 'আসন বাড়ান'),
+                                  style: IconButton.styleFrom(
+                                    foregroundColor: AppColors.primary,
+                                  ),
+                                  onPressed:
+                                      !_busy &&
+                                          _quantity <
+                                              AppConfig.instance.number(
+                                                'max_seats',
+                                              )
+                                      ? () => setState(() => _quantity++)
+                                      : null,
+                                  icon: const Icon(Icons.add_rounded, size: 19),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(
+                      height: 1,
+                      indent: 14,
+                      endIndent: 14,
+                      color: borderColor,
+                    ),
+                    SwitchListTile.adaptive(
+                      contentPadding: const EdgeInsets.only(
+                        left: 14,
+                        right: 10,
+                      ),
+                      title: Text(
+                        lang.tr('Auto-verify OTP', 'স্বয়ংক্রিয় ওটিপি যাচাই'),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      subtitle: Text(
+                        lang.tr('Google SMS consent', 'Google এসএমএস অনুমতি'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary(dark),
+                        ),
+                      ),
+                      value: _autoVerify,
+                      onChanged: _busy
+                          ? null
+                          : (v) => setState(() => _autoVerify = v),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(
+                    Icons.bolt_rounded,
+                    color: AppColors.primary,
+                    size: 17,
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      lang.tr(
+                        '1 credit per train when OTP is sent',
+                        'ওটিপি পাঠালে প্রতি ট্রেনে ১ ক্রেডিট',
+                      ),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary(dark),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                lang.tr(
+                  'Payment required to confirm seats.',
+                  'আসন নিশ্চিত করতে পেমেন্ট করতে হবে।',
+                ),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted(dark),
+                ),
+              ),
+              const SizedBox(height: 18),
+              JourneySearchButton(
+                label: credit.credits <= 0
+                    ? lang.tr('Add credits', 'ক্রেডিট যোগ করুন')
+                    : lang.tr('Start', 'শুরু করুন'),
+                icon: credit.credits <= 0
+                    ? Icons.bolt_rounded
+                    : Icons.play_arrow_rounded,
+                loading: _busy,
+                onPressed: _busy ? null : _start,
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 14),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            if (widget.targetTrains != null && widget.targetTrains!.isNotEmpty)
-              Chip(
-                avatar: const Icon(Icons.train_rounded, size: 18, color: AppColors.primary),
-                label: Text(
-                  '${widget.targetTrains!.length} Trains (${widget.targetTrains!.join(", ")})',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              )
-            else if (widget.trainName != null && widget.trainName!.isNotEmpty)
-              Chip(
-                avatar: const Icon(Icons.train_rounded, size: 18, color: AppColors.primary),
-                label: Text(
-                  widget.trainName!,
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-              ),
-            Chip(
-              avatar: Icon(
-                (widget.seatClass == null ||
-                        widget.seatClass == 'ALL' ||
-                        widget.seatClass == 'RANDOM')
-                    ? Icons.shuffle_rounded
-                    : Icons.event_seat_outlined,
-                size: 18,
-                color: AppColors.primary,
-              ),
-              label: Text(
-                (widget.seatClass == null ||
-                        widget.seatClass == 'ALL' ||
-                        widget.seatClass == 'RANDOM')
-                    ? 'Random Class (Any Available)'
-                    : widget.seatClass!,
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Row(
-          children: [
-            const Expanded(
-              child: Text(
-                'How many seats?',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              ),
-            ),
-            IconButton.filledTonal(
-              tooltip: 'Fewer seats',
-              onPressed: !_busy && _quantity > 1
-                  ? () => setState(() => _quantity--)
-                  : null,
-              icon: const Icon(Icons.remove_rounded),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                '$_quantity',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-            ),
-            IconButton.filledTonal(
-              tooltip: 'More seats',
-              onPressed:
-                  !_busy && _quantity < AppConfig.instance.number('max_seats')
-                  ? () => setState(() => _quantity++)
-                  : null,
-              icon: const Icon(Icons.add_rounded),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        SwitchListTile.adaptive(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Verify Railway SMS automatically'),
-          subtitle: const Text(
-            'Uses Google SMS Retriever to auto-fill Railway OTP. Otherwise, we’ll ask you to enter the code.',
-          ),
-          value: _autoVerify,
-          onChanged: _busy ? null : (v) => setState(() => _autoVerify = v),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'If Railway needs you to sign in or complete verification, we’ll ask you to continue. A seat is confirmed only after payment.',
-          style: TextStyle(fontSize: 13, height: 1.5),
-        ),
-        const SizedBox(height: 24),
-        PrimaryButton(
-          label: CreditService().credits <= 0
-              ? 'Buy Credit to Auto-Book'
-              : 'Start auto-booking',
-          icon: CreditService().credits <= 0
-              ? Icons.bolt_rounded
-              : Icons.arrow_forward_rounded,
-          loading: _busy,
-          onPressed: _busy
-              ? null
-              : (CreditService().credits <= 0
-                  ? () {
-                      Navigator.pop(context);
-                      RechargeCreditDialog.show(context);
-                    }
-                  : _start),
-        ),
-        const SizedBox(height: 8),
-        Center(
-          child: TextButton(
-            onPressed: _busy ? null : () => Navigator.pop(context),
-            child: const Text('Not now'),
-          ),
-        ),
-      ],
-    ),
-  );
+        );
+      },
+    );
+  }
 }

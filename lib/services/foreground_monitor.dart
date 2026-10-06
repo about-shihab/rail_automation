@@ -11,6 +11,8 @@ import 'notification_service.dart';
 import 'pro_service.dart';
 import 'otp_verifier.dart';
 import 'sms_service.dart';
+import 'turnstile_gate.dart';
+import 'turnstile_session.dart';
 
 @pragma('vm:entry-point')
 void monitoringEntryPoint(ServiceInstance service) async {
@@ -20,6 +22,16 @@ void monitoringEntryPoint(ServiceInstance service) async {
   Timer? timer;
   bool stopped = false;
   bool busy = false;
+  // A service isolate cannot own a visible platform view. Reuse the rendered
+  // browser in the UI engine via service messages, including while it is idle.
+  TurnstileGate.instance.workerAcquire = (label) async {
+    final result = await ForegroundMonitor.requestVerificationToken(
+      service,
+      label,
+    );
+    TurnstileGate.instance.workerPromptPresented = result.$2;
+    return result.$1;
+  };
   service.on('stop').listen((_) async {
     stopped = true;
     timer?.cancel();
@@ -43,6 +55,22 @@ void monitoringEntryPoint(ServiceInstance service) async {
     if (busy || stopped) return;
     busy = true;
     try {
+      final visibility = Completer<bool>();
+      final visibilityId = DateTime.now().microsecondsSinceEpoch.toString();
+      final visibilitySub = service.on('ui-visibility-result').listen((event) {
+        if (event?['id'] == visibilityId && !visibility.isCompleted) {
+          visibility.complete(event?['visible'] == true);
+        }
+      });
+      try {
+        service.invoke('ui-visibility-request', {'id': visibilityId});
+        NotificationService().appVisible = await visibility.future.timeout(
+          const Duration(milliseconds: 250),
+          onTimeout: () => false,
+        );
+      } finally {
+        await visibilitySub.cancel();
+      }
       await monitor.restore(startTimers: false);
       if (!monitor.isMonitoring) {
         stopped = true;
@@ -54,18 +82,22 @@ void monitoringEntryPoint(ServiceInstance service) async {
       await OtpVerifier.listen();
       if (stopped) return;
       if (service is AndroidServiceInstance) {
+        final bn = await NotificationService.prefersBangla();
         await service.setForegroundNotificationInfo(
           title: '${monitor.fromCity} → ${monitor.toCity}',
           content: monitor.lastError == null
-              ? 'Watching for your seats • Tap to view your journey'
+              ? (bn
+                    ? 'আসন খোঁজা হচ্ছে · ${monitor.dateOfJourney}'
+                    : 'Finding seats · ${monitor.dateOfJourney}')
               : monitor.userStatus,
         );
       }
       service.invoke('updated');
     } finally {
       busy = false;
-      if (!stopped)
+      if (!stopped) {
         timer = Timer(Duration(seconds: AppConfig.instance.pollSeconds), tick);
+      }
     }
   }
 
@@ -78,6 +110,158 @@ void monitoringEntryPoint(ServiceInstance service) async {
 
 class ForegroundMonitor {
   static bool initialized = false;
+  static int _verificationSequence = 0;
+
+  static Future<(String?, bool)> requestVerificationToken(
+    ServiceInstance service,
+    String label, {
+    Duration ackTimeout = const Duration(milliseconds: 750),
+    Duration responseTimeout = const Duration(seconds: 120),
+  }) async {
+    final id =
+        '${DateTime.now().microsecondsSinceEpoch}-${++_verificationSequence}';
+    final response = Completer<Map<String, dynamic>?>();
+    final acknowledged = Completer<void>();
+    var presented = false;
+    final ackSubscription = service.on('verification-ack').listen((event) {
+      if (event?['id'] == id && !acknowledged.isCompleted) {
+        presented = event?['presented'] == true;
+        acknowledged.complete();
+      }
+    });
+    final subscription = service.on('verification-result').listen((event) {
+      if (event?['id'] == id && !response.isCompleted) response.complete(event);
+    });
+    try {
+      service.invoke('verification-request', {'id': id, 'label': label});
+      // A destroyed UI engine cannot answer. Leave a pending notification
+      // promptly instead of stalling the booking worker for two minutes.
+      try {
+        await acknowledged.future.timeout(ackTimeout);
+      } on TimeoutException {
+        return (null, false);
+      }
+      final result = await response.future.timeout(
+        responseTimeout,
+        onTimeout: () => null,
+      );
+      return (
+        result?['token'] as String?,
+        result?['presented'] as bool? ?? presented,
+      );
+    } finally {
+      await subscription.cancel();
+      await ackSubscription.cancel();
+      service.invoke('verification-cancel', {'id': id});
+    }
+  }
+
+  static StreamSubscription<Map<String, dynamic>?>? _verificationRequests;
+  static StreamSubscription<Map<String, dynamic>?>? _verificationCancellations;
+  static String? _activeVerificationId;
+  static StreamSubscription<Map<String, dynamic>?>? _visibilityRequests;
+
+  /// Install before starting the service. The browser is preloaded by the
+  /// MaterialApp host and survives navigation and app backgrounding in memory.
+  static void connectVerificationUi() {
+    _visibilityRequests ??= FlutterBackgroundService()
+        .on('ui-visibility-request')
+        .listen((event) {
+          FlutterBackgroundService().invoke('ui-visibility-result', {
+            'id': event?['id'],
+            'visible': TurnstileGate.instance.canShowUi,
+          });
+        });
+    _verificationRequests ??= FlutterBackgroundService()
+        .on('verification-request')
+        .listen((event) async {
+          final id = event?['id'] as String?;
+          if (id == null) return;
+          FlutterBackgroundService().invoke('verification-ack', {
+            'id': id,
+            'presented': TurnstileGate.instance.canShowUi,
+          });
+          if (_activeVerificationId != null ||
+              TurnstileGate.instance.isShowing ||
+              TurnstileSession.instance.generating ||
+              !TurnstileSession.instance.attached) {
+            FlutterBackgroundService().invoke('verification-result', {
+              'id': id,
+              'presented':
+                  TurnstileGate.instance.isShowing ||
+                  TurnstileSession.instance.generating,
+            });
+            return;
+          }
+          _activeVerificationId = id;
+          final gate = TurnstileGate.instance;
+          final session = TurnstileSession.instance;
+          var presented = gate.canShowUi;
+          String? token;
+          void watchInteraction() {
+            if (session.phase != TurnstilePhase.interactive) return;
+            if (!gate.canShowUi) {
+              // A human check stays pending for the notification; never keep
+              // an invisible checkbox waiting in the background.
+              session.cancel();
+            } else if (!gate.isShowing) {
+              presented = true;
+              unawaited(
+                gate.acquire(
+                  label: event?['label'] as String? ?? '',
+                  forceFresh: true,
+                ),
+              );
+            }
+          }
+
+          try {
+            if (presented) {
+              token = await gate.acquire(
+                label: event?['label'] as String? ?? '',
+                forceFresh: true,
+              );
+            } else {
+              // Reuse the retained UI browser for a booking-time check only.
+              session.addListener(watchInteraction);
+              token = await session.generate();
+            }
+            if (_activeVerificationId == id) {
+              FlutterBackgroundService().invoke('verification-result', {
+                'id': id,
+                'token': token,
+                'presented': presented,
+              });
+            }
+          } finally {
+            session.removeListener(watchInteraction);
+            if (_activeVerificationId == id) _activeVerificationId = null;
+          }
+        });
+    _verificationCancellations ??= FlutterBackgroundService()
+        .on('verification-cancel')
+        .listen((event) {
+          if (event?['id'] == _activeVerificationId) {
+            _activeVerificationId = null;
+            TurnstileSession.instance.cancel();
+            TurnstileGate.instance.dismiss();
+          }
+        });
+  }
+
+  static Future<void> disconnectVerificationUi() async {
+    await _visibilityRequests?.cancel();
+    _visibilityRequests = null;
+    await _verificationRequests?.cancel();
+    await _verificationCancellations?.cancel();
+    _verificationRequests = null;
+    _verificationCancellations = null;
+    _activeVerificationId = null;
+    TurnstileSession.instance.cancel();
+  }
+
+  static Stream<Map<String, dynamic>?> get updates =>
+      FlutterBackgroundService().on('updated');
   static Future<void> initialize() async {
     const channel = AndroidNotificationChannel(
       'rail_monitor',
@@ -89,6 +273,7 @@ class ForegroundMonitor {
           AndroidFlutterLocalNotificationsPlugin
         >()
         ?.createNotificationChannel(channel);
+    final bn = await NotificationService.prefersBangla();
     await FlutterBackgroundService().configure(
       iosConfiguration: IosConfiguration(autoStart: false),
       androidConfiguration: AndroidConfiguration(
@@ -97,8 +282,10 @@ class ForegroundMonitor {
         autoStartOnBoot: false,
         isForegroundMode: true,
         notificationChannelId: 'rail_monitor',
-        initialNotificationTitle: 'Ticket monitoring',
-        initialNotificationContent: 'Starting your saved search',
+        initialNotificationTitle: 'Rail Pro',
+        initialNotificationContent: bn
+            ? 'অনুসন্ধান শুরু হচ্ছে…'
+            : 'Starting your search…',
         foregroundServiceNotificationId: 771,
         foregroundServiceTypes: [AndroidForegroundType.dataSync],
       ),
@@ -107,8 +294,9 @@ class ForegroundMonitor {
   }
 
   static Future<void> start() async {
-    if (!initialized)
+    if (!initialized) {
       throw StateError('Background monitoring is not initialized');
+    }
     if (await FlutterBackgroundService().isRunning()) {
       FlutterBackgroundService().invoke('refresh');
     } else if (!await FlutterBackgroundService().startService()) {
@@ -118,6 +306,7 @@ class ForegroundMonitor {
 
   static Future<void> stop() async {
     if (!initialized) return;
+    TurnstileGate.instance.dismiss();
     FlutterBackgroundService().invoke('stop');
     for (var i = 0; i < 30; i++) {
       if (!await FlutterBackgroundService().isRunning()) return;

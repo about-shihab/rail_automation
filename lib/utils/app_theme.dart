@@ -49,12 +49,17 @@ class AppColors {
   static Color scaffoldBg(bool isDark) => isDark ? darkBg : lightBg;
   static Color surface(bool isDark) => isDark ? darkSurface : lightSurface;
   static Color cardBg(bool isDark) => isDark ? darkCard : lightCard;
-  static Color cardBorder(bool isDark) => isDark ? darkCardBorder : lightCardBorder;
-  static Color textPrimary(bool isDark) => isDark ? darkTextPrimary : lightTextPrimary;
-  static Color textSecondary(bool isDark) => isDark ? darkTextSecondary : lightTextSecondary;
-  static Color textMuted(bool isDark) => isDark ? darkTextMuted : lightTextMuted;
+  static Color cardBorder(bool isDark) =>
+      isDark ? darkCardBorder : lightCardBorder;
+  static Color textPrimary(bool isDark) =>
+      isDark ? darkTextPrimary : lightTextPrimary;
+  static Color textSecondary(bool isDark) =>
+      isDark ? darkTextSecondary : lightTextSecondary;
+  static Color textMuted(bool isDark) =>
+      isDark ? darkTextMuted : lightTextMuted;
   static Color inputFill(bool isDark) => isDark ? darkInput : lightInput;
-  static Color inputBorder(bool isDark) => isDark ? darkInputBorder : lightInputBorder;
+  static Color inputBorder(bool isDark) =>
+      isDark ? darkInputBorder : lightInputBorder;
 
   // Legacy
   static const appBarGreen = Color(0xFF006649);
@@ -80,7 +85,9 @@ class AppThemes {
       height: 68,
       backgroundColor: AppColors.darkSurface,
       indicatorColor: AppColors.primary.withValues(alpha: 0.18),
-      labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      labelTextStyle: WidgetStateProperty.all(
+        const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
     ),
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
@@ -154,7 +161,9 @@ class AppThemes {
       height: 68,
       backgroundColor: AppColors.lightSurface,
       indicatorColor: AppColors.primary.withValues(alpha: 0.18),
-      labelTextStyle: WidgetStateProperty.all(const TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      labelTextStyle: WidgetStateProperty.all(
+        const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+      ),
     ),
     fontFamily: 'Roboto',
     appBarTheme: const AppBarTheme(
@@ -249,10 +258,12 @@ class PrimaryButton extends StatelessWidget {
           boxShadow: onPressed != null && !loading
               ? [
                   BoxShadow(
-                    color: AppColors.primary.withValues(alpha: isDark ? 0.35 : 0.25),
+                    color: AppColors.primary.withValues(
+                      alpha: isDark ? 0.35 : 0.25,
+                    ),
                     blurRadius: 16,
                     offset: const Offset(0, 6),
-                  )
+                  ),
                 ]
               : null,
         ),
@@ -261,7 +272,9 @@ class PrimaryButton extends StatelessWidget {
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
           ),
           child: loading
               ? const SizedBox(
@@ -314,7 +327,9 @@ class AppCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final radius = BorderRadius.circular(18);
-    final border = BorderSide(color: borderColor ?? AppColors.cardBorder(isDark));
+    final border = BorderSide(
+      color: borderColor ?? AppColors.cardBorder(isDark),
+    );
     return Container(
       decoration: BoxDecoration(
         borderRadius: radius,
@@ -325,15 +340,12 @@ class AppCard extends StatelessWidget {
                   color: Colors.black.withValues(alpha: 0.06),
                   blurRadius: 12,
                   offset: const Offset(0, 4),
-                )
+                ),
               ],
       ),
       child: Material(
         color: AppColors.cardBg(isDark),
-        shape: RoundedRectangleBorder(
-          borderRadius: radius,
-          side: border,
-        ),
+        shape: RoundedRectangleBorder(borderRadius: radius, side: border),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
@@ -428,16 +440,8 @@ class NavBackdrop extends StatelessWidget {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            Positioned(
-              right: -56,
-              top: -84,
-              child: _ring(230, 0.07),
-            ),
-            Positioned(
-              right: 4,
-              top: -40,
-              child: _ring(120, 0.06),
-            ),
+            Positioned(right: -56, top: -84, child: _ring(230, 0.07)),
+            Positioned(right: 4, top: -40, child: _ring(120, 0.06)),
             Positioned.fill(
               child: DecoratedBox(
                 decoration: BoxDecoration(
@@ -478,13 +482,16 @@ class NavBackdrop extends StatelessWidget {
   }
 
   static Widget _ring(double size, double alpha) => Container(
-        width: size,
-        height: size,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.white.withValues(alpha: alpha), width: 1.2),
-        ),
-      );
+    width: size,
+    height: size,
+    decoration: BoxDecoration(
+      shape: BoxShape.circle,
+      border: Border.all(
+        color: Colors.white.withValues(alpha: alpha),
+        width: 1.2,
+      ),
+    ),
+  );
 }
 
 /// Frosted square icon button for app bars (optionally with a status dot).
@@ -533,7 +540,10 @@ class NavAction extends StatelessWidget {
                     decoration: BoxDecoration(
                       color: AppColors.gold,
                       shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.appBarGradientEnd, width: 1.5),
+                      border: Border.all(
+                        color: AppColors.appBarGradientEnd,
+                        width: 1.5,
+                      ),
                     ),
                   ),
                 ),
@@ -544,7 +554,10 @@ class NavAction extends StatelessWidget {
     );
     if (tooltip != null) btn = Tooltip(message: tooltip!, child: btn);
     return Center(
-      child: Padding(padding: const EdgeInsets.symmetric(horizontal: 3), child: btn),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 3),
+        child: btn,
+      ),
     );
   }
 }
@@ -572,14 +585,18 @@ class NavPill extends StatelessWidget {
     final t = tint;
     final shape = StadiumBorder(
       side: BorderSide(
-        color: t != null ? t.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.18),
+        color: t != null
+            ? t.withValues(alpha: 0.55)
+            : Colors.white.withValues(alpha: 0.18),
       ),
     );
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 3),
         child: Material(
-          color: t != null ? t.withValues(alpha: 0.20) : Colors.white.withValues(alpha: 0.12),
+          color: t != null
+              ? t.withValues(alpha: 0.20)
+              : Colors.white.withValues(alpha: 0.12),
           shape: shape,
           child: InkWell(
             customBorder: shape,
@@ -633,6 +650,22 @@ class NavCreditPill extends StatelessWidget {
 }
 
 /// Rounded app-mark tile for the leading slot of an app bar.
+class AppBrandIcon extends StatelessWidget {
+  final double size;
+  const AppBrandIcon({super.key, this.size = 40});
+  @override
+  Widget build(BuildContext context) => ClipRRect(
+    borderRadius: BorderRadius.circular(size * .26),
+    child: Image.asset(
+      'assets/icons/app_icon.jpg',
+      width: size,
+      height: size,
+      fit: BoxFit.cover,
+      excludeFromSemantics: true,
+    ),
+  );
+}
+
 class NavLogo extends StatelessWidget {
   final IconData icon;
   final double size;
@@ -658,7 +691,7 @@ class NavLogo extends StatelessWidget {
             ),
             border: Border.all(color: Colors.white.withValues(alpha: 0.28)),
           ),
-          child: Icon(icon, color: Colors.white, size: size * 0.54),
+          child: AppBrandIcon(size: size),
         ),
       ),
     );
@@ -742,7 +775,10 @@ class GradientAppBar extends StatelessWidget implements PreferredSizeWidget {
             ),
           ),
           if (subtitleWidget != null)
-            Padding(padding: const EdgeInsets.only(top: 2), child: subtitleWidget!)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: subtitleWidget!,
+            )
           else if (subtitle != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),

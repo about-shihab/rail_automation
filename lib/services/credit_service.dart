@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -109,13 +108,13 @@ class CreditService extends ChangeNotifier {
     final firestore = FirebaseUserService().firestore;
     if (phone == null || phone.isEmpty || firestore == null) return;
 
-    final phoneVariants = <String>[
+    final phoneVariants = <String>{
       phone,
       if (!phone.startsWith('+88')) '+88$phone',
       if (!phone.startsWith('88')) '88$phone',
       if (phone.startsWith('880')) phone.substring(2),
       if (phone.startsWith('+880')) phone.substring(3),
-    ].toSet().toList();
+    }.toList();
 
     try {
       final docRef = firestore.collection('users').doc(phone);

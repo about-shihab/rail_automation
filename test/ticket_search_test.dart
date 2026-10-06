@@ -5,6 +5,10 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
+import 'support/fake_inapp_webview.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
@@ -26,6 +30,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late ProService pro;
   late MonitorService monitor;
+  setUp(() => InAppWebViewPlatform.instance = FakeInAppWebViewPlatform());
 
   Future<void> savedSearch({
     String? seat,

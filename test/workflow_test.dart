@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:rail_automation/services/turnstile_gate.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:rail_automation/views/watch_options_dialog.dart';
@@ -14,6 +16,7 @@ import 'package:rail_automation/models/booking_intent.dart';
 import 'package:rail_automation/models/seat_type.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/app_config.dart';
+import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/services/sms_service.dart';
@@ -25,9 +28,12 @@ import 'package:rail_automation/services/web_session_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUp(() {
+  setUp(() async {
+    TurnstileGate.instance.workerAcquire = (_) async => 'fresh-test-token';
+    addTearDown(() => TurnstileGate.instance.workerAcquire = null);
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
+    await LanguageService.instance.setLanguage(AppLanguage.en);
   });
   final auth = AuthSession(
     token: 'real-shaped-test-session',
@@ -113,8 +119,8 @@ void main() {
     await tester.tap(find.text('Watch'));
     await tester.pumpAndSettle();
     expect(find.byType(TextField), findsNothing);
-    await tester.ensureVisible(find.text('Start auto-booking'));
-    await tester.tap(find.text('Start auto-booking'));
+    await tester.ensureVisible(find.text('Start'));
+    await tester.tap(find.text('Start'));
     await tester.pumpAndSettle();
     expect(result?.autoReserve, isTrue);
     expect(result?.maxFare, isNull);
@@ -188,9 +194,21 @@ void main() {
     final mockTrains = ApiService.getMockResponse().trains;
 
     // Both 'RANDOM', 'ALL', and null evaluate all seat types and pick an available one
-    final chosenRandom = intent.choose(mockTrains, seatClass: 'RANDOM', random: Random(42));
-    final chosenAll = intent.choose(mockTrains, seatClass: 'ALL', random: Random(42));
-    final chosenNull = intent.choose(mockTrains, seatClass: null, random: Random(42));
+    final chosenRandom = intent.choose(
+      mockTrains,
+      seatClass: 'RANDOM',
+      random: Random(42),
+    );
+    final chosenAll = intent.choose(
+      mockTrains,
+      seatClass: 'ALL',
+      random: Random(42),
+    );
+    final chosenNull = intent.choose(
+      mockTrains,
+      seatClass: null,
+      random: Random(42),
+    );
 
     expect(chosenRandom, isNotNull);
     expect(chosenAll, isNotNull);
@@ -364,13 +382,15 @@ void main() {
         expect(await BookingService.pending(), isNull);
       },
       () => MockClient((request) async {
-        if (request.url.path.endsWith('/handshake'))
+        if (request.url.path.endsWith('/handshake')) {
           return http.Response(
             '{"data":{"release_time_interval_in_minutes":300}}',
             200,
           );
-        if (request.url.path.endsWith('/seat-layout'))
+        }
+        if (request.url.path.endsWith('/seat-layout')) {
           return http.Response(jsonEncode(layout()), 200);
+        }
         fail('Cancelled search sent a booking mutation');
       }),
     );
@@ -403,19 +423,21 @@ void main() {
         () => MockClient((request) async {
           paths.add(request.url.path);
           final path = request.url.path;
-          if (path.endsWith('/handshake'))
+          if (path.endsWith('/handshake')) {
             return http.Response(
               jsonEncode({
                 'data': {'release_time_interval_in_minutes': 300},
               }),
               200,
             );
-          if (path.endsWith('/seat-layout'))
+          }
+          if (path.endsWith('/seat-layout')) {
             return http.Response(
               jsonEncode(layout()),
               200,
               headers: {'x-action-token': 'token-a'},
             );
+          }
           if (path.endsWith('/reserve-seat')) {
             expect(request.method, 'PATCH');
             expect(request.headers['X-Action-Token'], isNotEmpty);
@@ -425,8 +447,9 @@ void main() {
               headers: {'x-action-token': 'token-b'},
             );
           }
-          if (path.endsWith('/verify-otp'))
+          if (path.endsWith('/verify-otp')) {
             expect(jsonDecode(request.body)['otp'], '012345');
+          }
           return http.Response('{"data":{"success":true}}', 200);
         }),
       );
@@ -459,116 +482,150 @@ void main() {
         expect(creditService.credits, 2);
 
         // Later when booking completes successfully, it should NOT double deduct
-        final completed = await BookingService.completeSuccessfulBooking(reservation: state);
+        final completed = await BookingService.completeSuccessfulBooking(
+          reservation: state,
+        );
         expect(completed, isTrue);
-        expect(creditService.credits, 2, reason: 'Credit must not be double deducted if already deducted at OTP send');
+        expect(
+          creditService.credits,
+          2,
+          reason: 'Credit must not be double deducted if already deducted at OTP send',
+        );
       },
       () => MockClient((request) async {
         final path = request.url.path;
         if (path.endsWith('/handshake')) {
           return http.Response(
-            jsonEncode({'data': {'release_time_interval_in_minutes': 300}}),
+            jsonEncode({
+              'data': {'release_time_interval_in_minutes': 300},
+            }),
             200,
           );
         }
         if (path.endsWith('/seat-layout')) {
-          return http.Response(jsonEncode(layout()), 200, headers: {'x-action-token': 'token-a'});
+          return http.Response(
+            jsonEncode(layout()),
+            200,
+            headers: {'x-action-token': 'token-a'},
+          );
         }
         if (path.endsWith('/reserve-seat')) {
-          return http.Response('{"data":{"ack":1}}', 200, headers: {'x-action-token': 'token-b'});
-        }
-        return http.Response('{"data":{"success":true}}', 200);
-      }),
-    );
-  });
-
-  test('reservation supports selecting seats across multiple coaches', () async {
-    final multiCoachLayout = {
-      'data': {
-        'seatLayout': [
-          {
-            'floor_name': 'KA',
-            'seat_floor': 1,
-            'seat_fare': '400',
-            'seat_availability': true,
-            'layout': [
-              [
-                {'seat_number': 'KA-1', 'ticket_id': 101, 'seat_availability': 1},
-              ],
-            ],
-          },
-          {
-            'floor_name': 'KHA',
-            'seat_floor': 2,
-            'seat_fare': '400',
-            'seat_availability': true,
-            'layout': [
-              [
-                {'seat_number': 'KHA-1', 'ticket_id': 201, 'seat_availability': 1},
-              ],
-            ],
-          },
-        ],
-      },
-    };
-
-    final selectedSeats = [
-      SeatItem(
-        isHidden: false,
-        seatAvailability: 1,
-        seatNumber: 'KA-1',
-        ticketId: 101,
-        ticketType: 1,
-      ),
-      SeatItem(
-        isHidden: false,
-        seatAvailability: 1,
-        seatNumber: 'KHA-1',
-        ticketId: 201,
-        ticketType: 1,
-      ),
-    ];
-
-    await http.runWithClient(
-      () async {
-        final state = await BookingService.reserve(
-          train: train,
-          seat: seat,
-          from: 'Dhaka',
-          to: 'Chattogram',
-          date: '30-Sep-2026',
-          auth: auth,
-          quantity: 2,
-          selectedSeats: selectedSeats,
-        );
-        expect(state['coach_names'], 'KA, KHA');
-        expect(state['seats'], hasLength(2));
-        final seatFloors = (state['seats'] as List).map((s) => s['floor_name']).toList();
-        expect(seatFloors, containsAll(['KA', 'KHA']));
-      },
-      () => MockClient((request) async {
-        final path = request.url.path;
-        if (path.endsWith('/handshake'))
-          return http.Response(
-            jsonEncode({'data': {'release_time_interval_in_minutes': 300}}),
-            200,
-          );
-        if (path.endsWith('/seat-layout'))
-          return http.Response(
-            jsonEncode(multiCoachLayout),
-            200,
-            headers: {'x-action-token': 'token-mc'},
-          );
-        if (path.endsWith('/reserve-seat'))
           return http.Response(
             '{"data":{"ack":1}}',
             200,
-            headers: {'x-action-token': 'token-ack'},
+            headers: {'x-action-token': 'token-b'},
           );
+        }
         return http.Response('{"data":{"success":true}}', 200);
       }),
     );
   });
+
+  test(
+    'reservation supports selecting seats across multiple coaches',
+    () async {
+      final multiCoachLayout = {
+        'data': {
+          'seatLayout': [
+            {
+              'floor_name': 'KA',
+              'seat_floor': 1,
+              'seat_fare': '400',
+              'seat_availability': true,
+              'layout': [
+                [
+                  {
+                    'seat_number': 'KA-1',
+                    'ticket_id': 101,
+                    'seat_availability': 1,
+                  },
+                ],
+              ],
+            },
+            {
+              'floor_name': 'KHA',
+              'seat_floor': 2,
+              'seat_fare': '400',
+              'seat_availability': true,
+              'layout': [
+                [
+                  {
+                    'seat_number': 'KHA-1',
+                    'ticket_id': 201,
+                    'seat_availability': 1,
+                  },
+                ],
+              ],
+            },
+          ],
+        },
+      };
+
+      final selectedSeats = [
+        SeatItem(
+          isHidden: false,
+          seatAvailability: 1,
+          seatNumber: 'KA-1',
+          ticketId: 101,
+          ticketType: 1,
+        ),
+        SeatItem(
+          isHidden: false,
+          seatAvailability: 1,
+          seatNumber: 'KHA-1',
+          ticketId: 201,
+          ticketType: 1,
+        ),
+      ];
+
+      await http.runWithClient(
+        () async {
+          final state = await BookingService.reserve(
+            train: train,
+            seat: seat,
+            from: 'Dhaka',
+            to: 'Chattogram',
+            date: '30-Sep-2026',
+            auth: auth,
+            quantity: 2,
+            selectedSeats: selectedSeats,
+          );
+          expect(state['coach_names'], 'KA, KHA');
+          expect(state['seats'], hasLength(2));
+          final seatFloors = (state['seats'] as List)
+              .map((s) => s['floor_name'])
+              .toList();
+          expect(seatFloors, containsAll(['KA', 'KHA']));
+        },
+        () => MockClient((request) async {
+          final path = request.url.path;
+          if (path.endsWith('/handshake')) {
+            return http.Response(
+              jsonEncode({
+                'data': {'release_time_interval_in_minutes': 300},
+              }),
+              200,
+            );
+          }
+          if (path.endsWith('/seat-layout')) {
+            return http.Response(
+              jsonEncode(multiCoachLayout),
+              200,
+              headers: {'x-action-token': 'token-mc'},
+            );
+          }
+          if (path.endsWith('/reserve-seat')) {
+            return http.Response(
+              '{"data":{"ack":1}}',
+              200,
+              headers: {'x-action-token': 'token-ack'},
+            );
+          }
+          return http.Response('{"data":{"success":true}}', 200);
+        }),
+      );
+    },
+  );
   test(
     'unknown mutation outcome persists and blocks duplicate booking',
     () async {
@@ -579,13 +636,15 @@ void main() {
           await expectLater(reserve(), throwsStateError);
         },
         () => MockClient((request) async {
-          if (request.url.path.endsWith('/handshake'))
+          if (request.url.path.endsWith('/handshake')) {
             return http.Response(
               '{"data":{"release_time_interval_in_minutes":300}}',
               200,
             );
-          if (request.url.path.endsWith('/seat-layout'))
+          }
+          if (request.url.path.endsWith('/seat-layout')) {
             return http.Response(jsonEncode(layout()), 200);
+          }
           return http.Response('{}', 503);
         }),
       );
@@ -623,19 +682,32 @@ void main() {
     await BookingService.save({
       'status': 'awaitingOtp',
       'startedAt': DateTime.now().toUtc().toIso8601String(),
-      'expiresAt': DateTime.now().add(const Duration(minutes: 5)).toUtc().toIso8601String(),
+      'expiresAt': DateTime.now()
+          .add(const Duration(minutes: 5))
+          .toUtc()
+          .toIso8601String(),
       'seatClass': {'trip_id': 1, 'trip_route_id': 2},
-      'seats': [{'ticket_id': 101}],
+      'seats': [
+        {'ticket_id': 101},
+      ],
     });
     expect(await BookingService.pending(), isNotNull);
 
     // 2. Reservation started 5 minutes and 1 second ago is automatically cleared
     await BookingService.save({
       'status': 'awaitingOtp',
-      'startedAt': DateTime.now().subtract(const Duration(minutes: 5, seconds: 1)).toUtc().toIso8601String(),
-      'expiresAt': DateTime.now().add(const Duration(minutes: 10)).toUtc().toIso8601String(),
+      'startedAt': DateTime.now()
+          .subtract(const Duration(minutes: 5, seconds: 1))
+          .toUtc()
+          .toIso8601String(),
+      'expiresAt': DateTime.now()
+          .add(const Duration(minutes: 10))
+          .toUtc()
+          .toIso8601String(),
       'seatClass': {'trip_id': 1, 'trip_route_id': 2},
-      'seats': [{'ticket_id': 101}],
+      'seats': [
+        {'ticket_id': 101},
+      ],
     });
     expect(await BookingService.pending(), isNull);
     expect(await SecureStore.read(BookingService.storageKey), isNull);
@@ -643,10 +715,18 @@ void main() {
     // 3. Reservation with expired expiresAt is automatically cleared
     await BookingService.save({
       'status': 'awaitingOtp',
-      'startedAt': DateTime.now().subtract(const Duration(minutes: 2)).toUtc().toIso8601String(),
-      'expiresAt': DateTime.now().subtract(const Duration(seconds: 5)).toUtc().toIso8601String(),
+      'startedAt': DateTime.now()
+          .subtract(const Duration(minutes: 2))
+          .toUtc()
+          .toIso8601String(),
+      'expiresAt': DateTime.now()
+          .subtract(const Duration(seconds: 5))
+          .toUtc()
+          .toIso8601String(),
       'seatClass': {'trip_id': 1, 'trip_route_id': 2},
-      'seats': [{'ticket_id': 101}],
+      'seats': [
+        {'ticket_id': 101},
+      ],
     });
     expect(await BookingService.pending(), isNull);
     expect(await SecureStore.read(BookingService.storageKey), isNull);
@@ -680,7 +760,8 @@ void main() {
       seatClass: 'S_CHAIR',
       seatNumbers: [],
       status: TripBookingStatus.failed,
-      failureReason: 'Seat layout rejected (422): Turnstile verification required',
+      failureReason:
+          'Seat layout rejected (422): Turnstile verification required',
       createdAt: DateTime.now(),
       isAutoBook: true,
     );
@@ -695,7 +776,11 @@ void main() {
     expect(history.failedTrips.first.failureReason, contains('422'));
 
     // Update trip1 status to expired when 5-min timeout hits
-    await history.updateTripStatus('trip_1', TripBookingStatus.expired, failureReason: 'Reservation timed out after 5 minutes');
+    await history.updateTripStatus(
+      'trip_1',
+      TripBookingStatus.expired,
+      failureReason: 'Reservation timed out after 5 minutes',
+    );
     expect(history.failedTrips.length, 2);
     expect(history.successfulTrips.length, 0);
   });

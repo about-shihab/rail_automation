@@ -2,6 +2,7 @@ import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+
 import '../utils/app_theme.dart';
 
 /// Destination item for the bottom navigation bar.
@@ -62,7 +63,8 @@ class _TrainNavigationBarState extends State<TrainNavigationBar>
   @override
   void initState() {
     super.initState();
-    _from = _target = _current = _lastWheelPos = widget.selectedIndex.toDouble();
+    _from = _target = _current = _lastWheelPos = widget.selectedIndex
+        .toDouble();
     _ctrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 380),
@@ -78,7 +80,11 @@ class _TrainNavigationBarState extends State<TrainNavigationBar>
       _from = _current;
       _target = widget.selectedIndex.toDouble();
       _lastWheelPos = _from;
-      _ctrl.forward(from: 0);
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _ctrl.value = 1;
+      } else {
+        _ctrl.forward(from: 0);
+      }
     }
   }
 
@@ -147,7 +153,8 @@ class _TrainNavigationBarState extends State<TrainNavigationBar>
                               height: 3,
                               child: CustomPaint(
                                 painter: _RailPainter(
-                                  color: AppColors.textMuted(isDark).withValues(alpha: 0.30),
+                                  color: AppColors.textMuted(isDark)
+                                      .withValues(alpha: 0.30),
                                 ),
                               ),
                             ),
@@ -171,7 +178,9 @@ class _TrainNavigationBarState extends State<TrainNavigationBar>
                             // Destinations
                             Positioned.fill(
                               child: Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: _sidePad),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: _sidePad,
+                                ),
                                 child: Row(
                                   children: List.generate(count, (i) {
                                     final dist = (_current - i).abs();
@@ -256,7 +265,9 @@ class _ActiveCoach extends StatelessWidget {
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.primary.withValues(alpha: isDark ? 0.34 : 0.30),
+                      color: AppColors.primary.withValues(
+                        alpha: isDark ? 0.34 : 0.30,
+                      ),
                       blurRadius: 16,
                       offset: const Offset(0, 5),
                     ),
@@ -352,7 +363,9 @@ class _Wheel extends StatelessWidget {
       height: 9,
       child: Transform.rotate(
         angle: angle,
-        child: CustomPaint(painter: _WheelPainter(isDark: isDark, fill: fill)),
+        child: CustomPaint(
+          painter: _WheelPainter(isDark: isDark, fill: fill),
+        ),
       ),
     );
   }
@@ -382,13 +395,22 @@ class _WheelPainter extends CustomPainter {
       ..color = steel.withValues(alpha: 0.9)
       ..strokeWidth = 0.9
       ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(c.dx - r + 1.6, c.dy), Offset(c.dx + r - 1.6, c.dy), spoke);
-    canvas.drawLine(Offset(c.dx, c.dy - r + 1.6), Offset(c.dx, c.dy + r - 1.6), spoke);
+    canvas.drawLine(
+      Offset(c.dx - r + 1.6, c.dy),
+      Offset(c.dx + r - 1.6, c.dy),
+      spoke,
+    );
+    canvas.drawLine(
+      Offset(c.dx, c.dy - r + 1.6),
+      Offset(c.dx, c.dy + r - 1.6),
+      spoke,
+    );
     canvas.drawCircle(c, 1, Paint()..color = AppColors.primaryDark);
   }
 
   @override
-  bool shouldRepaint(_WheelPainter old) => old.isDark != isDark || old.fill != fill;
+  bool shouldRepaint(_WheelPainter old) =>
+      old.isDark != isDark || old.fill != fill;
 }
 
 class _RailPainter extends CustomPainter {
@@ -454,9 +476,15 @@ class _NavItem extends StatelessWidget {
     final IconData data;
     if (label.contains('search') || index == 0) {
       data = Icons.search_rounded;
-    } else if (label.contains('ticket') || label.contains('monitor') || index == 1) {
-      data = selected ? Icons.confirmation_number_rounded : Icons.confirmation_number_outlined;
-    } else if (label.contains('trip') || label.contains('alert') || index == 2) {
+    } else if (label.contains('ticket') ||
+        label.contains('monitor') ||
+        index == 1) {
+      data = selected
+          ? Icons.confirmation_number_rounded
+          : Icons.confirmation_number_outlined;
+    } else if (label.contains('trip') ||
+        label.contains('alert') ||
+        index == 2) {
       data = selected ? Icons.luggage_rounded : Icons.luggage_outlined;
     } else {
       data = selected ? Icons.person_rounded : Icons.person_outline_rounded;

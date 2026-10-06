@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:rail_automation/views/app_shell.dart';
 import 'package:rail_automation/services/credit_service.dart';
+import 'package:rail_automation/services/firebase_user_service.dart';
 import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
@@ -16,11 +17,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
     FlutterSecureStorage.setMockInitialValues({});
   });
 
-  testWidgets('Profile tab displays Developer Info, email, and Disclaimer', (tester) async {
+  testWidgets('Profile tab displays Developer Info, email, and Disclaimer', (
+    tester,
+  ) async {
     final credit = CreditService();
     final theme = ThemeService();
     final lang = LanguageService();
@@ -38,11 +41,10 @@ void main() {
           ChangeNotifierProvider.value(value: theme),
           ChangeNotifierProvider.value(value: lang),
           ChangeNotifierProvider.value(value: monitor),
+          ChangeNotifierProvider.value(value: FirebaseUserService()),
           ChangeNotifierProvider.value(value: TripHistoryService()),
         ],
-        child: const MaterialApp(
-          home: ProfileTab(),
-        ),
+        child: const MaterialApp(home: ProfileTab()),
       ),
     );
 
@@ -64,10 +66,18 @@ void main() {
 
     // Verify Disclaimer
     expect(find.text('Disclaimer'), findsOneWidget);
-    expect(find.textContaining('Rail Pro is an independent automation'), findsOneWidget);
+    await tester.tap(find.text('Disclaimer'));
+    await tester.pumpAndSettle();
+    expect(
+      find.textContaining('Rail Pro is an independent automation'),
+      findsOneWidget,
+    );
     expect(find.textContaining('Bangladesh Railway (BR)'), findsOneWidget);
 
     // Verify Footer
-    expect(find.textContaining('Developed by Abdulla Al Mamun'), findsOneWidget);
+    expect(
+      find.textContaining('Developed by Abdulla Al Mamun'),
+      findsOneWidget,
+    );
   });
 }

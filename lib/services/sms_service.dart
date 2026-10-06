@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'package:flutter/services.dart';
+
 import 'app_config.dart';
 
 class SmsService {
@@ -10,32 +12,86 @@ class SmsService {
   static const _events = EventChannel('com.example.rail_automation/sms_stream');
   StreamSubscription<dynamic>? _subscription;
   DateTime? _startedAt;
+  Timer? _timeout;
+  bool _starting = false;
   Future<bool> requestSmsPermission() async {
-    try { return await _methods.invokeMethod<bool>('requestSmsPermission') ?? true; }
-    catch (_) { return true; }
+    try {
+      return await _methods.invokeMethod<bool>('requestSmsPermission') ?? true;
+    } catch (_) {
+      return false;
+    }
   }
+
   Future<bool> hasPermission() async {
-    try { return await _methods.invokeMethod<bool>('hasSmsPermission') ?? true; }
-    catch (_) { return true; }
+    try {
+      return await _methods.invokeMethod<bool>('hasSmsPermission') ?? true;
+    } catch (_) {
+      return false;
+    }
   }
-  static String? extractOtp(String sender, String body, List<String> allowedSenders, int digits) {
+
+  static String? extractOtp(
+    String sender,
+    String body,
+    List<String> allowedSenders,
+    int digits,
+  ) {
     final senderUpper = sender.trim().toUpperCase();
     final bodyUpper = body.toUpperCase();
-    final matchesSender = allowedSenders.any((s) => s.toUpperCase() == senderUpper) ||
+    final matchesSender =
+        allowedSenders.any((s) => s.toUpperCase() == senderUpper) ||
         allowedSenders.any((s) => bodyUpper.contains(s.toUpperCase()));
     if (!matchesSender) return null;
-    if (!RegExp(r'otp|verification|verify|ওটিপি|যাচাই', caseSensitive: false).hasMatch(body)) return null;
-    return RegExp('(?<![0-9])([0-9]{$digits})(?![0-9])').firstMatch(body)?.group(1);
+    if (!RegExp(
+      r'otp|verification|verify|ওটিপি|যাচাই',
+      caseSensitive: false,
+    ).hasMatch(body)) {
+      return null;
+    }
+    return RegExp('(?<![0-9])([0-9]{$digits})(?![0-9])')
+        .firstMatch(body)
+        ?.group(1);
   }
+
   Future<void> startListening({void Function(String)? onOtpReceived}) async {
-    if (_subscription != null || !await hasPermission()) return;
-    _startedAt = DateTime.now();
-    _subscription = _events.receiveBroadcastStream().listen((event) {
-      if (event is! Map || _startedAt == null) return;
-      if (DateTime.now().difference(_startedAt!).inSeconds > AppConfig.instance.number('otp_window_seconds')) return;
-      final otp = extractOtp('${event['sender']}', '${event['body']}', AppConfig.instance.strings('sms_senders'), AppConfig.instance.number('otp_length'));
-      if (otp != null) onOtpReceived?.call(otp);
-    }, onError: (_) { stopListening(); });
+    if (_subscription != null || _starting) return;
+    _starting = true;
+    try {
+      if (!await hasPermission()) return;
+      _startedAt = DateTime.now();
+      _timeout = Timer(
+        Duration(seconds: AppConfig.instance.number('otp_window_seconds')),
+        stopListening,
+      );
+      _subscription = _events.receiveBroadcastStream().listen(
+        (event) {
+          if (event is! Map || _startedAt == null) return;
+          if (DateTime.now().difference(_startedAt!).inSeconds >
+              AppConfig.instance.number('otp_window_seconds')) {
+            return;
+          }
+          final otp = extractOtp(
+            '${event['sender']}',
+            '${event['body']}',
+            AppConfig.instance.strings('sms_senders'),
+            AppConfig.instance.number('otp_length'),
+          );
+          if (otp != null) onOtpReceived?.call(otp);
+        },
+        onError: (_) {
+          stopListening();
+        },
+      );
+    } finally {
+      _starting = false;
+    }
   }
-  void stopListening() { _subscription?.cancel(); _subscription = null; _startedAt = null; }
+
+  void stopListening() {
+    _timeout?.cancel();
+    _timeout = null;
+    _subscription?.cancel();
+    _subscription = null;
+    _startedAt = null;
+  }
 }

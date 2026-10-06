@@ -1,9 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
+
 import 'app_shell.dart';
+
 import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
 import '../models/auth_session.dart';
 import '../services/web_session_service.dart';
 import '../services/secure_store.dart';
@@ -12,9 +16,7 @@ import '../services/language_service.dart';
 import '../services/monitor_service.dart';
 import '../services/firebase_user_service.dart';
 import '../widgets/fancy_train_loader.dart';
-import 'monitor_dashboard_screen.dart';
 import '../utils/app_theme.dart';
-import 'search_screen.dart';
 
 class WebviewLoginScreen extends StatefulWidget {
   /// Set [clearSession] to true when navigating here after a session expiry
@@ -39,6 +41,13 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   bool _isLoading = true;
   String _savedPhone = '';
   String _savedPassword = '';
+  Timer? _sessionRetry;
+
+  @override
+  void dispose() {
+    _sessionRetry?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -70,9 +79,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     try {
       _controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent(
-          'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-        )
         ..addJavaScriptChannel(
           'RailBridge',
           onMessageReceived: (JavaScriptMessage msg) {
@@ -81,9 +87,19 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         )
         ..setNavigationDelegate(
           NavigationDelegate(
-            onNavigationRequest: (request) => WebSessionService.isRailwayUrl(request.url)
-                ? NavigationDecision.navigate : NavigationDecision.prevent,
+            onNavigationRequest: (request) async {
+              if (_hasNavigated ||
+                  !WebSessionService.isRailwayUrl(request.url)) {
+                return NavigationDecision.prevent;
+              }
+              if (Uri.tryParse(request.url)?.path == '/booking/train/search') {
+                await _checkLiveSession();
+                if (_hasNavigated) return NavigationDecision.prevent;
+              }
+              return NavigationDecision.navigate;
+            },
             onPageStarted: (url) {
+              _sessionRetry?.cancel();
               if (mounted) setState(() => _isLoading = true);
             },
             onPageFinished: (url) async {
@@ -92,6 +108,12 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
               await _installInterceptors();
               await _insertSavedCredentials(silent: true);
               await _checkLiveSession();
+              if (mounted && !_hasNavigated) {
+                _sessionRetry?.cancel();
+                _sessionRetry = Timer(const Duration(milliseconds: 500), () {
+                  if (mounted && !_hasNavigated) _checkLiveSession();
+                });
+              }
             },
             onWebResourceError: (error) {
               if (mounted) setState(() => _isLoading = false);
@@ -99,7 +121,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           ),
         );
 
-      _controller!.loadRequest(Uri.parse('https://eticket.railway.gov.bd/login'));
+      _controller!.loadRequest(
+        Uri.parse('https://eticket.railway.gov.bd/login'),
+      );
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -153,20 +177,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                    localStorage.getItem('access_token') || '';
           }
 
-          function getTurnstileToken() {
-            try {
-              var el = document.querySelector('input[name="cf-turnstile-response"]') ||
-                       document.querySelector('input[name="cft_response"]') ||
-                       document.querySelector('[name*="turnstile"]');
-              if (el && el.value && el.value.length > 20) return el.value;
-              if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
-                var resp = window.turnstile.getResponse();
-                if (resp && resp.length > 20) return resp;
-              }
-            } catch (_) {}
-            return '';
-          }
-
           // XHR Interception
           var origOpen = XMLHttpRequest.prototype.open;
           var origSend = XMLHttpRequest.prototype.send;
@@ -195,7 +205,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                   var devId = h['x-device-id'] || h['X-Device-Id'] || getDeviceId();
                   var devKey = h['x-device-key'] || h['X-Device-Key'] || getDeviceKey();
                   var usr = (res && res.data && res.data.user) || (res && res.user) || localStorage.getItem('user') || '{}';
-                  var cft = getTurnstileToken();
                   if (t && window.RailBridge) {
                     window.RailBridge.postMessage(JSON.stringify({
                       type: 'AUTH_SUCCESS',
@@ -204,7 +213,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                       deviceKey: devKey,
                       user: usr,
                       cookie: document.cookie || '',
-                      cftToken: cft
                     }));
                   }
                 }
@@ -225,11 +233,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                 var clone = resp.clone();
                 var json = await clone.json();
                 var t = (json && json.data && json.data.token) || (json && json.token) || getToken();
-                var h = opts.headers || {};
-                var devId = h['x-device-id'] || h['X-Device-Id'] || getDeviceId();
-                var devKey = h['x-device-key'] || h['X-Device-Key'] || getDeviceKey();
+                var h = new Headers(opts.headers || (typeof url !== 'string' && url.headers) || {});
+                var devId = h.get('x-device-id') || getDeviceId();
+                var devKey = h.get('x-device-key') || getDeviceKey();
                 var usr = (json && json.data && json.data.user) || (json && json.user) || localStorage.getItem('user') || '{}';
-                var cft = getTurnstileToken();
                 if (t && window.RailBridge) {
                   window.RailBridge.postMessage(JSON.stringify({
                     type: 'AUTH_SUCCESS',
@@ -238,7 +245,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                     deviceKey: devKey,
                     user: usr,
                     cookie: document.cookie || '',
-                    cftToken: cft
                   }));
                 }
               }
@@ -246,16 +252,17 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             return resp;
           };
 
-          // Active token watcher
-          setInterval(function() {
+          // Active token watcher — polls every 1.5 s and reports the
+          // token as soon as it appears in localStorage (e.g. right after
+          // the user accepts the disclaimer on the post-login page).
+          function reportSession() {
             try {
               var t = getToken();
               var pathname = window.location.pathname || '';
-              if (t && t.length > 30) {
+              if (t) {
                 var devId = getDeviceId();
                 var devKey = getDeviceKey();
                 var usr = localStorage.getItem('user') || '{}';
-                var cft = getTurnstileToken();
                 if (window.RailBridge) {
                   window.RailBridge.postMessage(JSON.stringify({
                     type: 'STORAGE_TOKEN',
@@ -265,44 +272,41 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                     user: usr,
                     cookie: document.cookie || '',
                     currentPath: pathname,
-                    cftToken: cft
                   }));
                 }
               }
             } catch(e) {}
-          }, 1500);
+          }
+          var originalSetItem = Storage.prototype.setItem;
+          Storage.prototype.setItem = function(key, value) {
+            originalSetItem.apply(this, arguments);
+            if (this === localStorage) setTimeout(reportSession, 0);
+          };
+          setInterval(reportSession, 500);
+          reportSession();
 
-          // Dedicated Turnstile token watcher
-          setInterval(function() {
-            try {
-              var cft = getTurnstileToken();
-              if (cft && cft.length > 20 && cft !== window.__lastSentCft) {
-                window.__lastSentCft = cft;
-                if (window.RailBridge) {
-                  window.RailBridge.postMessage(JSON.stringify({
-                    type: 'CFT_TOKEN',
-                    token: cft
-                  }));
-                }
-              }
-            } catch (_) {}
-          }, 1500);
-        })();
+        })(); // ← close the IIFE so all of the above actually executes
       ''';
       await _controller!.runJavaScript(script);
     } catch (_) {}
   }
 
   bool _hasNavigated = false;
+  bool _checkingSession = false;
 
   Future<void> _handleBridgeMessage(String raw) async {
-    if (!WebSessionService.isRailwayUrl(await _controller?.currentUrl())) return;
+    if (!mounted || _hasNavigated) return;
+    if (!WebSessionService.isRailwayUrl(await _controller?.currentUrl())) {
+      return;
+    }
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       final type = map['type']?.toString();
       if (type == 'HOLD_CONFIG') {
         final seconds = map['seconds'];
-        if (seconds is int && seconds > 0 && seconds <= 3600) await SecureStore.write('rail_hold_seconds', '$seconds');
+        if (seconds is int && seconds > 0 && seconds <= 3600) {
+          await SecureStore.write('rail_hold_seconds', '$seconds');
+        }
         return;
       }
       if (type == 'CREDENTIALS') {
@@ -311,33 +315,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         return;
       }
 
-      if (type == 'CFT_TOKEN') {
-        final cft = map['token']?.toString() ?? '';
-        if (cft.isNotEmpty && cft.length > 20) {
-          await SecureStore.write('rail_cft_token', cft);
-          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
-        }
-        return;
-      }
-
       if (type == 'AUTH_SUCCESS' || type == 'STORAGE_TOKEN') {
         final token = map['token']?.toString() ?? '';
         final deviceId = map['deviceId']?.toString() ?? '';
         final deviceKey = map['deviceKey']?.toString() ?? '';
         final cookie = map['cookie']?.toString() ?? '';
-        final currentPath = map['currentPath']?.toString() ?? '';
-        final cftToken = map['cftToken']?.toString() ?? '';
-
-        if (cftToken.isNotEmpty && cftToken.length > 20) {
-          await SecureStore.write('rail_cft_token', cftToken);
-          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
-        }
-
-        // Avoid premature auto-navigation from background storage while user is still on the login page
-        if (type == 'STORAGE_TOKEN' && currentPath.contains('login')) {
-          return;
-        }
-
         final userRaw = map['user'];
         Map<String, dynamic> user = {};
         if (userRaw is String && userRaw.isNotEmpty) {
@@ -348,17 +330,21 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           user = userRaw;
         }
 
-        if (user.isNotEmpty) await SecureStore.write('rail_user', jsonEncode(user));
+        if (user.isNotEmpty) {
+          await SecureStore.write('rail_user', jsonEncode(user));
+        }
         if (token.isNotEmpty && !AuthSession.isDummyToken(token)) {
           _saveAndNavigate(
             token: token,
             deviceId: deviceId,
             deviceKey: deviceKey,
             cookie: cookie,
-            phoneNumber: user['mobile_number']?.toString() ??
+            phoneNumber:
+                user['mobile_number']?.toString() ??
                 user['phone_number']?.toString() ??
                 user['username']?.toString(),
-            displayName: user['display_name']?.toString() ?? user['name']?.toString(),
+            displayName:
+                user['display_name']?.toString() ?? user['name']?.toString(),
             email: user['email']?.toString(),
           );
         }
@@ -367,36 +353,32 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   }
 
   Future<void> _checkLiveSession() async {
-    if (!mounted || _controller == null || _hasNavigated) return;
+    if (!mounted || _controller == null || _hasNavigated || _checkingSession) {
+      return;
+    }
+    _checkingSession = true;
     try {
-      final currentUrl = await _controller!.currentUrl() ?? '';
-      // If user is currently on the login page, allow them to log in fresh
-      if (currentUrl.contains('/login')) return;
+      if (!WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
+        return;
+      }
+      // Check localStorage on ANY page – including the login page itself –
+      // so that a token stored right after a successful login causes an
+      // immediate redirect without requiring the user to interact with any
+      // disclaimer popup.
 
       final res = await _controller!.runJavaScriptReturningResult('''
         (function() {
-          var t = localStorage.getItem('token') || '';
+          var t = localStorage.getItem('token') || localStorage.getItem('access_token') || localStorage.getItem('user_token') || '';
           var devId = localStorage.getItem('x-device-id') || localStorage.getItem('uudid') || '';
           var devKey = localStorage.getItem('x-device-key') || localStorage.getItem('ss') || localStorage.getItem('ssdk') || '';
           var usr = localStorage.getItem('user') || '{}';
           var cookie = document.cookie || '';
-          var cft = '';
-          try {
-            var el = document.querySelector('input[name="cf-turnstile-response"]') ||
-                     document.querySelector('input[name="cft_response"]') ||
-                     document.querySelector('[name*="turnstile"]');
-            if (el && el.value && el.value.length > 20) cft = el.value;
-            if (!cft && window.turnstile && typeof window.turnstile.getResponse === 'function') {
-              cft = window.turnstile.getResponse() || '';
-            }
-          } catch (_) {}
           return JSON.stringify({
             token: t,
             deviceId: devId,
             deviceKey: devKey,
             user: usr,
             cookie: cookie,
-            cftToken: cft
           });
         })()
       ''');
@@ -419,29 +401,31 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           user = userRaw;
         }
 
-        final cftToken = map['cftToken']?.toString() ?? '';
-        if (cftToken.isNotEmpty && cftToken.length > 20) {
-          await SecureStore.write('rail_cft_token', cftToken);
-          await SecureStore.write('rail_cft_token_time', DateTime.now().toIso8601String());
+        if (user.isNotEmpty) {
+          await SecureStore.write('rail_user', jsonEncode(user));
         }
-
-        _saveAndNavigate(
+        await _saveAndNavigate(
           token: rawToken,
           deviceId: map['deviceId']?.toString() ?? '',
           deviceKey: map['deviceKey']?.toString() ?? '',
           cookie: map['cookie']?.toString() ?? '',
-          phoneNumber: user['mobile_number']?.toString() ??
+          phoneNumber:
+              user['mobile_number']?.toString() ??
               user['phone_number']?.toString() ??
               user['mobile']?.toString() ??
               user['phone']?.toString() ??
               user['username']?.toString(),
-          displayName: user['display_name']?.toString() ??
+          displayName:
+              user['display_name']?.toString() ??
               user['name']?.toString() ??
               user['passenger_name']?.toString(),
           email: user['email']?.toString(),
         );
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _checkingSession = false;
+    }
   }
 
   Future<void> _saveAndNavigate({
@@ -453,48 +437,57 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     String? displayName,
     String? email,
   }) async {
-    if (_hasNavigated) return;
-    _hasNavigated = true;
-
-    final payload = AuthSession.decodeJwtPayload(token);
-    final phone = (phoneNumber != null && phoneNumber.isNotEmpty)
-        ? phoneNumber
-        : (payload?['mobile_number']?.toString() ??
-            payload?['phone_number']?.toString() ??
-            payload?['mobile']?.toString() ??
-            payload?['phone']?.toString() ??
-            payload?['username']?.toString() ??
-            _savedPhone);
-    final name = (displayName != null && displayName.isNotEmpty)
-        ? displayName
-        : (payload?['display_name']?.toString() ??
-            payload?['name']?.toString() ??
-            payload?['passenger_name']?.toString());
-    final mail = (email != null && email.isNotEmpty)
-        ? email
-        : payload?['email']?.toString();
-
-    // Persist user's own phone for future autofill
-    if (phone.isNotEmpty) {
-      await AuthSession.saveUserCredentials(
-        phone,
-        _savedPassword.isNotEmpty ? _savedPassword : null,
-      );
+    if (_hasNavigated ||
+        !mounted ||
+        !AuthSession(token: token, deviceKey: deviceKey).isValid) {
+      return;
     }
+    _hasNavigated = true;
+    setState(() => _isLoading = true);
+    try {
+      final payload = AuthSession.decodeJwtPayload(token);
+      final phone = (phoneNumber != null && phoneNumber.isNotEmpty)
+          ? phoneNumber
+          : (payload?['mobile_number']?.toString() ??
+                payload?['phone_number']?.toString() ??
+                payload?['mobile']?.toString() ??
+                payload?['phone']?.toString() ??
+                payload?['username']?.toString() ??
+                _savedPhone);
+      final name = (displayName != null && displayName.isNotEmpty)
+          ? displayName
+          : (payload?['display_name']?.toString() ??
+                payload?['name']?.toString() ??
+                payload?['passenger_name']?.toString());
+      final mail = (email != null && email.isNotEmpty)
+          ? email
+          : payload?['email']?.toString();
 
-    final session = AuthSession(
-      token: token,
-      deviceId: deviceId,
-      deviceKey: deviceKey,
-      cookie: cookie,
-      phoneNumber: phone,
-      displayName: name,
-      email: mail,
-      isLoggedIn: true,
-    );
-    await AuthSession.save(session);
-    unawaited(FirebaseUserService().syncUserOnLogin(session));
-    _navigateToSearch();
+      // Persist user's own phone for future autofill
+      if (phone.isNotEmpty) {
+        await AuthSession.saveUserCredentials(
+          phone,
+          _savedPassword.isNotEmpty ? _savedPassword : null,
+        );
+      }
+
+      final session = AuthSession(
+        token: token,
+        deviceId: deviceId,
+        deviceKey: deviceKey,
+        cookie: cookie,
+        phoneNumber: phone,
+        displayName: name,
+        email: mail,
+        isLoggedIn: true,
+      );
+      await AuthSession.save(session);
+      unawaited(FirebaseUserService().syncUserOnLogin(session));
+      _navigateToSearch();
+    } catch (_) {
+      _hasNavigated = false;
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   Future<void> _showSaveCredentialsDialog() async {
@@ -540,7 +533,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             child: Text(lang.isBangla ? 'বাতিল' : 'Cancel'),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF059669)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF059669),
+            ),
             onPressed: () async {
               final p = phoneController.text.trim();
               final pwd = passController.text;
@@ -565,7 +560,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   }
 
   Future<void> _insertSavedCredentials({bool silent = false}) async {
-    if (_controller == null || !WebSessionService.isRailwayUrl(await _controller!.currentUrl())) return;
+    if (_controller == null ||
+        !WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
+      return;
+    }
     if (_savedPhone.trim().isEmpty) {
       if (!silent && mounted) {
         _showSaveCredentialsDialog();
@@ -574,7 +572,8 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
 
     try {
-      final jsCode = '''
+      final jsCode =
+          '''
         (function() {
           function fill(selector, val) {
             var el = document.querySelector(selector);
@@ -630,11 +629,13 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     if (!mounted) return;
     final monitorService = context.read<MonitorService>();
     monitorService.clearErrors();
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(builder: (_) => AppShell(
-        initialTab: monitorService.dateOfJourney.isNotEmpty
-          ? AppShell.tabMonitor : AppShell.tabSearch)),
+    Navigator.of(context).pushAndRemoveUntil(
+      PageRouteBuilder<void>(
+        transitionDuration: Duration.zero,
+        pageBuilder: (_, _, _) =>
+            const AppShell(initialTab: AppShell.tabSearch),
+      ),
+      (_) => false,
     );
   }
 
@@ -653,7 +654,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [AppColors.appBarGradientStart, AppColors.appBarGradientEnd],
+              colors: [
+                AppColors.appBarGradientStart,
+                AppColors.appBarGradientEnd,
+              ],
             ),
           ),
         ),
@@ -671,11 +675,18 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           children: [
             Text(
               langService.t('app_name'),
-              style: const TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             Text(
               langService.t('app_subtitle'),
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.75), fontSize: 11),
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.75),
+                fontSize: 11,
+              ),
             ),
           ],
         ),
@@ -692,7 +703,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
               ),
               child: Text(
                 langService.isBangla ? 'EN' : 'বাং',
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
@@ -714,13 +729,19 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           if (_controller != null)
             WebViewWidget(controller: _controller!)
           else
-            const Center(child: CircularProgressIndicator(color: AppColors.primary)),
+            const Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            ),
           if (_isLoading)
             Positioned.fill(
               child: Container(
-                color: (isDark ? AppColors.darkBg : Colors.white).withValues(alpha: 0.88),
+                color: (isDark ? AppColors.darkBg : Colors.white).withValues(
+                  alpha: 0.88,
+                ),
                 child: FancyTrainLoader(
-                  message: langService.t('loading_tickets'),
+                  message: langService.tr('Signing in…', 'সাইন ইন হচ্ছে…'),
+                  subMessage: '',
+                  stage: JourneyAnimationStage.verifying,
                   showCard: true,
                 ),
               ),

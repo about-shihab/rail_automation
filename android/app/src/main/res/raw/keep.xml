@@ -1,0 +1,2 @@
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_stat_rail,@drawable/ic_notification_brand,@raw/seat_found" />

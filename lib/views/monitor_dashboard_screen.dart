@@ -1,16 +1,17 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+
 import 'app_shell.dart';
+
 import 'package:provider/provider.dart';
 
 import '../models/auth_session.dart';
 import '../services/booking_service.dart';
 import '../services/credit_service.dart';
+import '../services/language_service.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
-import '../services/overlay_service.dart';
 import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 import '../utils/app_theme.dart';
@@ -19,7 +20,7 @@ import 'recharge_credit_dialog.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
 import '../widgets/fancy_train_loader.dart';
-import '../widgets/turnstile_sheet.dart';
+import '../services/turnstile_gate.dart';
 import '../utils/friendly_error.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
@@ -45,15 +46,26 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   void initState() {
     super.initState();
     CreditService().addListener(_onCreditChanged);
-    final isTest = WidgetsBinding.instance.runtimeType.toString().contains('Test');
-    _queueCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 4));
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800));
+    final isTest = WidgetsBinding.instance.runtimeType.toString().contains(
+      'Test',
+    );
+    _queueCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    );
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    );
     if (!isTest) {
       _queueCtrl.repeat();
       _pulseCtrl.repeat(reverse: true);
     }
     _refresh();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 3),
+      (_) => _refresh(),
+    );
   }
 
   void _onCreditChanged() {
@@ -69,7 +81,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         final started = DateTime.tryParse('${value['startedAt'] ?? ''}');
         final expiry = DateTime.tryParse('${value['expiresAt'] ?? ''}');
         final now = DateTime.now();
-        final is5MinElapsed = (started != null && now.difference(started).inMinutes >= 5) ||
+        final is5MinElapsed =
+            (started != null && now.difference(started).inMinutes >= 5) ||
             (expiry != null && !now.isBefore(expiry));
         if (is5MinElapsed) {
           await BookingService.clear();
@@ -91,8 +104,6 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       _reading = false;
     }
   }
-
-  bool _turnstileShowing = false;
 
   Future<void> _checkSession() async {
     if (_sessionExpired || !mounted) return;
@@ -122,12 +133,17 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       await SecureStore.delete('rail_cft_token_time');
     } catch (_) {}
     if (!mounted) return;
-    Navigator.of(context).pushReplacement(PageRouteBuilder(
-      pageBuilder: (ctx, anim, sec) => const WebviewLoginScreen(clearSession: true),
-      transitionsBuilder: (ctx, a, sec, child) =>
-          FadeTransition(opacity: CurvedAnimation(parent: a, curve: Curves.easeInOut), child: child),
-      transitionDuration: const Duration(milliseconds: 500),
-    ));
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        pageBuilder: (ctx, anim, sec) =>
+            const WebviewLoginScreen(clearSession: true),
+        transitionsBuilder: (ctx, a, sec, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: a, curve: Curves.easeInOut),
+          child: child,
+        ),
+        transitionDuration: const Duration(milliseconds: 500),
+      ),
+    );
   }
 
   @override
@@ -139,154 +155,50 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     super.dispose();
   }
 
-  Future<void> _newSearch() async {
-    await context.read<MonitorService>().clearSearch();
-    if (mounted) AppShell.goTo(context, AppShell.tabSearch);
-  }
-
-  void _goHome() {
-    AppShell.goTo(context, AppShell.tabSearch);
-  }
-
   Future<void> _handleSolveTurnstile() async {
-    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
-    final m = context.read<MonitorService>();
-    final label = [
-      if (m.targetTrain != null && m.targetTrain!.isNotEmpty) m.targetTrain!,
-      if (m.targetSeatClass != null && m.targetSeatClass!.isNotEmpty) m.targetSeatClass!,
-    ].join(' · ');
-    final canOverlay = await OverlayService.canDrawOverlays();
-    if (!mounted) return;
-    final String? token;
-    if (canOverlay) {
-      token = await OverlayService.showTurnstile(contextLabel: label);
-    } else {
-      token = await TurnstileSheet.show(context, contextLabel: label);
-    }
-    if (token != null && token.isNotEmpty && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Verification completed. Retrying auto-booking...'),
-          backgroundColor: AppColors.primaryDark,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-      m.onTurnstileSolved(token);
-    }
+    if (TurnstileGate.instance.isShowing) return;
+    await context.read<MonitorService>().resolveTurnstile();
   }
 
   void _showWalkthroughGuide() {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    showModalBottomSheet(
+    final lang = LanguageService.of(context, listen: false);
+    showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => Container(
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0xFF091424) : Colors.white,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-          border: Border(
-            top: BorderSide(
-              color: AppColors.primary.withValues(alpha: 0.5),
-              width: 1.5,
-            ),
-          ),
-          boxShadow: const [
-            BoxShadow(color: Colors.black54, blurRadius: 28, offset: Offset(0, -6)),
-          ],
-        ),
-        padding: const EdgeInsets.fromLTRB(22, 16, 22, 28),
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: isDark ? Colors.white24 : Colors.black12,
-                  borderRadius: BorderRadius.circular(2),
+            ListTile(
+              leading: const Icon(Icons.shield_outlined),
+              title: Text(lang.tr('Security check', 'নিরাপত্তা যাচাই')),
+              subtitle: Text(
+                lang.tr(
+                  'Checks run automatically. Tap only if asked.',
+                  'যাচাই স্বয়ংক্রিয়। প্রয়োজন হলে ট্যাপ করুন।',
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary.withValues(alpha: 0.15),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.bolt_rounded, color: AppColors.primary, size: 22),
+            ListTile(
+              leading: const Icon(Icons.sms_outlined),
+              title: Text(lang.tr('Verify OTP', 'ওটিপি যাচাই')),
+              subtitle: Text(
+                lang.tr(
+                  'Use Google SMS consent or enter the code.',
+                  'Google-এর অনুমতি দিন অথবা কোড লিখুন।',
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Auto-Booking & Security Guide',
-                        style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        'High-speed automated seat reservation system',
-                        style: TextStyle(
-                          color: isDark ? Colors.white60 : Colors.black54,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ],
-                  ),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.payment_outlined),
+              title: Text(lang.tr('Pay on Railway', 'রেলওয়েতে পেমেন্ট')),
+              subtitle: Text(
+                lang.tr(
+                  'Complete payment before the hold expires.',
+                  'সংরক্ষণের মেয়াদ শেষ হওয়ার আগে পেমেন্ট করুন।',
                 ),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, size: 20),
-                  color: isDark ? Colors.white70 : Colors.black54,
-                  onPressed: () => Navigator.pop(ctx),
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            _buildGuideCard(
-              icon: Icons.notifications_active_rounded,
-              title: 'Over-The-App Security Solve',
-              desc: 'When seats are detected, the Cloudflare verification popup can trigger over any app you are using so you never miss tickets.',
-              color: AppColors.primary,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 10),
-            _buildGuideCard(
-              icon: Icons.shield_rounded,
-              title: 'Silent Background Handshake',
-              desc: 'We never show the raw login website to you. Only the minimal security handshake runs cleanly in the background with real-time status loading.',
-              color: AppColors.accent,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 10),
-            _buildGuideCard(
-              icon: Icons.timer_outlined,
-              title: '5-Minute Reservation Guarantee',
-              desc: 'Once seats are reserved, Bangladesh Railway locks them for 5 minutes. Proceed to checkout to finalize your payment.',
-              color: AppColors.gold,
-              isDark: isDark,
-            ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                onPressed: () => Navigator.pop(ctx),
-                child: const Text('Got It', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
               ),
             ),
           ],
@@ -295,59 +207,110 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     );
   }
 
-  Widget _buildGuideCard({
-    required IconData icon,
-    required String title,
-    required String desc,
-    required Color color,
-    required bool isDark,
-  }) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0F1E33) : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: isDark ? const Color(0xFF1E3A55) : const Color(0xFFE2E8F0),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: color, size: 18),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: isDark ? Colors.white : Colors.black87,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
+  Future<void> _handleStopAndClear() async {
+    final lang = LanguageService.of(context, listen: false);
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            const Icon(Icons.cancel_outlined, color: Color(0xFFEF4444)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                lang.tr('Stop & Clear Search?', 'অনুসন্ধান বন্ধ ও মুছবেন?'),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  desc,
-                  style: TextStyle(
-                    color: isDark ? Colors.white60 : Colors.black54,
-                    fontSize: 11.5,
-                    height: 1.3,
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          lang.tr(
+            'This will stop monitoring and clear all journey details from your monitor.',
+            'এটি অনুসন্ধান সম্পূর্ণরূপে বন্ধ করবে এবং মনিটর স্ক্রিন থেকে যাত্রার তথ্য মুছে ফেলবে।',
+          ),
+          style: const TextStyle(fontSize: 13.5, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(lang.tr('Cancel', 'বাতিল')),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true && mounted) {
+      final m = context.read<MonitorService>();
+      await m.clearSearch();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                const Icon(
+                  Icons.check_circle_outline_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    lang.tr(
+                      'Search stopped and monitor cleared',
+                      'অনুসন্ধান বন্ধ এবং মনিটর খালি করা হয়েছে',
+                    ),
                   ),
                 ),
               ],
             ),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+            backgroundColor: const Color(0xFF1E293B),
           ),
-        ],
+        );
+      }
+    }
+  }
+
+  void _handlePauseSearch() {
+    final m = context.read<MonitorService>();
+    final lang = LanguageService.of(context, listen: false);
+    m.pauseMonitoring();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(lang.tr('Search paused', 'অনুসন্ধান স্থগিত করা হয়েছে')),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _handleResumeSearch() {
+    final m = context.read<MonitorService>();
+    final lang = LanguageService.of(context, listen: false);
+    m.resumeMonitoring();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          lang.tr('Search resumed', 'অনুসন্ধান আবার চালু করা হয়েছে'),
+        ),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
       ),
     );
   }
@@ -373,7 +336,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final otp = p?['status'] == 'awaitingOtp' && !expired;
     final step = _step(m, p);
     final isActive = m.isMonitoring && p == null && !m.needsLogin;
-    final exactError = m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
+    final exactError =
+        m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
 
     if (_sessionExpired) {
       return Scaffold(
@@ -408,99 +372,121 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                   physics: const BouncingScrollPhysics(),
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
                   child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: constraints.maxHeight - 30),
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight - 30,
+                    ),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        // ── 1. Master Train Cockpit HUD Card ──
-                        _CockpitHudCard(
-                          fromCity: fromCity,
-                          toCity: toCity,
-                          trainName: m.targetTrain,
-                          seatClass: m.targetSeatClass,
-                          dateOfJourney: m.dateOfJourney,
-                          step: step,
-                          isActive: isActive,
-                          ready: ready,
-                          otp: otp,
-                          credits: credit.credits,
-                          remainingTime: m.isMonitoring && m.remainingFreeSeconds >= 0
-                              ? m.remainingTimeFormatted
-                              : null,
-                          queueCtrl: _queueCtrl,
-                          pulseCtrl: _pulseCtrl,
-                          isDark: isDark,
-                        ),
+                        if (hasSearch || credit.credits <= 0) ...[
+                          // ── 1. Master Train Cockpit HUD Card ──
+                          _CockpitHudCard(
+                            fromCity: fromCity,
+                            toCity: toCity,
+                            trainName: m.targetTrain,
+                            seatClass: m.targetSeatClass,
+                            dateOfJourney: m.dateOfJourney,
+                            step: step,
+                            isActive: isActive,
+                            ready: ready,
+                            otp: otp,
+                            credits: credit.credits,
+                            remainingTime:
+                                m.isMonitoring && m.remainingFreeSeconds >= 0
+                                ? m.remainingTimeFormatted
+                                : null,
+                            queueCtrl: _queueCtrl,
+                            pulseCtrl: _pulseCtrl,
+                            isDark: isDark,
+                            onClear: _handleStopAndClear,
+                          ),
 
-                        const SizedBox(height: 12),
+                          const SizedBox(height: 12),
 
-                        // ── Exact Error Banner (if any) ──
-                        if (exactError != null && exactError.isNotEmpty) ...[
-                          _ErrorBanner(
-                            message: friendlyErrorMessage(exactError),
-                            onVerifyTurnstile: _handleSolveTurnstile,
-                            onDismiss: () => m.clearBookingError(),
+                          // ── Exact Error Banner (if any) ──
+                          if (exactError != null && exactError.isNotEmpty) ...[
+                            _ErrorBanner(
+                              message: friendlyErrorMessage(exactError),
+                              onVerifyTurnstile: _handleSolveTurnstile,
+                              onDismiss: () => m.clearBookingError(),
+                              isDark: isDark,
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+
+                          // ── 2. Coupled Train Coach Route Tracker (4 Steps) ──
+                          _TrainCoachTracker(
+                            step: step,
+                            ready: ready,
+                            otp: otp,
+                            p: p,
+                            pulseCtrl: _pulseCtrl,
                             isDark: isDark,
                           ),
-                          const SizedBox(height: 12),
-                        ],
 
-                        // ── 2. Coupled Train Coach Route Tracker (4 Steps) ──
-                        _TrainCoachTracker(
-                          step: step,
-                          ready: ready,
-                          otp: otp,
-                          p: p,
-                          pulseCtrl: _pulseCtrl,
-                          isDark: isDark,
-                        ),
+                          const SizedBox(height: 14),
 
-                        const SizedBox(height: 14),
+                          // ── 2b. 5-Min Payment Countdown Timer ──
+                          if (p != null && !expired)
+                            _PaymentTimerBar(
+                              reservation: p,
+                              isDark: isDark,
+                              onTimeout: () async {
+                                await BookingService.clear();
+                                if (context.mounted) {
+                                  context.read<MonitorService>().clearSearch();
+                                }
+                              },
+                            ),
 
-                        // ── 3. Train Master Throttle Actions ──
-                        _TrainActionButtons(
-                          m: m,
-                          p: p,
-                          ready: ready,
-                          otp: otp,
-                          expired: expired,
-                          hasSearch: hasSearch,
-                          credits: credit.credits,
-                          onReservation: () async {
-                            await Navigator.push(
+                          if (p != null && !expired) const SizedBox(height: 14),
+
+                          // ── 3. Train Master Throttle Actions ──
+                          _TrainActionButtons(
+                            m: m,
+                            p: p,
+                            ready: ready,
+                            otp: otp,
+                            expired: expired,
+                            hasSearch: hasSearch,
+                            credits: credit.credits,
+                            onReservation: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => const ReservationScreen(),
+                                ),
+                              );
+                              await _refresh();
+                            },
+                            onRailway: () => Navigator.push(
                               context,
-                              MaterialPageRoute(builder: (_) => const ReservationScreen()),
-                            );
-                            await _refresh();
-                          },
-                          onRailway: () => Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => BookingScreen(
-                                url: NotificationService.bookingUrl(
-                                  m.fromCity,
-                                  m.toCity,
-                                  m.dateOfJourney,
-                                  m.targetSeatClass ?? 'SNIGDHA',
+                              MaterialPageRoute(
+                                builder: (_) => BookingScreen(
+                                  url: NotificationService.bookingUrl(
+                                    m.fromCity,
+                                    m.toCity,
+                                    m.dateOfJourney,
+                                    m.targetSeatClass ?? 'SNIGDHA',
+                                  ),
                                 ),
                               ),
                             ),
+                            onSignIn: _doSessionExpiry,
+                            onPause: _handlePauseSearch,
+                            onResume: _handleResumeSearch,
+                            onClear: _handleStopAndClear,
+                            pulseCtrl: _pulseCtrl,
+                            isDark: isDark,
                           ),
-                          onSignIn: _doSessionExpiry,
-                          onToggle: m.isMonitoring
-                              ? m.stopMonitoring
-                              : () => m.startMonitoring(
-                                  fromCity: m.fromCity,
-                                  toCity: m.toCity,
-                                  dateOfJourney: m.dateOfJourney,
-                                  targetTrain: m.targetTrain,
-                                  targetSeatClass: m.targetSeatClass,
-                                  intent: m.bookingIntent,
-                                ),
-                          pulseCtrl: _pulseCtrl,
-                          isDark: isDark,
-                        ),
+                        ] else ...[
+                          // ── Cleared / Empty Monitor State ──
+                          _EmptyMonitorView(
+                            isDark: isDark,
+                            pulseCtrl: _pulseCtrl,
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -531,6 +517,7 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -555,17 +542,7 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Row(
             children: [
-              // Train Icon Badge
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.25)),
-                ),
-                child: const Icon(Icons.train_rounded, color: Colors.white, size: 20),
-              ),
+              const AppBrandIcon(size: 38),
               const SizedBox(width: 10),
 
               // Title and Live Status Indicator
@@ -575,7 +552,7 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     const Text(
-                      'Rail Ticket',
+                      'Rail Pro',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -593,11 +570,15 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                           height: 5,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: isMonitoring ? AppColors.accent : Colors.white60,
+                            color: isMonitoring
+                                ? AppColors.accent
+                                : Colors.white60,
                             boxShadow: isMonitoring
                                 ? [
                                     BoxShadow(
-                                      color: AppColors.accent.withValues(alpha: 0.8),
+                                      color: AppColors.accent.withValues(
+                                        alpha: 0.8,
+                                      ),
                                       blurRadius: 5,
                                       spreadRadius: 1,
                                     ),
@@ -608,7 +589,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            isMonitoring ? 'LIVE RADAR' : 'STANDBY',
+                            isMonitoring
+                                ? lang.tr('LIVE RADAR', 'লাইভ রাডার')
+                                : lang.tr('STANDBY', 'স্ট্যান্ডবাই'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -630,7 +613,10 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
               GestureDetector(
                 onTap: () => RechargeCreditDialog.show(context),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: credits <= 0
                         ? const Color(0xFFF59E0B).withValues(alpha: 0.25)
@@ -647,14 +633,18 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                     children: [
                       Icon(
                         Icons.bolt_rounded,
-                        color: credits <= 0 ? const Color(0xFFF59E0B) : AppColors.gold,
+                        color: credits <= 0
+                            ? const Color(0xFFF59E0B)
+                            : AppColors.gold,
                         size: 14,
                       ),
                       const SizedBox(width: 3),
                       Text(
                         credits <= 0 ? '0 • Buy' : '$credits',
                         style: TextStyle(
-                          color: credits <= 0 ? const Color(0xFFFDE68A) : Colors.white,
+                          color: credits <= 0
+                              ? const Color(0xFFFDE68A)
+                              : Colors.white,
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),
@@ -670,20 +660,29 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                 GestureDetector(
                   onTap: onGuide,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withValues(alpha: 0.14),
                       borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.2),
+                      ),
                     ),
-                    child: const Row(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.help_outline_rounded, color: Colors.white, size: 13),
-                        SizedBox(width: 4),
+                        const Icon(
+                          Icons.help_outline_rounded,
+                          color: Colors.white,
+                          size: 13,
+                        ),
+                        const SizedBox(width: 4),
                         Text(
-                          'Guide',
-                          style: TextStyle(
+                          lang.tr('Guide', 'নির্দেশিকা'),
+                          style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -709,11 +708,11 @@ class _BgCanvas extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-        animation: ctrl,
-        builder: (context, child) => CustomPaint(
-          painter: _RailwayHorizonPainter(t: ctrl.value, isDark: isDark),
-        ),
-      );
+    animation: ctrl,
+    builder: (context, child) => CustomPaint(
+      painter: _RailwayHorizonPainter(t: ctrl.value, isDark: isDark),
+    ),
+  );
 }
 
 class _RailwayHorizonPainter extends CustomPainter {
@@ -728,25 +727,20 @@ class _RailwayHorizonPainter extends CustomPainter {
         ? const LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFF060D1A),
-              Color(0xFF091629),
-              Color(0xFF060D1A),
-            ],
+            colors: [Color(0xFF060D1A), Color(0xFF091629), Color(0xFF060D1A)],
           )
         : const LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFF0F5FF),
-              Color(0xFFE4EDFC),
-              Color(0xFFF0F5FF),
-            ],
+            colors: [Color(0xFFF0F5FF), Color(0xFFE4EDFC), Color(0xFFF0F5FF)],
           );
 
     canvas.drawRect(
       Rect.fromLTWH(0, 0, s.width, s.height),
-      Paint()..shader = bgGradient.createShader(Rect.fromLTWH(0, 0, s.width, s.height)),
+      Paint()
+        ..shader = bgGradient.createShader(
+          Rect.fromLTWH(0, 0, s.width, s.height),
+        ),
     );
 
     // 2. High-speed Railway Perspective Speed Tracks
@@ -789,19 +783,135 @@ class _RailwayHorizonPainter extends CustomPainter {
         r,
         Paint()
           ..shader = RadialGradient(
-            colors: [col.withValues(alpha: alpha), col.withValues(alpha: 0)],
+            colors: [
+              col.withValues(alpha: alpha),
+              col.withValues(alpha: 0),
+            ],
           ).createShader(Rect.fromCircle(center: center, radius: r)),
       );
     }
 
     final glowAlpha = isDark ? 0.07 : 0.04;
-    drawOrb(Offset(s.width * 0.15, s.height * 0.20), AppColors.primary, 130, glowAlpha);
-    drawOrb(Offset(s.width * 0.85, s.height * 0.55), AppColors.accent, 110, glowAlpha * 0.8);
-    drawOrb(Offset(s.width * 0.50, s.height * 0.06), const Color(0xFF00A07A), 160, glowAlpha * 1.2);
+    drawOrb(
+      Offset(s.width * 0.15, s.height * 0.20),
+      AppColors.primary,
+      130,
+      glowAlpha,
+    );
+    drawOrb(
+      Offset(s.width * 0.85, s.height * 0.55),
+      AppColors.accent,
+      110,
+      glowAlpha * 0.8,
+    );
+    drawOrb(
+      Offset(s.width * 0.50, s.height * 0.06),
+      const Color(0xFF00A07A),
+      160,
+      glowAlpha * 1.2,
+    );
   }
 
   @override
-  bool shouldRepaint(_RailwayHorizonPainter o) => o.t != t || o.isDark != isDark;
+  bool shouldRepaint(_RailwayHorizonPainter o) =>
+      o.t != t || o.isDark != isDark;
+}
+
+// ─── Cleared / Empty Monitor State ───────────────────────────────────────────
+class _EmptyMonitorView extends StatelessWidget {
+  final bool isDark;
+  final AnimationController pulseCtrl;
+
+  const _EmptyMonitorView({required this.isDark, required this.pulseCtrl});
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(20, 36, 20, 32),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.cardBorder(isDark), width: 1.2),
+        boxShadow: isDark
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ]
+            : [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 14,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 76,
+            height: 76,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                colors: [
+                  AppColors.primary.withValues(alpha: 0.2),
+                  AppColors.primaryDark.withValues(alpha: 0.08),
+                ],
+              ),
+              border: Border.all(
+                color: AppColors.primary.withValues(alpha: 0.4),
+                width: 2,
+              ),
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.radar_rounded,
+                size: 38,
+                color: AppColors.primary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 18),
+          Text(
+            lang.tr('Monitor Cleared', 'মনিটর খালি রয়েছে'),
+            style: TextStyle(
+              fontSize: 19,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textPrimary(isDark),
+              letterSpacing: -0.3,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            lang.tr(
+              'No active journey is being monitored right now.\nSearch trains to start live seat monitoring or auto-booking.',
+              'বর্তমানে কোনো অনুসন্ধান সক্রিয় নেই।\nআসন লাইভ মনিটরিং করতে ট্রেন অনুসন্ধান ও অটো-বুকিং শুরু করুন।',
+            ),
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: AppColors.textMuted(isDark),
+            ),
+          ),
+          const SizedBox(height: 24),
+          _MasterButton(
+            label: lang.tr('Search Tickets', 'টিকেট খুঁজুন'),
+            icon: Icons.search_rounded,
+            gradientColors: const [AppColors.primary, AppColors.primaryDark],
+            textColor: Colors.black,
+            onTap: () => AppShell.goTo(context, AppShell.tabSearch),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ─── Master Train Cockpit HUD Card ───────────────────────────────────────────
@@ -820,6 +930,7 @@ class _CockpitHudCard extends StatelessWidget {
   final AnimationController queueCtrl;
   final AnimationController pulseCtrl;
   final bool isDark;
+  final VoidCallback? onClear;
 
   const _CockpitHudCard({
     required this.fromCity,
@@ -836,23 +947,31 @@ class _CockpitHudCard extends StatelessWidget {
     required this.queueCtrl,
     required this.pulseCtrl,
     required this.isDark,
+    this.onClear,
   });
 
-  String get _statusTitle {
-    if (ready) return 'SEATS RESERVED • READY TO PAY';
-    if (otp) return 'AWAITING OTP VERIFICATION';
-    if (credits <= 0) return 'ZERO CREDITS • RECHARGE REQUIRED';
+  String _statusTitle(LanguageService lang) {
+    if (ready) {
+      return lang.tr(
+        'Seats held · Ready to pay',
+        'আসন সংরক্ষিত • পেমেন্ট প্রস্তুত',
+      );
+    }
+    if (otp) {
+      return lang.tr('Verify your booking', 'ওটিপি যাচাইয়ের অপেক্ষায়');
+    }
+    if (credits <= 0) return 'Add credits to continue';
     switch (step) {
       case _BookingStep.searching:
-        return 'SCANNING COACH BERTH INVENTORY';
+        return lang.tr('Finding available seats', 'কোচ ও আসন স্ক্যান চলছে');
       case _BookingStep.reserving:
-        return 'HOLDING SEATS • RESERVING...';
+        return lang.tr('Reserving your seats', 'আসন বুকিং চলছে...');
       case _BookingStep.verifying:
-        return 'VERIFYING SECURITY TOKENS';
+        return lang.tr('Checking access', 'নিরাপত্তা টোকেন যাচাই হচ্ছে');
       case _BookingStep.paying:
-        return 'READY FOR PAYMENT GATEWAY';
+        return lang.tr('Ready to pay', 'পেমেন্ট গেটওয়ে প্রস্তুত');
       case _BookingStep.done:
-        return 'RESERVATION COMPLETE';
+        return lang.tr('Booking confirmed', 'সংরক্ষণ সম্পন্ন');
     }
   }
 
@@ -866,6 +985,7 @@ class _CockpitHudCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
     return Container(
       decoration: BoxDecoration(
         color: AppColors.cardBg(isDark),
@@ -905,7 +1025,7 @@ class _CockpitHudCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'DEPARTURE',
+                      lang.tr('DEPARTURE', 'প্রস্থান'),
                       style: TextStyle(
                         fontSize: 9.5,
                         fontWeight: FontWeight.w700,
@@ -944,7 +1064,9 @@ class _CockpitHudCard extends StatelessWidget {
                             child: Icon(
                               Icons.train_rounded,
                               size: 20,
-                              color: isDark ? AppColors.primary : AppColors.primaryDark,
+                              color: isDark
+                                  ? AppColors.primary
+                                  : AppColors.primaryDark,
                             ),
                           );
                         },
@@ -958,8 +1080,12 @@ class _CockpitHudCard extends StatelessWidget {
                               margin: const EdgeInsets.symmetric(horizontal: 1),
                               color: (i % 2 == 0)
                                   ? (isDark
-                                      ? AppColors.primary.withValues(alpha: 0.6)
-                                      : AppColors.primaryDark.withValues(alpha: 0.5))
+                                        ? AppColors.primary.withValues(
+                                            alpha: 0.6,
+                                          )
+                                        : AppColors.primaryDark.withValues(
+                                            alpha: 0.5,
+                                          ))
                                   : Colors.transparent,
                             ),
                           );
@@ -975,14 +1101,34 @@ class _CockpitHudCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      'ARRIVAL',
-                      style: TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textMuted(isDark),
-                        letterSpacing: 0.8,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Text(
+                          lang.tr('ARRIVAL', 'গন্তব্য'),
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textMuted(isDark),
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        if (onClear != null) ...[
+                          const SizedBox(width: 4),
+                          InkWell(
+                            onTap: onClear,
+                            borderRadius: BorderRadius.circular(10),
+                            child: Padding(
+                              padding: const EdgeInsets.all(2),
+                              child: Icon(
+                                Icons.close_rounded,
+                                size: 14,
+                                color: AppColors.textMuted(isDark),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text(
@@ -1011,24 +1157,28 @@ class _CockpitHudCard extends StatelessWidget {
             children: [
               _hudPill(
                 icon: Icons.calendar_today_rounded,
-                text: dateOfJourney.isEmpty ? 'Live' : dateOfJourney,
+                text: dateOfJourney.isEmpty
+                    ? lang.tr('Live', 'লাইভ')
+                    : dateOfJourney,
                 isDark: isDark,
               ),
               _hudPill(
                 icon: Icons.directions_railway_filled_rounded,
-                text: trainName ?? 'All Trains',
+                text: trainName ?? lang.tr('All Trains', 'সকল ট্রেন'),
                 isDark: isDark,
               ),
               _hudPill(
-                icon: (seatClass == null ||
+                icon:
+                    (seatClass == null ||
                         seatClass == 'ALL' ||
                         seatClass == 'RANDOM')
                     ? Icons.shuffle_rounded
                     : Icons.airline_seat_recline_extra_rounded,
-                text: (seatClass == null ||
+                text:
+                    (seatClass == null ||
                         seatClass == 'ALL' ||
                         seatClass == 'RANDOM')
-                    ? 'Random (Any Class)'
+                    ? lang.tr('Random (Any Class)', 'যেকোনো শ্রেণি')
                     : seatClass!,
                 isDark: isDark,
               ),
@@ -1036,17 +1186,22 @@ class _CockpitHudCard extends StatelessWidget {
           ),
 
           const SizedBox(height: 12),
-          Divider(height: 1, color: isDark ? const Color(0xFF1E3A55) : const Color(0xFFE2EBF5)),
+          Divider(
+            height: 1,
+            color: isDark ? const Color(0xFF1E3A55) : const Color(0xFFE2EBF5),
+          ),
           const SizedBox(height: 12),
 
           // ── C. Illuminated Queue / Scanner Chamber ──
           Container(
-            height: 186,
+            constraints: const BoxConstraints(minHeight: 172),
             decoration: BoxDecoration(
               color: isDark ? const Color(0xFF081220) : const Color(0xFFF7FAFD),
               borderRadius: BorderRadius.circular(16),
               border: Border.all(
-                color: isDark ? const Color(0xFF173049) : const Color(0xFFD9E6F5),
+                color: isDark
+                    ? const Color(0xFF173049)
+                    : const Color(0xFFD9E6F5),
               ),
             ),
             clipBehavior: Clip.antiAlias,
@@ -1057,7 +1212,26 @@ class _CockpitHudCard extends StatelessWidget {
                 FancyTrainLoader(
                   height: 176,
                   showCard: false,
-                  message: _statusTitle,
+                  subMessage: ready || otp ? null : '',
+                  message: !isActive && !ready && !otp && credits > 0
+                      ? lang.tr('Search paused', 'অনুসন্ধান স্থগিত')
+                      : _statusTitle(lang),
+                  stage: ready
+                      ? JourneyAnimationStage.payment
+                      : otp
+                      ? JourneyAnimationStage.verifying
+                      : !isActive || credits <= 0
+                      ? JourneyAnimationStage.paused
+                      : switch (step) {
+                          _BookingStep.searching =>
+                            JourneyAnimationStage.searching,
+                          _BookingStep.reserving =>
+                            JourneyAnimationStage.reserving,
+                          _BookingStep.verifying =>
+                            JourneyAnimationStage.verifying,
+                          _BookingStep.paying => JourneyAnimationStage.payment,
+                          _BookingStep.done => JourneyAnimationStage.complete,
+                        },
                 ),
               ],
             ),
@@ -1077,12 +1251,17 @@ class _CockpitHudCard extends StatelessWidget {
                 animation: pulseCtrl,
                 builder: (context, child) {
                   return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 5,
+                    ),
                     decoration: BoxDecoration(
                       color: _statusColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(12),
                       border: Border.all(
-                        color: _statusColor.withValues(alpha: 0.35 + pulseCtrl.value * 0.25),
+                        color: _statusColor.withValues(
+                          alpha: 0.35 + pulseCtrl.value * 0.25,
+                        ),
                       ),
                     ),
                     child: Row(
@@ -1096,7 +1275,9 @@ class _CockpitHudCard extends StatelessWidget {
                             color: _statusColor,
                             boxShadow: [
                               BoxShadow(
-                                color: _statusColor.withValues(alpha: 0.6 + pulseCtrl.value * 0.4),
+                                color: _statusColor.withValues(
+                                  alpha: 0.6 + pulseCtrl.value * 0.4,
+                                ),
                                 blurRadius: 6,
                                 spreadRadius: 1,
                               ),
@@ -1106,10 +1287,23 @@ class _CockpitHudCard extends StatelessWidget {
                         const SizedBox(width: 6),
                         Text(
                           (ready || otp)
-                              ? (ready ? 'READY TO PAY' : 'AWAITING OTP')
+                              ? (ready
+                                    ? lang.tr(
+                                        'READY TO PAY',
+                                        'পেমেন্ট প্রস্তুত',
+                                      )
+                                    : lang.tr('AWAITING OTP', 'ওটিপি যাচাই'))
                               : (credits <= 0
-                                  ? 'ZERO CREDITS • RECHARGE'
-                                  : (isActive ? 'ACTIVE QUEUE SEARCH' : 'SEARCH PAUSED')),
+                                    ? 'ZERO CREDITS • RECHARGE'
+                                    : (isActive
+                                          ? lang.tr(
+                                              'SEARCHING',
+                                              'সক্রিয় অনুসন্ধান',
+                                            )
+                                          : lang.tr(
+                                              'SEARCH PAUSED',
+                                              'অনুসন্ধান স্থগিত',
+                                            ))),
                           style: TextStyle(
                             color: _statusColor,
                             fontSize: 10.5,
@@ -1126,12 +1320,19 @@ class _CockpitHudCard extends StatelessWidget {
               // Countdown Timer
               if (remainingTime != null)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
-                    color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04),
+                    color: isDark
+                        ? Colors.white.withValues(alpha: 0.06)
+                        : Colors.black.withValues(alpha: 0.04),
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
+                      color: isDark
+                          ? Colors.white.withValues(alpha: 0.1)
+                          : Colors.black.withValues(alpha: 0.08),
                     ),
                   ),
                   child: Row(
@@ -1145,8 +1346,13 @@ class _CockpitHudCard extends StatelessWidget {
                       const SizedBox(width: 4),
                       Text(
                         remainingTime!.contains('remaining')
-                            ? remainingTime!
-                            : '$remainingTime remaining',
+                            ? (lang.isBangla
+                                  ? remainingTime!.replaceAll(
+                                      'remaining',
+                                      'বাকি',
+                                    )
+                                  : remainingTime!)
+                            : '$remainingTime ${lang.tr("remaining", "বাকি")}',
                         style: TextStyle(
                           fontSize: 11,
                           fontWeight: FontWeight.w600,
@@ -1163,7 +1369,11 @@ class _CockpitHudCard extends StatelessWidget {
     );
   }
 
-  Widget _hudPill({required IconData icon, required String text, required bool isDark}) {
+  Widget _hudPill({
+    required IconData icon,
+    required String text,
+    required bool isDark,
+  }) {
     return Container(
       constraints: const BoxConstraints(maxWidth: 280),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1177,7 +1387,11 @@ class _CockpitHudCard extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 12, color: isDark ? AppColors.primary : AppColors.primaryDark),
+          Icon(
+            icon,
+            size: 12,
+            color: isDark ? AppColors.primary : AppColors.primaryDark,
+          ),
           const SizedBox(width: 4),
           Flexible(
             child: Text(
@@ -1216,11 +1430,32 @@ class _TrainCoachTracker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
     final stages = [
-      (Icons.radar_rounded, 'Scanning', step == _BookingStep.searching && p == null, p != null || step.index > _BookingStep.searching.index),
-      (Icons.event_seat_rounded, 'Booking', step == _BookingStep.reserving, step.index > _BookingStep.reserving.index || ready || otp),
-      (Icons.shield_outlined, 'Verifying', step == _BookingStep.verifying || otp, ready),
-      (Icons.credit_card_rounded, 'Paying', step == _BookingStep.paying || ready, false),
+      (
+        Icons.radar_rounded,
+        lang.tr('Scanning', 'স্ক্যানিং'),
+        step == _BookingStep.searching && p == null,
+        p != null || step.index > _BookingStep.searching.index,
+      ),
+      (
+        Icons.event_seat_rounded,
+        lang.tr('Booking', 'বুকিং'),
+        step == _BookingStep.reserving,
+        step.index > _BookingStep.reserving.index || ready || otp,
+      ),
+      (
+        Icons.shield_outlined,
+        lang.tr('Verifying', 'যাচাই'),
+        step == _BookingStep.verifying || otp,
+        ready,
+      ),
+      (
+        Icons.credit_card_rounded,
+        lang.tr('Paying', 'পেমেন্ট'),
+        step == _BookingStep.paying || ready,
+        false,
+      ),
     ];
 
     return Container(
@@ -1244,7 +1479,7 @@ class _TrainCoachTracker extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  'RESERVATION LINE STATUS',
+                  lang.tr('RESERVATION LINE STATUS', 'বুকিং লাইনের অগ্রগতি'),
                   style: TextStyle(
                     fontSize: 10.5,
                     fontWeight: FontWeight.w700,
@@ -1275,11 +1510,7 @@ class _TrainCoachTracker extends StatelessWidget {
                       ),
                     ),
                     if (i < stages.length - 1)
-                      _CoachCoupler(
-                        done: done,
-                        active: active,
-                        isDark: isDark,
-                      ),
+                      _CoachCoupler(done: done, active: active, isDark: isDark),
                   ],
                 ),
               );
@@ -1325,12 +1556,18 @@ class _CoachNode extends StatelessWidget {
           borderColor = primaryColor.withValues(alpha: 0.55);
           iconColor = primaryColor;
         } else if (active) {
-          cardBg = primaryColor.withValues(alpha: 0.12 + pulseCtrl.value * 0.08);
-          borderColor = primaryColor.withValues(alpha: 0.5 + pulseCtrl.value * 0.4);
+          cardBg = primaryColor.withValues(
+            alpha: 0.12 + pulseCtrl.value * 0.08,
+          );
+          borderColor = primaryColor.withValues(
+            alpha: 0.5 + pulseCtrl.value * 0.4,
+          );
           iconColor = primaryColor;
         } else {
           cardBg = isDark ? const Color(0xFF0F1E33) : const Color(0xFFF3F7FC);
-          borderColor = isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5);
+          borderColor = isDark
+              ? const Color(0xFF1E3A55)
+              : const Color(0xFFD9E6F5);
           iconColor = AppColors.textMuted(isDark);
         }
 
@@ -1344,11 +1581,16 @@ class _CoachNode extends StatelessWidget {
               decoration: BoxDecoration(
                 color: cardBg,
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: borderColor, width: active ? 1.5 : 1.0),
+                border: Border.all(
+                  color: borderColor,
+                  width: active ? 1.5 : 1.0,
+                ),
                 boxShadow: active
                     ? [
                         BoxShadow(
-                          color: primaryColor.withValues(alpha: 0.18 + pulseCtrl.value * 0.15),
+                          color: primaryColor.withValues(
+                            alpha: 0.18 + pulseCtrl.value * 0.15,
+                          ),
                           blurRadius: 10,
                           spreadRadius: 1,
                         ),
@@ -1416,7 +1658,9 @@ class _CoachNode extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 10,
-                fontWeight: (done || active) ? FontWeight.w700 : FontWeight.w500,
+                fontWeight: (done || active)
+                    ? FontWeight.w700
+                    : FontWeight.w500,
                 color: (done || active)
                     ? AppColors.textPrimary(isDark)
                     : AppColors.textMuted(isDark),
@@ -1431,7 +1675,11 @@ class _CoachNode extends StatelessWidget {
 
 class _CoachCoupler extends StatelessWidget {
   final bool done, active, isDark;
-  const _CoachCoupler({required this.done, required this.active, required this.isDark});
+  const _CoachCoupler({
+    required this.done,
+    required this.active,
+    required this.isDark,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1444,10 +1692,199 @@ class _CoachCoupler extends StatelessWidget {
         color: done
             ? primaryColor
             : active
-                ? primaryColor.withValues(alpha: 0.6)
-                : (isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5)),
+            ? primaryColor.withValues(alpha: 0.6)
+            : (isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5)),
         borderRadius: BorderRadius.circular(1),
       ),
+    );
+  }
+}
+
+// ─── 5-Minute Payment Countdown Timer Bar ────────────────────────────────────
+class _PaymentTimerBar extends StatefulWidget {
+  final Map<String, dynamic> reservation;
+  final bool isDark;
+  final VoidCallback onTimeout;
+
+  const _PaymentTimerBar({
+    required this.reservation,
+    required this.isDark,
+    required this.onTimeout,
+  });
+
+  @override
+  State<_PaymentTimerBar> createState() => _PaymentTimerBarState();
+}
+
+class _PaymentTimerBarState extends State<_PaymentTimerBar>
+    with SingleTickerProviderStateMixin {
+  static const _totalSeconds = 5 * 60; // 5 minutes
+  Timer? _ticker;
+  late AnimationController _pulseCtrl;
+  int _secondsLeft = _totalSeconds;
+  bool _expired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulseCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _computeSecondsLeft();
+    _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+      _computeSecondsLeft();
+    });
+  }
+
+  void _computeSecondsLeft() {
+    if (!mounted) return;
+    final started = DateTime.tryParse(
+      '${widget.reservation['startedAt'] ?? ''}',
+    );
+    final expiry = DateTime.tryParse(
+      '${widget.reservation['expiresAt'] ?? ''}',
+    );
+
+    int secs;
+    if (expiry != null) {
+      secs = expiry.difference(DateTime.now()).inSeconds;
+    } else if (started != null) {
+      final elapsed = DateTime.now().difference(started).inSeconds;
+      secs = _totalSeconds - elapsed;
+    } else {
+      secs = _totalSeconds;
+    }
+
+    if (secs <= 0 && !_expired) {
+      _expired = true;
+      _ticker?.cancel();
+      _pulseCtrl.stop();
+      widget.onTimeout();
+    }
+
+    if (!_expired) {
+      setState(() => _secondsLeft = secs.clamp(0, _totalSeconds));
+      // Pulse animation in the last 60 seconds
+      if (secs <= 60 && !_pulseCtrl.isAnimating) {
+        _pulseCtrl.repeat(reverse: true);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _pulseCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_expired) return const SizedBox.shrink();
+
+    final progress = (_secondsLeft / _totalSeconds).clamp(0.0, 1.0);
+    final mins = _secondsLeft ~/ 60;
+    final secs = _secondsLeft % 60;
+    final isUrgent = _secondsLeft <= 60;
+    final isWarning = _secondsLeft <= 120;
+
+    final timerColor = isUrgent
+        ? AppColors.error
+        : isWarning
+        ? const Color(0xFFF59E0B)
+        : AppColors.primary;
+
+    final lang = LanguageService.of(context);
+
+    return AnimatedBuilder(
+      animation: _pulseCtrl,
+      builder: (context, _) {
+        final glow = isUrgent ? (_pulseCtrl.value * 0.25) : 0.0;
+        return Container(
+          decoration: BoxDecoration(
+            color: timerColor.withValues(alpha: 0.08 + glow),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: timerColor.withValues(alpha: 0.35 + glow),
+              width: 1.2,
+            ),
+            boxShadow: isUrgent
+                ? [
+                    BoxShadow(
+                      color: timerColor.withValues(alpha: 0.18 + glow),
+                      blurRadius: 14,
+                      spreadRadius: 1,
+                    ),
+                  ]
+                : null,
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 11, 14, 13),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isUrgent ? Icons.timer_off_rounded : Icons.timer_rounded,
+                    color: timerColor,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    lang.tr(
+                      'Complete purchase within',
+                      'টিকেট ক্রয় সম্পন্ন করুন',
+                    ),
+                    style: TextStyle(
+                      color: timerColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                  const Spacer(),
+                  // Countdown digits
+                  Text(
+                    '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}',
+                    style: TextStyle(
+                      color: timerColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 22,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Progress bar (drains left to right)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor: timerColor.withValues(alpha: 0.15),
+                  valueColor: AlwaysStoppedAnimation<Color>(timerColor),
+                ),
+              ),
+              if (isUrgent) ...[
+                const SizedBox(height: 6),
+                Text(
+                  lang.tr(
+                    '⚠ Seats will be released if not paid in time!',
+                    '⚠ সময়ের মধ্যে পরিশোধ না করলে আসন বাতিল হবে!',
+                  ),
+                  style: TextStyle(
+                    color: AppColors.error,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1458,7 +1895,10 @@ class _TrainActionButtons extends StatelessWidget {
   final Map<String, dynamic>? p;
   final bool ready, otp, expired, hasSearch;
   final int credits;
-  final VoidCallback onReservation, onRailway, onSignIn, onToggle;
+  final VoidCallback onReservation, onRailway, onSignIn;
+  final VoidCallback? onPause;
+  final VoidCallback? onResume;
+  final VoidCallback? onClear;
   final AnimationController pulseCtrl;
   final bool isDark;
 
@@ -1473,33 +1913,43 @@ class _TrainActionButtons extends StatelessWidget {
     required this.onReservation,
     required this.onRailway,
     required this.onSignIn,
-    required this.onToggle,
+    this.onPause,
+    this.onResume,
+    this.onClear,
     required this.pulseCtrl,
     required this.isDark,
   });
 
   @override
   Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+
     // If a ticket is reserved or awaiting OTP/payment, user can ALWAYS proceed to pay even with 0 credits
     if (p != null && !expired) {
       return Column(
         children: [
           _MasterButton(
-            label: ready ? 'Pay Now' : (otp ? 'Enter OTP' : 'View Reservation'),
+            label: ready
+                ? lang.tr('Pay Now', 'পেমেন্ট করুন')
+                : (otp
+                      ? lang.tr('Enter OTP', 'ওটিপি দিন')
+                      : lang.tr('View Reservation', 'বুকিং দেখুন')),
             icon: ready
                 ? Icons.payment_rounded
-                : (otp ? Icons.sms_rounded : Icons.confirmation_number_outlined),
+                : (otp
+                      ? Icons.sms_rounded
+                      : Icons.confirmation_number_outlined),
             gradientColors: ready
                 ? const [Color(0xFFFBBF24), Color(0xFFD97706)]
                 : (otp
-                    ? const [Color(0xFF38BDF8), Color(0xFF0284C7)]
-                    : [AppColors.primary, AppColors.primaryDark]),
+                      ? const [Color(0xFF38BDF8), Color(0xFF0284C7)]
+                      : [AppColors.primary, AppColors.primaryDark]),
             textColor: ready ? Colors.black : Colors.white,
             onTap: onReservation,
           ),
           const SizedBox(height: 10),
           _SecondaryTrainButton(
-            label: 'Railway Site',
+            label: lang.tr('Railway Site', 'রেলওয়ে সাইট'),
             icon: Icons.open_in_new_rounded,
             onTap: onRailway,
             isDark: isDark,
@@ -1540,7 +1990,10 @@ class _TrainActionButtons extends StatelessWidget {
         // ── Primary Action Button ──
         if (p != null && expired)
           _MasterButton(
-            label: 'Timeout • Re-Auto Book',
+            label: lang.tr(
+              'Timeout • Re-Auto Book',
+              'সময় শেষ • পুনরায় অটো-বুক',
+            ),
             icon: Icons.refresh_rounded,
             gradientColors: const [Color(0xFFF59E0B), Color(0xFFD97706)],
             textColor: Colors.black,
@@ -1550,21 +2003,27 @@ class _TrainActionButtons extends StatelessWidget {
           )
         else if (p != null)
           _MasterButton(
-            label: ready ? 'Pay Now' : (otp ? 'Enter OTP' : 'View Reservation'),
+            label: ready
+                ? lang.tr('Pay Now', 'পেমেন্ট করুন')
+                : (otp
+                      ? lang.tr('Enter OTP', 'ওটিপি দিন')
+                      : lang.tr('View Reservation', 'বুকিং দেখুন')),
             icon: ready
                 ? Icons.payment_rounded
-                : (otp ? Icons.sms_rounded : Icons.confirmation_number_outlined),
+                : (otp
+                      ? Icons.sms_rounded
+                      : Icons.confirmation_number_outlined),
             gradientColors: ready
                 ? const [Color(0xFFFBBF24), Color(0xFFD97706)]
                 : (otp
-                    ? const [Color(0xFF38BDF8), Color(0xFF0284C7)]
-                    : [AppColors.primary, AppColors.primaryDark]),
+                      ? const [Color(0xFF38BDF8), Color(0xFF0284C7)]
+                      : [AppColors.primary, AppColors.primaryDark]),
             textColor: ready ? Colors.black : Colors.white,
             onTap: onReservation,
           )
         else if (m.lastReservationExpired)
           _MasterButton(
-            label: 'Re-Auto Book Seats',
+            label: lang.tr('Re-Auto Book Seats', 'পুনরায় অটো-বুক করুন'),
             icon: Icons.auto_mode_rounded,
             gradientColors: [AppColors.primary, AppColors.primaryDark],
             textColor: Colors.black,
@@ -1574,43 +2033,59 @@ class _TrainActionButtons extends StatelessWidget {
           )
         else if (m.needsLogin)
           _MasterButton(
-            label: 'Sign In Again',
+            label: lang.tr('Sign In Again', 'পুনরায় সাইন ইন করুন'),
             icon: Icons.login_rounded,
             gradientColors: const [Color(0xFFFF5252), Color(0xFFD32F2F)],
             textColor: Colors.white,
             onTap: onSignIn,
           )
-        else if (hasSearch)
+        else if (hasSearch) ...[
           _MasterButton(
-            label: m.isMonitoring ? 'Stop Search' : 'Resume Search',
-            icon: m.isMonitoring ? Icons.stop_rounded : Icons.play_arrow_rounded,
+            label: m.isMonitoring
+                ? lang.tr('Pause Search', 'অনুসন্ধান বিরতি')
+                : lang.tr('Resume Search', 'অনুসন্ধান চালু'),
+            icon: m.isMonitoring
+                ? Icons.pause_circle_filled_rounded
+                : Icons.play_arrow_rounded,
             gradientColors: m.isMonitoring
-                ? [AppColors.primary, AppColors.primaryDark]
-                : const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
-            textColor: Colors.black,
+                ? const [Color(0xFFF59E0B), Color(0xFFD97706)]
+                : const [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+            textColor: m.isMonitoring ? Colors.black : Colors.white,
             pulseAura: m.isMonitoring,
             pulseCtrl: pulseCtrl,
-            onTap: onToggle,
-          )
-        else
+            onTap: m.isMonitoring ? (onPause ?? () {}) : (onResume ?? () {}),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+                  icon: Icons.cancel_outlined,
+                  color: const Color(0xFFEF4444),
+                  onTap: onClear ?? () {},
+                  isDark: isDark,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr('Railway Site', 'রেলওয়ে সাইট'),
+                  icon: Icons.open_in_new_rounded,
+                  onTap: onRailway,
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ] else
           _MasterButton(
-            label: 'Search Tickets',
+            label: lang.tr('Search Tickets', 'টিকেট খুঁজুন'),
             icon: Icons.search_rounded,
             gradientColors: [AppColors.primary, AppColors.primaryDark],
             textColor: Colors.black,
             onTap: () => AppShell.goTo(context, AppShell.tabSearch),
           ),
-
-        // ── Secondary Action Button ──
-        if (hasSearch && p == null && !m.needsLogin) ...[
-          const SizedBox(height: 10),
-          _SecondaryTrainButton(
-            label: 'Railway Site',
-            icon: Icons.open_in_new_rounded,
-            onTap: onRailway,
-            isDark: isDark,
-          ),
-        ],
       ],
     );
   }
@@ -1719,16 +2194,27 @@ class _SecondaryTrainButton extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   final bool isDark;
+  final Color? color;
 
   const _SecondaryTrainButton({
     required this.label,
     required this.icon,
     required this.onTap,
     required this.isDark,
+    this.color,
   });
 
   @override
   Widget build(BuildContext context) {
+    final effectiveColor = color ?? AppColors.textPrimary(isDark);
+    final effectiveIconColor = color ?? AppColors.textSecondary(isDark);
+    final borderColor = color != null
+        ? color!.withValues(alpha: isDark ? 0.45 : 0.35)
+        : (isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5));
+    final bgColor = color != null
+        ? color!.withValues(alpha: isDark ? 0.12 : 0.06)
+        : (isDark ? const Color(0xFF0F1E33) : const Color(0xFFEFF5FC));
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -1737,23 +2223,25 @@ class _SecondaryTrainButton extends StatelessWidget {
         child: Container(
           height: 46,
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF0F1E33) : const Color(0xFFEFF5FC),
+            color: bgColor,
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5),
-            ),
+            border: Border.all(color: borderColor),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 16, color: AppColors.textSecondary(isDark)),
+              Icon(icon, size: 16, color: effectiveIconColor),
               const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
-                  color: AppColors.textPrimary(isDark),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: effectiveColor,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -1785,6 +2273,7 @@ class _ErrorBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1805,11 +2294,15 @@ class _ErrorBanner extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Icon(Icons.error_outline_rounded, color: AppColors.error, size: 16),
+              const Icon(
+                Icons.error_outline_rounded,
+                color: AppColors.error,
+                size: 16,
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  'Auto-Booking Error (Exact):',
+                  lang.tr('Booking paused', 'বুকিং স্থগিত'),
                   style: TextStyle(
                     color: isDark ? const Color(0xFFFFB4AB) : AppColors.error,
                     fontSize: 12,
@@ -1846,19 +2339,32 @@ class _ErrorBanner extends StatelessWidget {
             GestureDetector(
               onTap: onVerifyTurnstile,
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 6,
+                ),
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)]),
+                  gradient: const LinearGradient(
+                    colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                  ),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.security_rounded, size: 13, color: Colors.white),
-                    SizedBox(width: 6),
+                    const Icon(
+                      Icons.security_rounded,
+                      size: 13,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 6),
                     Text(
-                      'Verify Human',
-                      style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                      lang.tr('Verify Human', 'নিরাপত্তা যাচাই'),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ],
                 ),
@@ -1879,6 +2385,7 @@ class _ExpiredOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = LanguageService.of(context);
 
     return Center(
       child: Column(
@@ -1893,7 +2400,9 @@ class _ExpiredOverlay extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: AppColors.error.withValues(alpha: 0.08),
                 border: Border.all(
-                  color: AppColors.error.withValues(alpha: 0.28 + ctrl.value * 0.22),
+                  color: AppColors.error.withValues(
+                    alpha: 0.28 + ctrl.value * 0.22,
+                  ),
                   width: 1.5,
                 ),
               ),
@@ -1906,7 +2415,7 @@ class _ExpiredOverlay extends StatelessWidget {
           ),
           const SizedBox(height: 20),
           Text(
-            'Session expired',
+            lang.tr('Session expired', 'সেশনের মেয়াদ শেষ'),
             style: TextStyle(
               color: AppColors.textPrimary(isDark),
               fontSize: 18,
@@ -1915,11 +2424,11 @@ class _ExpiredOverlay extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Clearing cache & redirecting...',
-            style: TextStyle(
-              color: AppColors.textMuted(isDark),
-              fontSize: 13,
+            lang.tr(
+              'Clearing cache & redirecting...',
+              'ক্যাশে মুছে পুনরায় লোড হচ্ছে...',
             ),
+            style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 13),
           ),
           const SizedBox(height: 28),
           SizedBox(

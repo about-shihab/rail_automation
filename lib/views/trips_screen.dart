@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:provider/provider.dart';
 
 import '../models/auth_session.dart';
 import '../models/purchased_ticket.dart';
 import '../models/trip_record.dart';
 import '../services/api_service.dart';
+import '../services/language_service.dart';
 import '../services/ticket_download_service.dart';
 import '../services/trip_history_service.dart';
 import '../utils/app_theme.dart';
@@ -102,12 +104,10 @@ class _TripsScreenState extends State<TripsScreen> {
     try {
       final session = await AuthSession.load();
       if (session == null || !session.isValid) {
-        if (mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const WebviewLoginScreen(clearSession: true)),
-          );
-        }
+        // If no active app session, open the official purchase history portal in browser
+        await TicketDownloadService.openInBrowser(
+          TicketDownloadService.purchaseHistoryUrl,
+        );
         return;
       }
 
@@ -116,21 +116,35 @@ class _TripsScreenState extends State<TripsScreen> {
         authSession: session,
       );
 
-      final fileName = 'rail_ticket_${ticket.orderId}_${ticket.pnr}.pdf';
-      await TicketDownloadService.saveAndOpenTicketPdf(
+      final fileName = 'rail_ticket_${ticket.orderId}.pdf';
+
+      // Save locally to device Downloads/RailPro as well
+      TicketDownloadService.saveAndOpenTicketPdf(
         bytes: bytes,
         fileName: fileName,
       );
 
+      // Open in browser so Chrome/system browser natively downloads & opens the PDF
+      final openedInBrowser = await TicketDownloadService.downloadPdfViaBrowser(
+        bytes: bytes,
+        fileName: fileName,
+      );
+
+      if (!openedInBrowser) {
+        await TicketDownloadService.openInBrowser(
+          TicketDownloadService.purchaseHistoryUrl,
+        );
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Row(
+            content: const Row(
               children: [
-                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                const SizedBox(width: 8),
+                Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                SizedBox(width: 8),
                 Expanded(
-                  child: Text('Downloaded: $fileName\nOpening ticket viewer...'),
+                  child: Text('Ticket PDF opened in browser for download!'),
                 ),
               ],
             ),
@@ -141,6 +155,11 @@ class _TripsScreenState extends State<TripsScreen> {
         );
       }
     } catch (e) {
+      // If direct API download fails, open the official railway portal in the browser
+      await TicketDownloadService.openInBrowser(
+        TicketDownloadService.purchaseHistoryUrl,
+      );
+
       if (mounted) {
         final errStr = e.toString().toLowerCase();
         if (errStr.contains('401') ||
@@ -149,19 +168,28 @@ class _TripsScreenState extends State<TripsScreen> {
             errStr.contains('authenticate') ||
             errStr.contains('unauthorized')) {
           await AuthSession.clear();
-          if (mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const WebviewLoginScreen(clearSession: true)),
-            );
-          }
+          if (!mounted) return;
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const WebviewLoginScreen(clearSession: true)),
+          );
           return;
         }
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Download failed: ${e.toString().replaceFirst("Exception: ", "")}'),
-            backgroundColor: AppColors.error,
+            content: const Text('Opened Railway Purchase History in browser to download ticket.'),
+            backgroundColor: AppColors.primary,
             behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Direct Link',
+              textColor: Colors.white,
+              onPressed: () {
+                TicketDownloadService.openInBrowser(
+                  TicketDownloadService.directDownloadUrl(ticket.orderId),
+                );
+              },
+            ),
           ),
         );
       }
@@ -176,6 +204,7 @@ class _TripsScreenState extends State<TripsScreen> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final history = TripHistoryService();
+    final lang = context.watch<LanguageService>();
 
     return ListenableBuilder(
       listenable: history,
@@ -239,22 +268,25 @@ class _TripsScreenState extends State<TripsScreen> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Trips & Tickets',
-                              style: TextStyle(
+                              lang.tr('Trips & Tickets', 'ট্রিপস ও টিকেট'),
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontSize: 17,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             Text(
-                              'Official railway purchases & booking history',
-                              style: TextStyle(
+                              lang.tr(
+                                'Official railway purchases & booking history',
+                                'অফিসিয়াল টিকেট ও বুকিং ইতিহাস',
+                              ),
+                              style: const TextStyle(
                                 color: Colors.white70,
                                 fontSize: 11,
                               ),
@@ -264,7 +296,7 @@ class _TripsScreenState extends State<TripsScreen> {
                       ),
                       if (_activeTab == _MainTab.purchased)
                         IconButton(
-                          tooltip: 'Refresh tickets',
+                          tooltip: lang.tr('Refresh tickets', 'টিকেট রিফ্রেশ করুন'),
                           icon: const Icon(
                             Icons.refresh_rounded,
                             color: Colors.white,
@@ -274,13 +306,13 @@ class _TripsScreenState extends State<TripsScreen> {
                         )
                       else if (allTrips.isNotEmpty)
                         IconButton(
-                          tooltip: 'Clear history',
+                          tooltip: lang.tr('Clear history', 'ইতিহাস মুছুন'),
                           icon: const Icon(
                             Icons.delete_sweep_outlined,
                             color: Colors.white70,
                             size: 22,
                           ),
-                          onPressed: () => _confirmClearHistory(context, history, isDark),
+                          onPressed: () => _confirmClearHistory(context, history, isDark, lang),
                         ),
                     ],
                   ),
@@ -305,7 +337,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   children: [
                     Expanded(
                       child: _tabButton(
-                        title: 'Official Tickets',
+                        title: lang.tr('Official Tickets', 'অফিসিয়াল টিকেট'),
                         count: _purchasedTickets?.length,
                         icon: Icons.confirmation_number_outlined,
                         isActive: _activeTab == _MainTab.purchased,
@@ -322,7 +354,7 @@ class _TripsScreenState extends State<TripsScreen> {
                     ),
                     Expanded(
                       child: _tabButton(
-                        title: 'Auto-Book Logs',
+                        title: lang.tr('Auto-Book Logs', 'অটো-বুক লগ'),
                         count: allTrips.length,
                         icon: Icons.bolt_rounded,
                         isActive: _activeTab == _MainTab.autoBook,
@@ -341,13 +373,14 @@ class _TripsScreenState extends State<TripsScreen> {
               // ── Tab Contents ──
               Expanded(
                 child: _activeTab == _MainTab.purchased
-                    ? _buildPurchasedTicketsView(isDark)
+                    ? _buildPurchasedTicketsView(isDark, lang)
                     : _buildAutoBookHistoryView(
                         allTrips: allTrips,
                         successfulTrips: successfulTrips,
                         failedTrips: failedTrips,
                         filtered: filteredAutoBook,
                         isDark: isDark,
+                        lang: lang,
                       ),
               ),
             ],
@@ -438,7 +471,7 @@ class _TripsScreenState extends State<TripsScreen> {
   // ── Purchased Tickets Tab ──────────────────────────────────────────────────
   // ═════════════════════════════════════════════════════════════════════════════
 
-  Widget _buildPurchasedTicketsView(bool isDark) {
+  Widget _buildPurchasedTicketsView(bool isDark, LanguageService lang) {
     if (_loadingPurchased) {
       return Center(
         child: Column(
@@ -447,7 +480,10 @@ class _TripsScreenState extends State<TripsScreen> {
             const CircularProgressIndicator(color: AppColors.primary),
             const SizedBox(height: 16),
             Text(
-              'Fetching official tickets from Bangladesh Railway...',
+              lang.tr(
+                'Fetching official tickets from Bangladesh Railway...',
+                'রেলওয়ে সার্ভার থেকে টিকেট লোড হচ্ছে...',
+              ),
               style: TextStyle(
                 color: AppColors.textSecondary(isDark),
                 fontSize: 12.5,
@@ -480,7 +516,7 @@ class _TripsScreenState extends State<TripsScreen> {
               ),
               const SizedBox(height: 16),
               Text(
-                'Railway Login Required',
+                lang.tr('Railway Login Required', 'রেলওয়ে লগইন প্রয়োজন'),
                 style: TextStyle(
                   color: AppColors.textPrimary(isDark),
                   fontSize: 17,
@@ -489,7 +525,10 @@ class _TripsScreenState extends State<TripsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Log in with your official Bangladesh Railway account to view and download your purchased tickets.',
+                lang.tr(
+                  'Log in with your official Bangladesh Railway account to view and download your purchased tickets.',
+                  'ক্রয়কৃত টিকিট দেখতে এবং ডাউনলোড করতে আপনার বাংলাদেশ রেলওয়ে অ্যাকাউন্টে লগইন করুন।',
+                ),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: AppColors.textSecondary(isDark),
@@ -505,7 +544,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
                 icon: const Icon(Icons.login_rounded, size: 18),
-                label: const Text('Log in with Railway Account'),
+                label: Text(lang.tr('Log in with Railway Account', 'রেলওয়ে অ্যাকাউন্টে লগইন করুন')),
                 onPressed: () async {
                   await Navigator.push(
                     context,
@@ -530,7 +569,7 @@ class _TripsScreenState extends State<TripsScreen> {
               const Icon(Icons.error_outline_rounded, size: 48, color: AppColors.error),
               const SizedBox(height: 12),
               Text(
-                'Could not load purchase history',
+                lang.tr('Could not load purchase history', 'ক্রয় ইতিহাস লোড করা যায়নি'),
                 style: TextStyle(
                   color: AppColors.textPrimary(isDark),
                   fontSize: 15,
@@ -549,7 +588,7 @@ class _TripsScreenState extends State<TripsScreen> {
               const SizedBox(height: 16),
               OutlinedButton.icon(
                 icon: const Icon(Icons.refresh_rounded, size: 16),
-                label: const Text('Retry'),
+                label: Text(lang.tr('Retry', 'পুনরায় চেষ্টা করুন')),
                 onPressed: _fetchPurchasedTickets,
               ),
             ],
@@ -586,7 +625,7 @@ class _TripsScreenState extends State<TripsScreen> {
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    'No Purchased Tickets Found',
+                    lang.tr('No Purchased Tickets Found', 'কোনো ক্রয়কৃত টিকেট পাওয়া যায়নি'),
                     style: TextStyle(
                       color: AppColors.textPrimary(isDark),
                       fontSize: 16,
@@ -595,7 +634,10 @@ class _TripsScreenState extends State<TripsScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Your official Bangladesh Railway purchased tickets will show up here.\nPull down to refresh.',
+                    lang.tr(
+                      'Your official Bangladesh Railway purchased tickets will show up here.\nPull down to refresh.',
+                      'আপনার বাংলাদেশ রেলওয়ে থেকে কেনা টিকেট এখানে প্রদর্শিত হবে।\nরিফ্রেশ করতে নিচে টানুন।',
+                    ),
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: AppColors.textSecondary(isDark),
@@ -640,6 +682,7 @@ class _TripsScreenState extends State<TripsScreen> {
     required List<TripRecord> failedTrips,
     required List<TripRecord> filtered,
     required bool isDark,
+    required LanguageService lang,
   }) {
     return Column(
       children: [
@@ -649,14 +692,14 @@ class _TripsScreenState extends State<TripsScreen> {
           child: Row(
             children: [
               _filterChip(
-                label: 'All (${allTrips.length})',
+                label: '${lang.tr("All", "সকল")} (${allTrips.length})',
                 selected: _autoBookFilter == _TripFilter.all,
                 onTap: () => setState(() => _autoBookFilter = _TripFilter.all),
                 isDark: isDark,
               ),
               const SizedBox(width: 8),
               _filterChip(
-                label: 'Successful (${successfulTrips.length})',
+                label: '${lang.tr("Successful", "সফল")} (${successfulTrips.length})',
                 selected: _autoBookFilter == _TripFilter.successful,
                 onTap: () => setState(() => _autoBookFilter = _TripFilter.successful),
                 color: AppColors.primary,
@@ -664,7 +707,7 @@ class _TripsScreenState extends State<TripsScreen> {
               ),
               const SizedBox(width: 8),
               _filterChip(
-                label: 'Failed (${failedTrips.length})',
+                label: '${lang.tr("Failed", "ব্যর্থ")} (${failedTrips.length})',
                 selected: _autoBookFilter == _TripFilter.failed,
                 onTap: () => setState(() => _autoBookFilter = _TripFilter.failed),
                 color: AppColors.error,
@@ -677,7 +720,7 @@ class _TripsScreenState extends State<TripsScreen> {
         // Trip Cards List
         Expanded(
           child: filtered.isEmpty
-              ? _emptyState(isDark)
+              ? _emptyState(isDark, lang)
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                   itemCount: filtered.length,
@@ -730,7 +773,7 @@ class _TripsScreenState extends State<TripsScreen> {
     );
   }
 
-  Widget _emptyState(bool isDark) {
+  Widget _emptyState(bool isDark, LanguageService lang) {
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -753,10 +796,10 @@ class _TripsScreenState extends State<TripsScreen> {
             const SizedBox(height: 16),
             Text(
               _autoBookFilter == _TripFilter.all
-                  ? 'No Automation History Yet'
+                  ? lang.tr('No Automation History Yet', 'কোনো অটো-বুকিং ইতিহাস নেই')
                   : _autoBookFilter == _TripFilter.successful
-                      ? 'No Successful Auto-Bookings'
-                      : 'No Failed Auto-Bookings',
+                      ? lang.tr('No Successful Auto-Bookings', 'কোনো সফল অটো-বুকিং নেই')
+                      : lang.tr('No Failed Auto-Bookings', 'কোনো ব্যর্থ অটো-বুকিং নেই'),
               style: TextStyle(
                 color: AppColors.textPrimary(isDark),
                 fontSize: 16,
@@ -765,7 +808,10 @@ class _TripsScreenState extends State<TripsScreen> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Successful reservations and failed auto-book attempts will automatically be recorded here.',
+              lang.tr(
+                'Successful reservations and failed auto-book attempts will automatically be recorded here.',
+                'সফল বুকিং এবং ব্যর্থ অনুসন্ধানের তথ্য স্বয়ংক্রিয়ভাবে এখানে সংরক্ষিত থাকবে।',
+              ),
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: AppColors.textSecondary(isDark),
@@ -783,6 +829,7 @@ class _TripsScreenState extends State<TripsScreen> {
     BuildContext context,
     TripHistoryService history,
     bool isDark,
+    LanguageService lang,
   ) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -790,22 +837,25 @@ class _TripsScreenState extends State<TripsScreen> {
         backgroundColor: AppColors.cardBg(isDark),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
-          'Clear Trip History?',
+          lang.tr('Clear Trip History?', 'ট্রিপ ইতিহাস মুছে ফেলতে চান?'),
           style: TextStyle(color: AppColors.textPrimary(isDark)),
         ),
         content: Text(
-          'This will clear all saved successful and failed booking records on this device.',
+          lang.tr(
+            'This will clear all saved successful and failed booking records on this device.',
+            'এটি এই ডিভাইস থেকে সমস্ত সংরক্ষিত সফল এবং ব্যর্থ বুকিং রেকর্ড মুছে ফেলবে।',
+          ),
           style: TextStyle(color: AppColors.textSecondary(isDark)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(lang.tr('Cancel', 'বাতিল')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Clear All'),
+            child: Text(lang.tr('Clear All', 'সব মুছুন')),
           ),
         ],
       ),
@@ -835,6 +885,7 @@ class _PurchasedTicketCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>();
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       decoration: BoxDecoration(
@@ -901,7 +952,7 @@ class _PurchasedTicketCard extends StatelessWidget {
                       ),
                       if (ticket.seatClass.isNotEmpty)
                         Text(
-                          'Class: ${ticket.seatClass}',
+                          '${lang.tr("Class", "শ্রেণি")}: ${ticket.seatClass}',
                           style: const TextStyle(
                             color: AppColors.primary,
                             fontSize: 11.5,
@@ -935,7 +986,9 @@ class _PurchasedTicketCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        ticket.isRefunded ? 'REFUNDED' : 'CONFIRMED',
+                        ticket.isRefunded
+                            ? lang.tr('REFUNDED', 'রিফান্ডকৃত')
+                            : lang.tr('CONFIRMED', 'নিশ্চিত'),
                         style: TextStyle(
                           color: ticket.isRefunded ? AppColors.warning : AppColors.success,
                           fontSize: 10,
@@ -953,113 +1006,147 @@ class _PurchasedTicketCard extends StatelessWidget {
           // ── Journey Details Grid ──
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
-            child: Column(
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: _infoCell(
-                        icon: Icons.calendar_month_rounded,
-                        label: 'Journey Date',
-                        value: ticket.journeyDate,
-                        isDark: isDark,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _infoCell(
-                        icon: Icons.access_time_rounded,
-                        label: 'Booked At',
-                        value: ticket.bookingDate,
-                        isDark: isDark,
-                      ),
-                    ),
-                  ],
+                Expanded(
+                  child: _infoCell(
+                    icon: Icons.calendar_month_rounded,
+                    label: lang.tr('Journey Date', 'যাত্রার তারিখ'),
+                    value: ticket.journeyDate,
+                    isDark: isDark,
+                  ),
                 ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                          ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _infoCell(
+                    icon: Icons.access_time_rounded,
+                    label: lang.tr('Booked At', 'বুকিংয়ের সময়'),
+                    value: ticket.bookingDate,
+                    isDark: isDark,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // ── Bottom Download in Browser Button ──
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 42,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        elevation: 1,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        child: Row(
-                          children: [
-                            const Text(
-                              'PNR: ',
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.grey,
+                      ),
+                      icon: isDownloading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
                               ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                ticket.pnr,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.textPrimary(isDark),
-                                  letterSpacing: 0.5,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            InkWell(
-                              onTap: () {
-                                Clipboard.setData(ClipboardData(text: ticket.pnr));
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('PNR copied: ${ticket.pnr}'),
-                                    duration: const Duration(seconds: 2),
-                                    behavior: SnackBarBehavior.floating,
-                                  ),
-                                );
-                              },
-                              child: const Padding(
-                                padding: EdgeInsets.all(2),
-                                child: Icon(Icons.copy_rounded, size: 14, color: AppColors.primary),
-                              ),
-                            ),
-                          ],
+                            )
+                          : const Icon(Icons.open_in_browser_rounded, size: 18),
+                      label: Text(
+                        isDownloading
+                            ? lang.tr('Opening Browser Download...', 'ব্রাউজারে খোলা হচ্ছে...')
+                            : lang.tr('Download', 'ডাউনলোড'),
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
                         ),
+                      ),
+                      onPressed: isDownloading ? null : onDownload,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                PopupMenuButton<String>(
+                  tooltip: lang.tr('Options', 'অপশন'),
+                  icon: Container(
+                    height: 42,
+                    width: 42,
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
                       ),
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                      decoration: BoxDecoration(
-                        color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            'Order: ',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey,
-                            ),
+                    child: Icon(
+                      Icons.more_vert_rounded,
+                      size: 20,
+                      color: AppColors.textPrimary(isDark),
+                    ),
+                  ),
+                  onSelected: (val) {
+                    if (val == 'portal') {
+                      TicketDownloadService.openInBrowser(
+                        TicketDownloadService.purchaseHistoryUrl,
+                      );
+                    } else if (val == 'direct') {
+                      TicketDownloadService.openInBrowser(
+                        TicketDownloadService.directDownloadUrl(ticket.orderId),
+                      );
+                    } else if (val == 'copy') {
+                      Clipboard.setData(ClipboardData(
+                        text: TicketDownloadService.directDownloadUrl(ticket.orderId),
+                      ));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            lang.tr('Ticket PDF link copied to clipboard!', 'টিকেট লিংক ক্লিপবোর্ডে কপি করা হয়েছে!'),
                           ),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'portal',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.language_rounded, size: 18, color: AppColors.primary),
+                          const SizedBox(width: 8),
                           Text(
-                            '#${ticket.orderId}',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary(isDark),
-                            ),
+                            lang.tr('Open Railway Website Portal', 'রেলওয়ে ওয়েবসাইট পোর্টালে যান'),
+                            style: const TextStyle(fontSize: 12.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'direct',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.link_rounded, size: 18, color: AppColors.primary),
+                          const SizedBox(width: 8),
+                          Text(
+                            lang.tr('Open Direct Ticket URL', 'সরাসরি টিকিটের লিংক খুলুন'),
+                            style: const TextStyle(fontSize: 12.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'copy',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.copy_rounded, size: 18, color: AppColors.primary),
+                          const SizedBox(width: 8),
+                          Text(
+                            lang.tr('Copy Ticket Link', 'টিকিটের লিংক কপি করুন'),
+                            style: const TextStyle(fontSize: 12.5),
                           ),
                         ],
                       ),
@@ -1067,38 +1154,6 @@ class _PurchasedTicketCard extends StatelessWidget {
                   ],
                 ),
               ],
-            ),
-          ),
-
-          // ── Bottom Download Button ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: SizedBox(
-              width: double.infinity,
-              height: 40,
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                  elevation: 1,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-                icon: isDownloading
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Icon(Icons.download_rounded, size: 18),
-                label: Text(
-                  isDownloading ? 'Downloading Ticket...' : 'Download Ticket (PDF)',
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                ),
-                onPressed: isDownloading ? null : onDownload,
-              ),
             ),
           ),
         ],
@@ -1159,6 +1214,7 @@ class _TripCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>();
     final isSuccess = record.status == TripBookingStatus.successful;
     final isReserved = record.status == TripBookingStatus.awaitingOtp;
     final isExpired = record.status == TripBookingStatus.expired;
@@ -1171,19 +1227,19 @@ class _TripCard extends StatelessWidget {
     if (isSuccess) {
       badgeColor = AppColors.success;
       badgeIcon = Icons.check_circle_rounded;
-      badgeText = 'SUCCESSFUL';
+      badgeText = lang.tr('SUCCESSFUL', 'সফল');
     } else if (isReserved) {
       badgeColor = AppColors.primary;
       badgeIcon = Icons.hourglass_top_rounded;
-      badgeText = 'RESERVED (OTP)';
+      badgeText = lang.tr('RESERVED (OTP)', 'সংরক্ষিত (ওটিপি)');
     } else if (isExpired) {
       badgeColor = AppColors.warning;
       badgeIcon = Icons.timer_off_outlined;
-      badgeText = 'EXPIRED (5m Limit)';
+      badgeText = lang.tr('EXPIRED (5m Limit)', 'মেয়াদোত্তীর্ণ (৫ মি.)');
     } else {
       badgeColor = AppColors.error;
       badgeIcon = Icons.cancel_outlined;
-      badgeText = 'FAILED';
+      badgeText = lang.tr('FAILED', 'ব্যর্থ');
     }
 
     final formattedTime = DateFormat('dd MMM, hh:mm a').format(record.createdAt);
@@ -1332,10 +1388,10 @@ class _TripCard extends StatelessWidget {
                 Expanded(
                   child: Text(
                     record.seatNumbers.isNotEmpty
-                        ? 'Seats: ${record.seatNumbers.join(", ")} (${record.coachName})'
+                        ? '${lang.tr("Seats", "আসন")}: ${record.seatNumbers.join(", ")} (${record.coachName})'
                         : (record.coachName.isNotEmpty
-                            ? 'Coach: ${record.coachName}'
-                            : (isFailed ? 'No seats held' : 'Seats pending')),
+                            ? '${lang.tr("Coach", "বগি")}: ${record.coachName}'
+                            : (isFailed ? lang.tr('No seats held', 'কোনো আসন ধরা যায়নি') : lang.tr('Seats pending', 'আসন প্রক্রিয়াধীন'))),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -1413,9 +1469,9 @@ class _TripCard extends StatelessWidget {
                   ),
                 ),
                 icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-                label: const Text(
-                  'Continue Reservation & OTP',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                label: Text(
+                  lang.tr('Continue Reservation & OTP', 'বুকিং ও ওটিপি যাচাই চালিয়ে যান'),
+                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
                 ),
                 onPressed: () {
                   Navigator.push(

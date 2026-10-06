@@ -78,7 +78,9 @@ class BookingIntent {
         if (seatClass != null &&
             seatClass.toUpperCase() != 'ALL' &&
             seatClass.toUpperCase() != 'RANDOM' &&
-            seat.type.toUpperCase() != seatClass.toUpperCase()) continue;
+            seat.type.toUpperCase() != seatClass.toUpperCase()) {
+          continue;
+        }
         final fare = double.tryParse(seat.fare);
         if (seat.seatCounts.online < quantity || fare == null || !fare.isFinite || fare < 0) continue;
         if (maxFare != null && fare + seat.vatAmount > maxFare!) continue;

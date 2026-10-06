@@ -22,10 +22,12 @@ import 'firebase_user_service.dart';
 import 'secure_store.dart';
 import 'trip_history_service.dart';
 import '../models/trip_record.dart';
+
 import 'package:flutter/material.dart';
-import '../widgets/turnstile_sheet.dart';
+
+import 'turnstile_gate.dart';
+import 'seat_layout_challenge.dart';
 import '../views/reservation_screen.dart';
-import 'overlay_service.dart';
 import '../utils/friendly_error.dart';
 
 class MonitorLog {
@@ -61,7 +63,10 @@ class MonitorService extends ChangeNotifier {
     _autoClearSearchTimer?.cancel();
     _autoClearSearchTimer = Timer(const Duration(minutes: 5), () async {
       await clearSearch();
-      _addLog('⏱️ 5 minutes passed after booking/OTP. Search cleared automatically.', isAlert: true);
+      _addLog(
+        '⏱️ 5 minutes passed after booking/OTP. Search cleared automatically.',
+        isAlert: true,
+      );
     });
   }
 
@@ -70,16 +75,49 @@ class MonitorService extends ChangeNotifier {
     stopMonitoring();
     await _persistence;
     final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_verificationKey);
+    _turnstileRequestedForBooking = false;
+    _turnstileWaitingForUi = false;
+    await TurnstileGate.instance.invalidate();
+    TurnstileGate.instance.dismiss();
     await prefs.remove(preferenceKey);
+    _fromCity = '';
+    _toCity = '';
     _dateOfJourney = '';
+    _targetTrains = [];
+    _targetTrain = null;
+    _targetSeatClass = null;
+    bookingIntent = const BookingIntent();
     _lastTrains = [];
     _lastError = null;
     _lastBookingError = null;
+    _bookingNeedsVerification = false;
+    _lastReservationExpired = false;
+    _elapsedMonitoringSeconds = 0;
+    _totalChecksCount = 0;
+    _seatsFoundCount = 0;
     try {
       await BookingService.clear();
       await NotificationService().cancelReservationAlerts();
     } catch (_) {}
+    _addLog('Monitoring stopped and cleared by user.');
     notifyListeners();
+  }
+
+  void pauseMonitoring() {
+    stopMonitoring();
+  }
+
+  void resumeMonitoring() {
+    if (_dateOfJourney.isEmpty) return;
+    startMonitoring(
+      fromCity: _fromCity.isEmpty ? 'Dhaka' : _fromCity,
+      toCity: _toCity.isEmpty ? 'Chattogram' : _toCity,
+      dateOfJourney: _dateOfJourney,
+      targetTrain: _targetTrain,
+      targetSeatClass: _targetSeatClass,
+      intent: bookingIntent,
+    );
   }
 
   static const preferenceKey = 'active_ticket_search';
@@ -105,30 +143,55 @@ class MonitorService extends ChangeNotifier {
       _toCity = data['to'] as String;
       _dateOfJourney = data['date'] as String;
       if (data['trains'] is List) {
-        _targetTrains = (data['trains'] as List).map((e) => e.toString()).toList();
-      } else if (data['train'] is String && (data['train'] as String).isNotEmpty) {
+        _targetTrains = (data['trains'] as List)
+            .map((e) => e.toString())
+            .toList();
+      } else if (data['train'] is String &&
+          (data['train'] as String).isNotEmpty) {
         final t = data['train'] as String;
-        _targetTrains = t.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+        _targetTrains = t
+            .split(',')
+            .map((s) => s.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
       } else {
         _targetTrains = [];
       }
-      _targetTrain = _targetTrains.isNotEmpty ? _targetTrains.join(', ') : (data['train'] as String?);
+      _targetTrain = _targetTrains.isNotEmpty
+          ? _targetTrains.join(', ')
+          : (data['train'] as String?);
       final rawSeat = data['seat'] as String?;
-      _targetSeatClass = (rawSeat == null ||
+      _targetSeatClass =
+          (rawSeat == null ||
               rawSeat.trim().isEmpty ||
               rawSeat.trim().toUpperCase() == 'ALL' ||
               rawSeat.trim().toUpperCase() == 'RANDOM')
           ? null
           : rawSeat.trim().toUpperCase();
       _searchId = data['id'] as String;
+      final verification = prefs.getString(_verificationKey);
+      _turnstileRequestedForBooking = verification != null;
+      _turnstileWaitingForUi = verification == 'pending';
+      _bookingNeedsVerification =
+          verification == 'pending' || verification == 'presented';
+      _lastBookingError =
+          verification == 'pending' || verification == 'presented'
+          ? const SeatLayoutChallenge().toString()
+          : null;
       final status = prefs.getString('ticket_status_$_searchId');
       if (status != null) {
         final savedStatus = jsonDecode(status) as Map<String, dynamic>;
         _lastError = savedStatus['error'] as String?;
+        if (verification == 'solved' &&
+            _lastError != null &&
+            _challengeRx.hasMatch(_lastError!)) {
+          _lastError = null;
+        }
         _lastCheckedAt = DateTime.tryParse(savedStatus['checkedAt'] ?? '');
       }
       _expiresAt = DateTime.tryParse(data['expires'] ?? '');
-      if (_expiresAt == null || _expiresAt!.difference(DateTime.now()).inHours <= 1) {
+      if (_expiresAt == null ||
+          _expiresAt!.difference(DateTime.now()).inHours <= 1) {
         final dep = parseDepartureDateTime(dateOfJourney: _dateOfJourney);
         if (dep != null && dep.isAfter(DateTime.now())) {
           _expiresAt = dep;
@@ -187,7 +250,9 @@ class MonitorService extends ChangeNotifier {
       'from': _fromCity,
       'to': _toCity,
       'date': _dateOfJourney,
-      'train': _targetTrains.isNotEmpty ? _targetTrains.join(', ') : _targetTrain,
+      'train': _targetTrains.isNotEmpty
+          ? _targetTrains.join(', ')
+          : _targetTrain,
       'trains': _targetTrains,
       'seat': _targetSeatClass,
       'active': _isMonitoring,
@@ -256,7 +321,9 @@ class MonitorService extends ChangeNotifier {
   List<String> get targetTrains => List.unmodifiable(_targetTrains);
   String? get targetTrain {
     if (_targetTrains.isNotEmpty) {
-      return _targetTrains.length == 1 ? _targetTrains.first : _targetTrains.join(', ');
+      return _targetTrains.length == 1
+          ? _targetTrains.first
+          : _targetTrains.join(', ');
     }
     return _targetTrain;
   }
@@ -264,7 +331,10 @@ class MonitorService extends ChangeNotifier {
   bool isTrainMonitored(String trainName) {
     if (!_isMonitoring) return false;
     final clean = trainName.trim().toLowerCase();
-    if (_targetTrains.isEmpty && (_targetTrain == null || _targetTrain == 'ALL' || _targetTrain!.isEmpty)) {
+    if (_targetTrains.isEmpty &&
+        (_targetTrain == null ||
+            _targetTrain == 'ALL' ||
+            _targetTrain!.isEmpty)) {
       return true;
     }
     return _targetTrains.any((t) => t.trim().toLowerCase() == clean) ||
@@ -278,7 +348,9 @@ class MonitorService extends ChangeNotifier {
       _targetTrains.add(clean);
       _targetTrain = _targetTrains.join(', ');
       bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
-      _addLog('➕ Added $clean to active auto-booking (Total: ${_targetTrains.length} trains)');
+      _addLog(
+        '➕ Added $clean to active auto-booking (Total: ${_targetTrains.length} trains)',
+      );
       unawaited(_saveAndSchedule());
       notifyListeners();
     }
@@ -289,7 +361,9 @@ class MonitorService extends ChangeNotifier {
     _targetTrains.removeWhere((t) => t.toLowerCase() == clean.toLowerCase());
     _targetTrain = _targetTrains.isNotEmpty ? _targetTrains.join(', ') : null;
     bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
-    _addLog('➖ Removed $clean from active auto-booking (Remaining: ${_targetTrains.length} trains)');
+    _addLog(
+      '➖ Removed $clean from active auto-booking (Remaining: ${_targetTrains.length} trains)',
+    );
     unawaited(_saveAndSchedule());
     notifyListeners();
   }
@@ -302,31 +376,105 @@ class MonitorService extends ChangeNotifier {
   String? get lastBookingError => _lastBookingError;
 
   bool _turnstileRequestedForBooking = false;
+  bool _turnstileWaitingForUi = false;
+  bool _resolvingTurnstile = false;
+  bool _bookingNeedsVerification = false;
+  bool _recheckAfterVerification = false;
+  String get _verificationKey => 'ticket_verification_$_searchId';
+
+  /// Only real Cloudflare challenges. (The old pattern also matched the word
+  /// "verification", so e.g. "OTP verification not completed" popped a human
+  /// check.)
+  static final RegExp _challengeRx = RegExp(
+    r'turnstile|cft_response|human check',
+    caseSensitive: false,
+  );
   bool _lastReservationExpired = false;
   bool get lastReservationExpired => _lastReservationExpired;
 
   void clearBookingError() {
     _lastBookingError = null;
-    _turnstileRequestedForBooking = false;
+    _bookingNeedsVerification = false;
     notifyListeners();
   }
 
-  void onTurnstileSolved(String token) {
-    _turnstileRequestedForBooking = false;
+  Future<void> onTurnstileSolved(String token) async {
+    if (token.isEmpty) return;
+    await TurnstileGate.instance.storeToken(token);
     _lastBookingError = null;
-    if (_lastError != null &&
-        RegExp(r'422|turnstile|cft_response', caseSensitive: false).hasMatch(_lastError!)) {
-      _lastError = null;
-    }
+    _bookingNeedsVerification = false;
+    _lastError = null;
+    _turnstileRequestedForBooking = true;
+    _turnstileWaitingForUi = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_verificationKey, 'solved');
+    await _notificationService.cancelVerificationAndSearchAlerts();
     notifyListeners();
-    unawaited(SecureStore.write('rail_cft_token', token));
-    unawaited(SecureStore.write(
-      'rail_cft_token_time',
-      DateTime.now().millisecondsSinceEpoch.toString(),
-    ));
-    unawaited(OverlayService.dismiss());
-    TurnstileDialog.dismiss();
-    checkNow();
+    if (_nativeMonitoring) {
+      await ForegroundMonitor.start();
+    } else if (_checking) {
+      _recheckAfterVerification = true;
+    } else {
+      await checkNow();
+    }
+  }
+
+  String _turnstileLabel() => [
+    if (targetTrain?.isNotEmpty == true) targetTrain!,
+    if (targetSeatClass?.isNotEmpty == true) targetSeatClass!,
+  ].join(' · ');
+
+  Future<void> resolveTurnstile({String? label}) async {
+    if (_resolvingTurnstile ||
+        !needsTurnstile ||
+        !TurnstileGate.instance.canShowUi) {
+      return;
+    }
+    _resolvingTurnstile = true;
+    final searchId = _searchId;
+    final generation = _generation;
+    try {
+      _turnstileWaitingForUi = false;
+      _turnstileRequestedForBooking = true;
+      // Start the warm browser and loading view before persistence or alert cleanup.
+      final verification = TurnstileGate.instance.acquire(
+        label: label ?? _turnstileLabel(),
+        forceFresh: true,
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_verificationKey, 'presented');
+      await _notificationService.cancelVerificationAndSearchAlerts();
+      final token = await verification;
+      if (_disposed || searchId != _searchId || generation != _generation) {
+        await TurnstileGate.instance.invalidate();
+        return;
+      }
+      if (token != null && token.isNotEmpty) await onTurnstileSolved(token);
+    } finally {
+      _resolvingTurnstile = false;
+    }
+  }
+
+  /// A background request survives an app restart. Presented or cancelled
+  /// requests remain available for an explicit retry, never another popup.
+  void resumePendingTurnstile() {
+    if (_turnstileWaitingForUi && needsTurnstile) {
+      unawaited(resolveTurnstile());
+    }
+  }
+
+  Future<void> _raiseTurnstile(String label, String train, String seat) async {
+    final prefs = await SharedPreferences.getInstance();
+    _turnstileWaitingForUi = true;
+    await prefs.setString(_verificationKey, 'pending');
+    if (!backgroundWorker && TurnstileGate.instance.canShowUi) {
+      unawaited(resolveTurnstile(label: label));
+    } else {
+      await _notificationService.triggerTurnstileRequiredAlert(
+        trainName: train,
+        seatType: seat,
+      );
+    }
   }
 
   Future<void> reAutoBook() async {
@@ -338,7 +486,11 @@ class MonitorService extends ChangeNotifier {
     await BookingService.clear();
     _lastReservationExpired = false;
     _lastBookingError = null;
+    _bookingNeedsVerification = false;
     _turnstileRequestedForBooking = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_verificationKey);
+    await TurnstileGate.instance.invalidate();
     bookingIntent = bookingIntent.copyWith(autoReserve: true);
     await _saveAndSchedule();
     notifyListeners();
@@ -348,26 +500,20 @@ class MonitorService extends ChangeNotifier {
   void clearErrors() {
     _lastError = null;
     _lastBookingError = null;
-    _turnstileRequestedForBooking = false;
+    _bookingNeedsVerification = false;
     notifyListeners();
   }
 
   void setErrorForTesting({String? error, String? bookingError}) {
     if (error != null) _lastError = error;
-    if (bookingError != null) _lastBookingError = bookingError;
+    if (bookingError != null) {
+      _lastBookingError = bookingError;
+      _bookingNeedsVerification = _challengeRx.hasMatch(bookingError);
+    }
     notifyListeners();
   }
-  bool get needsTurnstile =>
-      (_lastBookingError != null &&
-          RegExp(
-            r'422|turnstile|verification|human check|cft_response',
-            caseSensitive: false,
-          ).hasMatch(_lastBookingError!)) ||
-      (_lastError != null &&
-          RegExp(
-            r'422|turnstile|verification|human check|cft_response',
-            caseSensitive: false,
-          ).hasMatch(_lastError!));
+
+  bool get needsTurnstile => _bookingNeedsVerification;
   bool get needsLogin =>
       _lastError != null &&
       RegExp(
@@ -441,7 +587,9 @@ class MonitorService extends ChangeNotifier {
         } catch (_) {}
       }
     }
-    if (baseDate == null && departureFullDate != null && departureFullDate.trim().isNotEmpty) {
+    if (baseDate == null &&
+        departureFullDate != null &&
+        departureFullDate.trim().isNotEmpty) {
       for (final pattern in ['yyyy-MM-dd', 'dd-MMM-yyyy']) {
         try {
           baseDate = DateFormat(pattern).parse(departureFullDate.trim());
@@ -452,15 +600,23 @@ class MonitorService extends ChangeNotifier {
 
     if (baseDate != null) {
       if (departureDateTime != null && departureDateTime.trim().isNotEmpty) {
-        final match = RegExp(r'(\d{1,2}):(\d{2})\s*(am|pm)?', caseSensitive: false)
-            .firstMatch(departureDateTime);
+        final match = RegExp(
+          r'(\d{1,2}):(\d{2})\s*(am|pm)?',
+          caseSensitive: false,
+        ).firstMatch(departureDateTime);
         if (match != null) {
           int hour = int.parse(match.group(1)!);
           final minute = int.parse(match.group(2)!);
           final period = match.group(3)?.toLowerCase();
           if (period == 'pm' && hour < 12) hour += 12;
           if (period == 'am' && hour == 12) hour = 0;
-          return DateTime(baseDate.year, baseDate.month, baseDate.day, hour, minute);
+          return DateTime(
+            baseDate.year,
+            baseDate.month,
+            baseDate.day,
+            hour,
+            minute,
+          );
         }
       }
       return DateTime(baseDate.year, baseDate.month, baseDate.day, 23, 59, 59);
@@ -478,7 +634,9 @@ class MonitorService extends ChangeNotifier {
 
   double get freeProgressFraction {
     if (_expiresAt == null) return 1.0;
-    final totalSecs = _expiresAt!.difference(_startedAt ?? DateTime.now()).inSeconds;
+    final totalSecs = _expiresAt!
+        .difference(_startedAt ?? DateTime.now())
+        .inSeconds;
     if (totalSecs <= 0) return 1.0;
     final remaining = remainingFreeSeconds;
     return (1.0 - (remaining / totalSecs)).clamp(0.0, 1.0);
@@ -543,10 +701,19 @@ class MonitorService extends ChangeNotifier {
     }
 
     if (targetTrains != null && targetTrains.isNotEmpty) {
-      _targetTrains = targetTrains.map((t) => t.trim()).where((t) => t.isNotEmpty).toList();
+      _targetTrains = targetTrains
+          .map((t) => t.trim())
+          .where((t) => t.isNotEmpty)
+          .toList();
       _targetTrain = _targetTrains.join(', ');
-    } else if (targetTrain != null && targetTrain.trim().isNotEmpty && targetTrain.toUpperCase() != 'ALL') {
-      _targetTrains = targetTrain.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    } else if (targetTrain != null &&
+        targetTrain.trim().isNotEmpty &&
+        targetTrain.toUpperCase() != 'ALL') {
+      _targetTrains = targetTrain
+          .split(',')
+          .map((s) => s.trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
       _targetTrain = _targetTrains.join(', ');
     } else {
       _targetTrains = [];
@@ -567,12 +734,16 @@ class MonitorService extends ChangeNotifier {
         : targetSeatClass.trim().toUpperCase();
     _generation++;
     _searchId = DateTime.now().microsecondsSinceEpoch.toString();
+    _turnstileRequestedForBooking = false;
+    _turnstileWaitingForUi = false;
 
     // ── Search time limit: until train departure time ──
     DateTime? calculatedDeparture = departureTime;
     if (calculatedDeparture == null) {
       if (_targetTrains.isNotEmpty && _lastTrains.isNotEmpty) {
-        final matched = _lastTrains.where((t) => isTrainMonitored(t.tripNumber)).firstOrNull;
+        final matched = _lastTrains
+            .where((t) => isTrainMonitored(t.tripNumber))
+            .firstOrNull;
         if (matched != null) {
           departureDateTimeJd ??= matched.departureDateTimeJd;
           departureDateTime ??= matched.departureDateTime;
@@ -585,7 +756,8 @@ class MonitorService extends ChangeNotifier {
       );
     }
     // Default search time: until train departure time
-    _expiresAt = calculatedDeparture ?? DateTime.now().add(const Duration(hours: 24));
+    _expiresAt =
+        calculatedDeparture ?? DateTime.now().add(const Duration(hours: 24));
     _startedAt = DateTime.now();
     _elapsedMonitoringSeconds = 0;
     _lastTrains = [];
@@ -595,6 +767,7 @@ class MonitorService extends ChangeNotifier {
     _seatsFoundCount = 0;
     _lastError = null;
     _lastBookingError = null;
+    _bookingNeedsVerification = false;
     _isLimitReached = false;
 
     _addLog(
@@ -663,9 +836,12 @@ class MonitorService extends ChangeNotifier {
       unawaited(_checkReservationExpiry());
 
       // If admin reduces credits to 0 in DB while monitoring is active, pause auto-booking!
-      if (_isMonitoring && bookingIntent.autoReserve && CreditService().credits <= 0) {
+      if (_isMonitoring &&
+          bookingIntent.autoReserve &&
+          CreditService().credits <= 0) {
         stopMonitoring();
-        _lastError = 'Auto-booking paused: 0 credits remaining. Please buy credits.';
+        _lastError =
+            'Auto-booking paused: 0 credits remaining. Please buy credits.';
         _addLog(
           '⚠️ 0 credits remaining. Auto-booking stopped. Please recharge credits.',
           isAlert: true,
@@ -722,6 +898,11 @@ class MonitorService extends ChangeNotifier {
 
   Future<void> _executeCheck() async {
     if (!_isMonitoring || _checking || _disposed) return;
+    if (_nativeMonitoring) {
+      await restore(startTimers: false);
+      resumePendingTurnstile();
+      return;
+    }
     _intervalSeconds = AppConfig.instance.pollSeconds;
     if (_expiresAt != null && DateTime.now().isAfter(_expiresAt!)) {
       _isLimitReached = true;
@@ -734,7 +915,9 @@ class MonitorService extends ChangeNotifier {
       // Check for held or pending reservation
       final pendingReservation = await BookingService.pending();
       if (pendingReservation != null) {
-        final expiry = DateTime.tryParse('${pendingReservation['expiresAt'] ?? ''}');
+        final expiry = DateTime.tryParse(
+          '${pendingReservation['expiresAt'] ?? ''}',
+        );
         final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
         if (isExpired) {
           await BookingService.clear();
@@ -794,7 +977,9 @@ class MonitorService extends ChangeNotifier {
         _lastError = null;
         _lastTrains = response.trains;
         if (_targetTrains.isNotEmpty || _targetTrain != null) {
-          final matched = response.trains.where((t) => isTrainMonitored(t.tripNumber)).firstOrNull;
+          final matched = response.trains
+              .where((t) => isTrainMonitored(t.tripNumber))
+              .firstOrNull;
           if (matched != null) {
             final dep = parseDepartureDateTime(
               departureDateTimeJd: matched.departureDateTimeJd,
@@ -816,6 +1001,10 @@ class MonitorService extends ChangeNotifier {
             seatClass: _targetSeatClass,
           );
           if (chosen != null) {
+            if (_turnstileRequestedForBooking &&
+                await TurnstileGate.instance.cachedToken() == null) {
+              return;
+            }
             try {
               final reservation = await BookingService.reserve(
                 train: chosen.$1,
@@ -833,6 +1022,7 @@ class MonitorService extends ChangeNotifier {
                     _isMonitoring &&
                     generation == _generation &&
                     await _savedSearchIsActive(),
+                allowVerificationPrompt: !backgroundWorker,
               );
               _turnstileRequestedForBooking = false;
               _lastReservationExpired = false;
@@ -846,7 +1036,9 @@ class MonitorService extends ChangeNotifier {
               // Sequence Rule: after OTP is sent, directly present user with verify & pay process
               final nav = NotificationService.navigatorKey.currentState;
               if (nav != null && nav.mounted) {
-                nav.push(MaterialPageRoute(builder: (_) => const ReservationScreen()));
+                nav.push(
+                  MaterialPageRoute(builder: (_) => const ReservationScreen()),
+                );
               }
               notifyListeners();
               return;
@@ -861,27 +1053,32 @@ class MonitorService extends ChangeNotifier {
               _lastError = clean;
               _lastBookingError = clean;
 
-              final isTurnstile = RegExp(
-                r'422|turnstile|cft_response|verification|human check',
-                caseSensitive: false,
-              ).hasMatch(error.toString()) || RegExp(
-                r'422|turnstile|cft_response|verification|human check',
-                caseSensitive: false,
-              ).hasMatch(clean);
+              final isTurnstile = error is SeatLayoutChallenge;
 
               if (isTurnstile) {
-                _addLog('Human check needed to reserve seats for ${chosen.$1.tripNumber}');
-                // Security check should be triggered only ONCE per booking attempt
+                _bookingNeedsVerification = true;
+                if (error.verificationAttempted) {
+                  _turnstileRequestedForBooking = true;
+                  _turnstileWaitingForUi = false;
+                }
+                if (_turnstileRequestedForBooking) {
+                  final prefs = await SharedPreferences.getInstance();
+                  await prefs.setString(_verificationKey, 'presented');
+                  await _notificationService
+                      .cancelVerificationAndSearchAlerts();
+                }
+                _addLog(
+                  'Human check needed to reserve seats for ${chosen.$1.tripNumber}',
+                );
+                // Security check is raised only ONCE per booking attempt
                 if (!_turnstileRequestedForBooking) {
                   _turnstileRequestedForBooking = true;
-                  // Save context so overlay/dialog can show "TRAIN · SEAT"
-                  await SecureStore.write(
-                    'rail_turnstile_context',
-                    '${chosen.$1.tripNumber} · ${chosen.$2.type}',
-                  );
-                  await _notificationService.triggerTurnstileRequiredAlert(
-                    trainName: chosen.$1.tripNumber,
-                    seatType: chosen.$2.type,
+                  final label = '${chosen.$1.tripNumber} · ${chosen.$2.type}';
+                  await SecureStore.write('rail_turnstile_context', label);
+                  await _raiseTurnstile(
+                    label,
+                    chosen.$1.tripNumber,
+                    chosen.$2.type,
                   );
                 }
                 notifyListeners();
@@ -914,22 +1111,22 @@ class MonitorService extends ChangeNotifier {
               notifyListeners();
 
               final prefs = await SharedPreferences.getInstance();
-                final alertKey = 'ticket_attention_$_searchId';
-                if (prefs.getBool(alertKey) != true) {
-                  await _notificationService.triggerSeatAvailableAlert(
-                    trainName: chosen.$1.tripNumber,
-                    seatType: chosen.$2.type,
-                    seatCount: chosen.$2.seatCounts.online,
-                    travelDate: _dateOfJourney,
-                    bookingLink: NotificationService.bookingUrl(
-                      _fromCity,
-                      _toCity,
-                      _dateOfJourney,
-                      chosen.$2.type,
-                    ),
-                  );
-                  await prefs.setBool(alertKey, true);
-                }
+              final alertKey = 'ticket_attention_$_searchId';
+              if (prefs.getBool(alertKey) != true) {
+                await _notificationService.triggerSeatAvailableAlert(
+                  trainName: chosen.$1.tripNumber,
+                  seatType: chosen.$2.type,
+                  seatCount: chosen.$2.seatCounts.online,
+                  travelDate: _dateOfJourney,
+                  bookingLink: NotificationService.bookingUrl(
+                    _fromCity,
+                    _toCity,
+                    _dateOfJourney,
+                    chosen.$2.type,
+                  ),
+                );
+                await prefs.setBool(alertKey, true);
+              }
             }
           }
         }
@@ -969,7 +1166,7 @@ class MonitorService extends ChangeNotifier {
             if (seat.seatCounts.online > 0) {
               foundSeats = true;
               _seatsFoundCount += seat.seatCounts.online;
-              if (previous[key] == seat.seatCounts.online) continue;
+              if ((previous[key] as num? ?? 0) > 0) continue;
               _addLog(
                 '🎉 SEATS FOUND! ${train.tripNumber} has ${seat.seatCounts.online} [${seat.type}] seats!',
                 isAlert: true,
@@ -1024,6 +1221,10 @@ class MonitorService extends ChangeNotifier {
       notifyListeners();
     } finally {
       _checking = false;
+      if (_recheckAfterVerification && !_disposed) {
+        _recheckAfterVerification = false;
+        scheduleMicrotask(checkNow);
+      }
       if (!_disposed &&
           generation == _generation &&
           await _savedSearchIsActive()) {

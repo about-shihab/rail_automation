@@ -8,6 +8,7 @@ import '../models/seat_type.dart';
 import '../services/monitor_service.dart';
 import '../services/booking_service.dart';
 import '../services/credit_service.dart';
+import '../services/language_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/seat_badge.dart';
 import '../services/app_config.dart';
@@ -334,6 +335,7 @@ class TrainSelectionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = context.watch<LanguageService>();
     final trains = searchResponse.trains;
     final totalSeats = trains.fold<int>(0, (s, t) => s + t.totalOnlineSeats);
     final credit = context.watch<CreditService>();
@@ -440,52 +442,61 @@ class TrainSelectionScreen extends StatelessWidget {
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
                 child: Row(
                   children: [
-                    _Chip(Icons.train_rounded, '${trains.length}', 'trains'),
+                    _Chip(Icons.train_rounded, '${trains.length}', lang.tr('trains', 'টি ট্রেন')),
                     const SizedBox(width: 8),
                     if (totalSeats > 0)
                       _Chip(
                         Icons.event_seat_rounded,
                         '$totalSeats',
-                        'seats',
+                        lang.tr('seats', 'টি আসন'),
                         highlight: true,
                       ),
-                    const Spacer(),
                     if (monitor.isMonitoring)
-                      GestureDetector(
-                        onTap: () => AppShell.goTo(context, AppShell.tabMonitor),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.primary.withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: AppColors.primary.withValues(alpha: 0.5),
+                      Expanded(
+                        child: Align(
+                          alignment: Alignment.centerRight,
+                          child: GestureDetector(
+                            onTap: () => AppShell.goTo(context, AppShell.tabMonitor),
+                            child: Container(
+                              margin: const EdgeInsets.only(left: 8),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: AppColors.primary.withValues(alpha: 0.5),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 5),
+                                  Flexible(
+                                    child: Text(
+                                      '${lang.tr("Active", "সক্রিয়")}: ${monitor.targetTrain ?? lang.tr("Searching", "অনুসন্ধান চলছে")}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                              const SizedBox(width: 5),
-                              Text(
-                                'Active: ${monitor.targetTrain ?? "Searching"}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 11,
-                                ),
-                              ),
-                            ],
                           ),
                         ),
                       ),
@@ -514,7 +525,7 @@ class TrainSelectionScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '0 Credits Available',
+                            lang.tr('0 Credits Available', '০ ক্রেডিট অবশিষ্ট আছে'),
                             style: TextStyle(
                               color: isDark ? Colors.white : const Color(0xFF92400E),
                               fontWeight: FontWeight.bold,
@@ -523,7 +534,7 @@ class TrainSelectionScreen extends StatelessWidget {
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            '1 credit is deducted per successful booking. Please buy credit to auto-book.',
+                            lang.tr('1 credit is deducted per successful booking. Please buy credit to auto-book.', 'প্রতিটি সফল বুকিংয়ে ১ ক্রেডিট কাটা হবে। অটো-বুক করতে ক্রেডিট কিনুন।'),
                             style: TextStyle(
                               color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF78350F),
                               fontSize: 11,
@@ -540,7 +551,7 @@ class TrainSelectionScreen extends StatelessWidget {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       onPressed: () => RechargeCreditDialog.show(context),
-                      child: const Text('Buy Credit', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      child: Text(lang.tr('Buy Credit', 'ক্রেডিট কিনুন'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                     ),
                   ],
                 ),
@@ -569,16 +580,16 @@ class TrainSelectionScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Multi-Train Auto-Booking',
-                            style: TextStyle(
+                          Text(
+                            lang.tr('Multi-Train Auto-Booking', 'একাধিক ট্রেন অটো-বুকিং'),
+                            style: const TextStyle(
                               fontWeight: FontWeight.bold,
                               fontSize: 13,
                             ),
                           ),
                           const SizedBox(height: 2),
                           Text(
-                            'Select multiple trains on this route. Same API checks all. Each train auto-book to OTP send costs 1 credit.',
+                            lang.tr('Select multiple trains on this route. Same API checks all. Each train auto-book to OTP send costs 1 credit.', 'এই রুটের একাধিক ট্রেন বাছাই করুন। সব ট্রেন একই সাথে চেক হবে। ওটিপি পাঠানোর জন্য প্রতি ট্রেনে ১ ক্রেডিট লাগবে।'),
                             style: TextStyle(
                               color: AppColors.textSecondary(isDark),
                               fontSize: 11,
@@ -597,7 +608,7 @@ class TrainSelectionScreen extends StatelessWidget {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                       icon: const Icon(Icons.tune_rounded, size: 14),
-                      label: const Text('Select Train', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      label: Text(lang.tr('Select Train', 'ট্রেন বাছাই'), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                       onPressed: () => _openMultiTrainAutoBook(context),
                     ),
                   ],
@@ -619,7 +630,7 @@ class TrainSelectionScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'No trains found',
+                          lang.tr('No trains found', 'কোনো ট্রেন পাওয়া যায়নি'),
                           style: TextStyle(
                             color: AppColors.textMuted(isDark),
                             fontSize: 16,
@@ -685,6 +696,7 @@ class _TrainCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hasSeats = train.hasAnyOnlineSeats;
+    final lang = context.watch<LanguageService>();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -810,7 +822,7 @@ class _TrainCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        'seats',
+                        lang.tr('seats', 'আসন'),
                         style: TextStyle(
                           color: hasSeats
                               ? AppColors.primary.withValues(alpha: 0.7)
@@ -851,7 +863,7 @@ class _TrainCard extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   Text(
-                    'Only ${train.totalOnlineSeats} left — act fast',
+                    '${lang.tr("Only", "মাত্র")} ${train.totalOnlineSeats} ${lang.tr("left — act fast", "টি বাকি — দ্রুত বুক করুন")}',
                     style: const TextStyle(
                       color: AppColors.warning,
                       fontSize: 11,
@@ -872,7 +884,7 @@ class _TrainCard extends StatelessWidget {
                     icon: isMonitored
                         ? Icons.radar_rounded
                         : Icons.notifications_outlined,
-                    label: isMonitored ? 'Active • View' : 'Auto-book',
+                    label: isMonitored ? lang.tr('Active • View', 'সক্রিয় • দেখুন') : lang.tr('Auto-book', 'অটো-বুক'),
                     color: isMonitored ? AppColors.accent : AppColors.primary,
                     onTap: onWatch,
                     filled: isMonitored || !hasSeats,
@@ -884,7 +896,7 @@ class _TrainCard extends StatelessWidget {
                   Expanded(
                     child: _ActionBtn(
                       icon: Icons.east_rounded,
-                      label: 'Book',
+                      label: lang.tr('Book', 'বুক করুন'),
                       color: AppColors.primary,
                       onTap: onBook,
                       filled: true,
@@ -986,6 +998,7 @@ class _ClassSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = context.watch<LanguageService>();
     final totalSeats = seatTypes.fold<int>(
       0,
       (sum, s) => sum + s.seatCounts.online,
@@ -1016,7 +1029,7 @@ class _ClassSheet extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Choose Class',
+                  lang.tr('Choose Class', 'শ্রেণি বাছাই করুন'),
                   style: TextStyle(
                     color: AppColors.textPrimary(isDark),
                     fontSize: 17,
@@ -1038,7 +1051,7 @@ class _ClassSheet extends StatelessWidget {
                     ),
                   ),
                   child: Text(
-                    '$totalSeats total seats',
+                    '$totalSeats ${lang.tr("total seats", "মোট আসন")}',
                     style: const TextStyle(
                       color: AppColors.primary,
                       fontSize: 11,
@@ -1097,7 +1110,7 @@ class _ClassSheet extends StatelessWidget {
                         Row(
                           children: [
                             Text(
-                              'Random Class (Any Available)',
+                              lang.tr('Random Class (Any Available)', 'যেকোনো শ্রেণি (আসন পেলেই)'),
                               style: TextStyle(
                                 color: AppColors.textPrimary(isDark),
                                 fontWeight: FontWeight.bold,
@@ -1114,9 +1127,9 @@ class _ClassSheet extends StatelessWidget {
                                 color: AppColors.gold.withValues(alpha: 0.2),
                                 borderRadius: BorderRadius.circular(4),
                               ),
-                              child: const Text(
-                                'FASTEST',
-                                style: TextStyle(
+                              child: Text(
+                                lang.tr('FASTEST', 'সবচেয়ে দ্রুত'),
+                                style: const TextStyle(
                                   color: AppColors.gold,
                                   fontSize: 8.5,
                                   fontWeight: FontWeight.w800,
@@ -1128,8 +1141,10 @@ class _ClassSheet extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           totalSeats > 0
-                              ? 'Whichever class has seats available • $totalSeats seats total'
-                              : 'Auto-books whichever class becomes available',
+                              ? (lang.isBangla
+                                  ? 'যে শ্রেণিতে সিট পাওয়া যাবে • মোট $totalSeats সিট'
+                                  : 'Whichever class has seats available • $totalSeats seats total')
+                              : lang.tr('Auto-books whichever class becomes available', 'যেকোনো শ্রেণিতে সিট খালি হলেই অটো-বুক হবে'),
                           style: TextStyle(
                             color: AppColors.textSecondary(isDark),
                             fontSize: 11.5,
@@ -1185,7 +1200,7 @@ class _ClassSheet extends StatelessWidget {
                             ),
                           ),
                           Text(
-                            '${seat.seatCounts.online} seats  •  ৳${seat.fare}',
+                            '${seat.seatCounts.online} ${lang.tr("seats", "আসন")}  •  ৳${seat.fare}',
                             style: TextStyle(
                               color: AppColors.textSecondary(isDark),
                               fontSize: 12,
@@ -1235,6 +1250,7 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final lang = context.watch<LanguageService>();
     return Container(
       constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.75),
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -1260,10 +1276,10 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
             children: [
               const Icon(Icons.playlist_add_check_rounded, color: AppColors.primary, size: 24),
               const SizedBox(width: 8),
-              const Expanded(
+              Expanded(
                 child: Text(
-                  'Select Trains for Auto-Book',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  lang.tr('Select Trains for Auto-Book', 'অটো-বুকের জন্য ট্রেন নির্বাচন'),
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
               ),
               TextButton(
@@ -1277,7 +1293,9 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
                   });
                 },
                 child: Text(
-                  _selected.length == widget.trains.length ? 'Deselect All' : 'Select All',
+                  _selected.length == widget.trains.length
+                      ? lang.tr('Deselect All', 'সব বাতিল')
+                      : lang.tr('Select All', 'সব নির্বাচন'),
                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                 ),
               ),
@@ -1291,14 +1309,17 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
               borderRadius: BorderRadius.circular(10),
               border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
             ),
-            child: const Row(
+            child: Row(
               children: [
-                Icon(Icons.bolt_rounded, color: AppColors.primary, size: 18),
-                SizedBox(width: 8),
+                const Icon(Icons.bolt_rounded, color: AppColors.primary, size: 18),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'All selected trains are checked together in each search. Reserving seats and sending OTP costs 1 credit per train.',
-                    style: TextStyle(fontSize: 11, height: 1.3),
+                    lang.tr(
+                      'All selected trains are checked together in each search. Reserving seats and sending OTP costs 1 credit per train.',
+                      'নির্বাচিত সব ট্রেন একসাথে চেক করা হবে। আসন সংরক্ষণ ও ওটিপি পাঠাতে ট্রেনপ্রতি ১ ক্রেডিট লাগবে।',
+                    ),
+                    style: const TextStyle(fontSize: 11, height: 1.3),
                   ),
                 ),
               ],
@@ -1308,7 +1329,7 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
           Expanded(
             child: ListView.separated(
               itemCount: widget.trains.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, _) => const Divider(height: 1),
               itemBuilder: (ctx, i) {
                 final train = widget.trains[i];
                 final isChecked = _selected.contains(train.tripNumber);
@@ -1330,7 +1351,7 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
                   subtitle: Text(
-                    '${train.departureDateTime} → ${train.arrivalDateTime} • ${train.totalOnlineSeats} seats',
+                    '${train.departureDateTime} → ${train.arrivalDateTime} • ${train.totalOnlineSeats} ${lang.tr("seats", "আসন")}',
                     style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 11),
                   ),
                 );
@@ -1340,8 +1361,10 @@ class _MultiTrainSheetState extends State<_MultiTrainSheet> {
           const SizedBox(height: 12),
           PrimaryButton(
             label: _selected.isEmpty
-                ? 'Select At Least 1 Train'
-                : 'Auto-Book (${_selected.length} Train${_selected.length > 1 ? 's' : ''})',
+                ? lang.tr('Select At Least 1 Train', 'কমপক্ষে ১টি ট্রেন নির্বাচন করুন')
+                : (lang.isBangla
+                    ? 'অটো-বুক (${_selected.length}টি ট্রেন)'
+                    : 'Auto-Book (${_selected.length} Train${_selected.length > 1 ? "s" : ""})'),
             icon: Icons.check_circle_rounded,
             onPressed: _selected.isEmpty
                 ? null

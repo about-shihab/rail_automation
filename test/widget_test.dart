@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:rail_automation/models/auth_session.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:rail_automation/views/search_screen.dart';
@@ -9,8 +12,14 @@ import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/credit_service.dart';
 
 void main() {
-  testWidgets('App renders SearchScreen with Rail Pro header',
-      (WidgetTester tester) async {
+  testWidgets('App renders SearchScreen with Rail Pro header', (
+    WidgetTester tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
+    FlutterSecureStorage.setMockInitialValues({});
+    await AuthSession.save(
+      AuthSession(token: 'search-session', deviceKey: 'device'),
+    );
     final proService = ProService();
     final themeService = ThemeService();
     final languageService = LanguageService();
@@ -27,12 +36,11 @@ void main() {
             create: (_) => MonitorService(proService: proService),
           ),
         ],
-        child: const MaterialApp(
-          home: SearchScreen(),
-        ),
+        child: const MaterialApp(home: SearchScreen()),
       ),
     );
 
+    await tester.pump(const Duration(milliseconds: 500));
     expect(find.text('Rail Pro'), findsOneWidget);
     expect(find.text('To'), findsOneWidget);
     expect(find.text('Class'), findsOneWidget);

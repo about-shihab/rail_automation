@@ -1,180 +1,202 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+
 import '../services/language_service.dart';
 import '../utils/app_theme.dart';
 
-/// Professional, state-of-the-art animated loader depicting a user waiting in a queue looking for tickets.
-/// Features an illuminated Bangladesh Railway smart counter, queuing passengers with detailed silhouettes,
-/// the radiant "YOU" indicator, a floating holographic VIP ticket with active dual-beam laser berth scanner,
-/// perspective floor grid, and dynamic queue progress tracking.
+enum JourneyAnimationStage {
+  searching,
+  reserving,
+  verifying,
+  payment,
+  paused,
+  complete,
+}
+
+/// A booking illustration driven by real state instead of simulated progress.
 class FancyTrainLoader extends StatefulWidget {
   final String? message;
   final String? subMessage;
   final double height;
   final bool showCard;
-
+  final JourneyAnimationStage stage;
   const FancyTrainLoader({
     super.key,
     this.message,
     this.subMessage,
     this.height = 200,
     this.showCard = false,
+    this.stage = JourneyAnimationStage.searching,
   });
-
   @override
   State<FancyTrainLoader> createState() => _FancyTrainLoaderState();
 }
 
 class _FancyTrainLoaderState extends State<FancyTrainLoader>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-  int _statusCycleIndex = 0;
-
-  static const List<String> _defaultStatusCycles = [
-    'Standing in reservation queue...',
-    'Scanning coach berth inventory...',
-    'Searching Bangladesh Railway servers...',
-    'Checking real-time seat availability...',
-    'Preparing auto-reservation queue token...',
-  ];
+  late final AnimationController _motion = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 4),
+  );
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncMotion();
+  }
 
   @override
-  void initState() {
-    super.initState();
-    final isTest = WidgetsBinding.instance.runtimeType.toString().contains('Test');
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2600),
-    );
-    if (!isTest) {
-      _controller.repeat();
-    }
+  void didUpdateWidget(covariant FancyTrainLoader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncMotion();
+  }
 
-    _controller.addStatusListener((status) {
-      if (status == AnimationStatus.completed || _controller.value > 0.98) {
-        if (mounted) {
-          setState(() {
-            _statusCycleIndex = (_statusCycleIndex + 1) % _defaultStatusCycles.length;
-          });
-        }
-      }
-    });
+  void _syncMotion() {
+    final animate =
+        !MediaQuery.disableAnimationsOf(context) &&
+        widget.stage != JourneyAnimationStage.paused &&
+        !WidgetsBinding.instance.runtimeType.toString().contains('Test');
+    if (animate && !_motion.isAnimating) _motion.repeat();
+    if (!animate) _motion.stop();
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _motion.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final lang = LanguageService.of(context, listen: false);
-    final primaryMsg = widget.message ?? lang.t('loading_tickets');
-    final secondaryMsg = widget.subMessage ?? _defaultStatusCycles[_statusCycleIndex];
-
-    final painterHeight = (widget.height * 0.68).clamp(96.0, 150.0);
-
-    final content = Column(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        // ── 1. The Queue & Holographic Scanner Canvas ──
-        SizedBox(
-          height: painterHeight,
-          width: double.infinity,
-          child: AnimatedBuilder(
-            animation: _controller,
-            builder: (context, child) {
-              return CustomPaint(
-                painter: _QueueTicketPainter(
-                  progress: _controller.value,
-                  isDark: isDark,
-                ),
-              );
-            },
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final lang = LanguageService.of(context);
+    final stage = widget.stage;
+    final color = stage == JourneyAnimationStage.payment
+        ? const Color(0xFFD39A26)
+        : const Color(0xFF00AD86);
+    final icon = switch (stage) {
+      JourneyAnimationStage.searching => Icons.search_rounded,
+      JourneyAnimationStage.reserving => Icons.event_seat_rounded,
+      JourneyAnimationStage.verifying => Icons.verified_user_outlined,
+      JourneyAnimationStage.payment => Icons.payment_rounded,
+      JourneyAnimationStage.paused => Icons.pause_rounded,
+      JourneyAnimationStage.complete => Icons.check_rounded,
+    };
+    final title =
+        widget.message ??
+        switch (stage) {
+          JourneyAnimationStage.searching => lang.tr(
+            'Finding tickets',
+            'টিকিট খোঁজা হচ্ছে',
           ),
-        ),
-
-        const SizedBox(height: 6),
-
-        // ── 2. Dynamic Status & Queue Pipeline Tracker ──
-        AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) {
-            final alpha = (0.80 + 0.20 * math.sin(_controller.value * 2 * math.pi)).clamp(0.6, 1.0);
-            return Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Opacity(
-                  opacity: alpha,
-                  child: Text(
-                    primaryMsg,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: isDark ? const Color(0xFF6EE7B7) : const Color(0xFF047857),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.3,
+          JourneyAnimationStage.reserving => lang.tr(
+            'Reserving seats',
+            'আসন সংরক্ষণ হচ্ছে',
+          ),
+          JourneyAnimationStage.verifying => lang.tr(
+            'Verify your booking',
+            'বুকিং যাচাই করুন',
+          ),
+          JourneyAnimationStage.payment => lang.tr(
+            'Seats held · Ready to pay',
+            'আসন সংরক্ষিত · পেমেন্ট করুন',
+          ),
+          JourneyAnimationStage.paused => lang.tr(
+            'Search paused',
+            'অনুসন্ধান স্থগিত',
+          ),
+          JourneyAnimationStage.complete => lang.tr(
+            'Booking confirmed',
+            'বুকিং নিশ্চিত',
+          ),
+        };
+    final subtitle =
+        widget.subMessage ??
+        switch (stage) {
+          JourneyAnimationStage.payment => lang.tr(
+            'Complete payment before the hold expires',
+            'সময় শেষ হওয়ার আগে পেমেন্ট করুন',
+          ),
+          JourneyAnimationStage.verifying => lang.tr(
+            'Enter or approve your OTP',
+            'ওটিপি দিন বা অনুমোদন করুন',
+          ),
+          _ => null,
+        };
+    final content = Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            height: (widget.height * .60).clamp(90.0, 132.0),
+            child: LayoutBuilder(
+              builder: (context, constraints) => AnimatedBuilder(
+                animation: _motion,
+                builder: (context, child) => Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _RailScenePainter(
+                          progress: _motion.value,
+                          dark: dark,
+                          stage: stage,
+                          counterLabel: lang.tr('TICKETS', 'টিকিট'),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-                const SizedBox(height: 3),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 320),
-                  child: Text(
-                    secondaryMsg,
-                    key: ValueKey<String>(secondaryMsg),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
+                    Positioned(
+                      right:
+                          36 * ((widget.height * .60).clamp(90.0, 132.0) / 120),
+                      top:
+                          47 * ((widget.height * .60).clamp(90.0, 132.0) / 120),
+                      child: Icon(
+                        icon,
+                        color: color,
+                        size:
+                            21 *
+                            ((widget.height * .60).clamp(90.0, 132.0) / 120),
+                      ),
                     ),
-                  ),
+                  ],
                 ),
-                const SizedBox(height: 7),
-                // Modern 3-stage queue pipeline indicator
-                _QueuePipelineBar(progress: _controller.value, isDark: isDark),
-              ],
-            );
-          },
-        ),
-      ],
+              ),
+            ),
+          ),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              color: dark ? const Color(0xFFB5EBDD) : const Color(0xFF075D4C),
+            ),
+          ),
+          if (subtitle != null && subtitle.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.textSecondary(dark),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
-
-    if (!widget.showCard) {
-      return Center(child: content);
-    }
-
+    if (!widget.showCard) return content;
     return Center(
       child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+        margin: const EdgeInsets.symmetric(horizontal: 24),
+        padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          color: isDark
-              ? const Color(0xFF071220).withValues(alpha: 0.95)
-              : Colors.white.withValues(alpha: 0.97),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: isDark
-                ? const Color(0xFF00D59B).withValues(alpha: 0.30)
-                : const Color(0xFF00D59B).withValues(alpha: 0.38),
-            width: 1.5,
-          ),
+          color: AppColors.cardBg(dark),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: color.withValues(alpha: .22)),
           boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF00D59B).withValues(alpha: isDark ? 0.16 : 0.08),
-              blurRadius: 32,
-              offset: const Offset(0, 8),
-            ),
-            if (isDark)
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.55),
-                blurRadius: 20,
-                offset: const Offset(0, 6),
-              ),
+            BoxShadow(color: color.withValues(alpha: .1), blurRadius: 28),
           ],
         ),
         child: content,
@@ -183,873 +205,288 @@ class _FancyTrainLoaderState extends State<FancyTrainLoader>
   }
 }
 
-/// Sleek 3-stage queue pipeline tracker showing Queue Position -> Berth Scan -> Auto Hold.
-class _QueuePipelineBar extends StatelessWidget {
+class _RailScenePainter extends CustomPainter {
   final double progress;
-  final bool isDark;
-
-  const _QueuePipelineBar({required this.progress, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final activeColor = const Color(0xFF00D59B);
-    final inactiveColor = isDark ? const Color(0xFF1E3A55) : const Color(0xFFCBDCF0);
-
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Stage 1: Queue Position (Active/Checked)
-        _buildDot(active: true, activeColor: activeColor, inactiveColor: inactiveColor),
-        _buildLine(active: true, activeColor: activeColor, inactiveColor: inactiveColor),
-        // Stage 2: Scanning Berths (Pulsing)
-        _buildDot(
-          active: true,
-          pulsing: true,
-          progress: progress,
-          activeColor: const Color(0xFF00F0FF),
-          inactiveColor: inactiveColor,
-        ),
-        _buildLine(
-          active: progress > 0.5,
-          activeColor: activeColor,
-          inactiveColor: inactiveColor,
-        ),
-        // Stage 3: Auto-Hold Ready
-        _buildDot(
-          active: progress > 0.85,
-          activeColor: activeColor,
-          inactiveColor: inactiveColor,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildDot({
-    required bool active,
-    bool pulsing = false,
-    double progress = 0.0,
-    required Color activeColor,
-    required Color inactiveColor,
-  }) {
-    final size = pulsing ? (6.0 + 1.5 * math.sin(progress * 2 * math.pi)) : 6.0;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: active ? activeColor : inactiveColor,
-        boxShadow: active
-            ? [
-                BoxShadow(
-                  color: activeColor.withValues(alpha: pulsing ? 0.8 : 0.4),
-                  blurRadius: pulsing ? 6 : 3,
-                )
-              ]
-            : null,
-      ),
-    );
-  }
-
-  Widget _buildLine({
-    required bool active,
-    required Color activeColor,
-    required Color inactiveColor,
-  }) {
-    return Container(
-      width: 28,
-      height: 2,
-      margin: const EdgeInsets.symmetric(horizontal: 4),
-      decoration: BoxDecoration(
-        color: active ? activeColor.withValues(alpha: 0.6) : inactiveColor,
-        borderRadius: BorderRadius.circular(1),
-      ),
-    );
-  }
-}
-
-/// Custom painter rendering a stunning futuristic queue waiting scene:
-/// Perspective floor grid, glowing stanchions, velvet cord, queuing passenger silhouettes,
-/// radiant "YOU" user avatar with floating badge, Bangladesh Railway smart kiosk,
-/// floating VIP train ticket with active dual-laser scan & radar sonar waves.
-class _QueueTicketPainter extends CustomPainter {
-  final double progress;
-  final bool isDark;
-
-  _QueueTicketPainter({required this.progress, required this.isDark});
+  final bool dark;
+  final JourneyAnimationStage stage;
+  final String counterLabel;
+  const _RailScenePainter({
+    required this.progress,
+    required this.dark,
+    required this.stage,
+    required this.counterLabel,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    if (w <= 0 || h <= 0) return;
+    final scale = size.height / 120;
+    final width = size.width / scale;
+    canvas.save();
+    canvas.scale(scale);
+    final counterX = width - 134;
+    const floor = 103.0;
+    final paint = Paint();
+    final bounds = Rect.fromLTWH(0, 0, width, 120);
+    paint.shader = RadialGradient(
+      center: const Alignment(.5, -.1),
+      radius: .9,
+      colors: [
+        const Color(0xFF00B58C).withValues(alpha: dark ? .13 : .08),
+        Colors.transparent,
+      ],
+    ).createShader(bounds);
+    canvas.drawRect(bounds, paint);
+    paint.shader = null;
 
-    final floorY = h * 0.78;
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 1. Ambient Background & Perspective Horizon Grid
-    // ─────────────────────────────────────────────────────────────────────────
-    final bgGlow = Paint()
-      ..shader = RadialGradient(
-        center: const Alignment(0.45, -0.2),
-        radius: 0.95,
-        colors: [
-          (isDark ? const Color(0xFF00D59B) : const Color(0xFF10B981))
-              .withValues(alpha: isDark ? 0.18 : 0.10),
-          (isDark ? const Color(0xFF00F0FF) : const Color(0xFF0EA5E9))
-              .withValues(alpha: isDark ? 0.08 : 0.05),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(0, 0, w, h));
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bgGlow);
-
-    // Floor surface gradient
-    final floorRect = Rect.fromLTWH(0, floorY, w, h - floorY);
-    final floorSurfacePaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: isDark
-            ? [const Color(0xFF0A192D), const Color(0xFF050D18)]
-            : [const Color(0xFFE2EAF4), const Color(0xFFD0DFEF)],
-      ).createShader(floorRect);
-    canvas.drawRect(floorRect, floorSurfacePaint);
-
-    // Perspective floor lines running toward vanishing point at right
-    final gridLinePaint = Paint()
-      ..color = (isDark ? const Color(0xFF00F0FF) : const Color(0xFF0284C7))
-          .withValues(alpha: isDark ? 0.12 : 0.08)
-      ..strokeWidth = 0.8;
-
-    final vpX = w * 0.85;
-    final vpY = floorY - 30;
-    for (int i = 0; i < 6; i++) {
-      final startX = w * (i * 0.16);
-      canvas.drawLine(Offset(startX, h), Offset(vpX, vpY), gridLinePaint);
+    // A station concourse with a clear route to the staffed ticket counter.
+    paint.color = dark ? const Color(0xFF17333E) : const Color(0xFFE3EEEA);
+    for (var i = 0; i < 5; i++) {
+      final x = 10.0 + i * (width - 20) / 5;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x, 30, 28, 62),
+          const Radius.circular(14),
+        ),
+        paint,
+      );
     }
-
-    // Main floor horizon line with cyan neon edge
-    final horizonPaint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          Colors.transparent,
-          (isDark ? const Color(0xFF00D59B) : const Color(0xFF059669)).withValues(alpha: 0.7),
-          (isDark ? const Color(0xFF00F0FF) : const Color(0xFF0284C7)).withValues(alpha: 0.9),
-          Colors.transparent,
-        ],
-        stops: const [0.0, 0.35, 0.75, 1.0],
-      ).createShader(Rect.fromLTWH(0, floorY, w, 2))
-      ..strokeWidth = 1.4;
-    canvas.drawLine(Offset(0, floorY), Offset(w, floorY), horizonPaint);
-
-    // Flowing queue lane chevron arrows along floor (> > >)
-    final chevronPaint = Paint()
-      ..color = (isDark ? const Color(0xFF00D59B) : const Color(0xFF059669))
-          .withValues(alpha: 0.35)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2
-      ..strokeCap = StrokeCap.round;
-
-    final chevronOffset = (progress * 28.0) % 28.0;
-    for (double cx = w * 0.08 + chevronOffset; cx < w * 0.70; cx += 28.0) {
-      final cPath = Path()
-        ..moveTo(cx - 3, floorY + 4)
-        ..lineTo(cx, floorY + 6.5)
-        ..lineTo(cx - 3, floorY + 9);
-      canvas.drawPath(cPath, chevronPaint);
+    paint.color = dark ? const Color(0xFF193039) : const Color(0xFFEDF3F0);
+    canvas.drawRect(Rect.fromLTWH(0, floor, width, 17), paint);
+    paint.color = dark ? const Color(0xFF2B4B50) : const Color(0xFFD2E3DC);
+    paint.strokeWidth = 1;
+    canvas.drawLine(const Offset(0, floor), Offset(width, floor), paint);
+    for (var i = 0; i < 9; i++) {
+      final x = i * width / 8;
+      canvas.drawLine(Offset(x, floor), Offset(x - 12, 120), paint);
     }
+    canvas.drawLine(const Offset(0, 114), Offset(width, 114), paint);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // 2. Queue Floor Spots & Guidance Stanchions
-    // ─────────────────────────────────────────────────────────────────────────
-    final posPads = [w * 0.14, w * 0.33, w * 0.52];
-    for (int i = 0; i < posPads.length; i++) {
-      final px = posPads[i];
-      final isUserSpot = (i == 2);
+    // Wayfinding sign: ticket symbol and arrow rather than more status text.
+    paint.color = dark ? const Color(0xFF35605D) : const Color(0xFFB9D5C9);
+    canvas.drawRect(const Rect.fromLTWH(41, 42, 3, 55), paint);
+    _box(
+      canvas,
+      const Rect.fromLTWH(18, 22, 65, 23),
+      const Color(0xFF086C56),
+      7,
+    );
+    _ticket(canvas, const Offset(33, 33), const Color(0xFFE2FFF3), 1);
+    paint.color = const Color(0xFFE2FFF3);
+    paint.strokeWidth = 2;
+    paint.style = PaintingStyle.stroke;
+    canvas.drawLine(const Offset(54, 33), const Offset(70, 33), paint);
+    canvas.drawPath(
+      Path()
+        ..moveTo(65, 28)
+        ..lineTo(70, 33)
+        ..lineTo(65, 38),
+      paint,
+    );
+    paint.style = PaintingStyle.fill;
 
-      if (isUserSpot) {
-        // User spot: Glowing concentric holographic radar pads
-        final userRingAlpha = (0.5 + 0.4 * math.sin(progress * 4 * math.pi)).clamp(0.2, 1.0);
-        final userSpotPaint = Paint()
-          ..color = const Color(0xFF00D59B).withValues(alpha: userRingAlpha * 0.6)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.6;
-        canvas.drawOval(
-          Rect.fromCenter(center: Offset(px, floorY + 5), width: 34, height: 10),
-          userSpotPaint,
+    // Counter canopy, service window, attendant, and desk.
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(counterX + 3, 22, 114, 80),
+        const Radius.circular(10),
+      ),
+      Paint()
+        ..color = Colors.black.withValues(alpha: .09)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+    _box(
+      canvas,
+      Rect.fromLTWH(counterX, 24, 114, 78),
+      dark ? const Color(0xFF183F40) : const Color(0xFFDDF1E9),
+      9,
+    );
+    final canopy = Rect.fromLTWH(counterX - 5, 17, 124, 24);
+    paint.shader = const LinearGradient(
+      colors: [Color(0xFF13C99A), Color(0xFF00775D)],
+    ).createShader(canopy);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(canopy, const Radius.circular(8)),
+      paint,
+    );
+    paint.shader = null;
+    final label = TextPainter(
+      text: TextSpan(
+        text: counterLabel,
+        style: const TextStyle(
+          fontFamily: 'Roboto',
+          color: Colors.white,
+          fontSize: 10,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.3,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    label.paint(canvas, Offset(counterX + (114 - label.width) / 2, 23));
+    _box(
+      canvas,
+      Rect.fromLTWH(counterX + 10, 45, 94, 32),
+      dark ? const Color(0xFF07282F) : const Color(0xFFF7FFFC),
+      5,
+    );
+    paint.color = const Color(0xFFE7B18D);
+    canvas.drawCircle(Offset(counterX + 34, 54), 5, paint);
+    _box(
+      canvas,
+      Rect.fromLTWH(counterX + 25, 61, 18, 16),
+      const Color(0xFF239E87),
+      6,
+    );
+    paint.color = const Color(0xFF163F43);
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset(counterX + 34, 53), radius: 5),
+      math.pi,
+      math.pi,
+      true,
+      paint,
+    );
+    _box(
+      canvas,
+      Rect.fromLTWH(counterX - 6, 77, 126, 7),
+      const Color(0xFF00856A),
+      3,
+    );
+    _box(
+      canvas,
+      Rect.fromLTWH(counterX + 12, 89, 90, 4),
+      dark ? const Color(0xFF2B5A56) : const Color(0xFFB7DCCE),
+      2,
+    );
+
+    final searching = stage == JourneyAnimationStage.searching;
+    final walking = searching && progress < .6;
+    final travel = searching
+        ? Curves.easeInOut.transform((progress / .6).clamp(0.0, 1.0))
+        : 1.0;
+    final startX = 101.0.clamp(60.0, counterX - 47);
+    final personX = startX + (counterX - 27 - startX) * travel;
+    final stride = walking ? math.sin(progress * math.pi * 16) : 0.0;
+    final fade = searching && progress > .9 ? (1 - progress) * 10 : 1.0;
+    canvas.saveLayer(
+      bounds,
+      Paint()..color = Colors.white.withValues(alpha: fade),
+    );
+    // Passenger carrying a bag, walking up to the service desk.
+    paint.color = Colors.black.withValues(alpha: dark ? .2 : .07);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset(personX, 104), width: 32, height: 5),
+      paint,
+    );
+    final bob = walking ? stride.abs() * 1.2 : 0.0;
+    paint.color = const Color(0xFFE5AD87);
+    canvas.drawCircle(Offset(personX, 54 - bob), 6, paint);
+    paint.color = const Color(0xFF143C44);
+    canvas.drawArc(
+      Rect.fromCircle(center: Offset(personX, 52 - bob), radius: 6),
+      math.pi,
+      math.pi,
+      true,
+      paint,
+    );
+    _box(
+      canvas,
+      Rect.fromLTWH(personX - 7, 63 - bob, 14, 22),
+      const Color(0xFF008DB3),
+      5,
+    );
+    paint.color = const Color(0xFF244A56);
+    paint.strokeWidth = 4;
+    paint.strokeCap = StrokeCap.round;
+    canvas.drawLine(
+      Offset(personX - 3, 84 - bob),
+      Offset(personX - 4 - stride * 4, 99),
+      paint,
+    );
+    canvas.drawLine(
+      Offset(personX + 3, 84 - bob),
+      Offset(personX + 4 + stride * 4, 99),
+      paint,
+    );
+    paint.color = const Color(0xFFE5AD87);
+    paint.strokeWidth = 3;
+    canvas.drawLine(
+      Offset(personX - 7, 68 - bob),
+      Offset(personX - 10 + stride * 2, 82 - bob),
+      paint,
+    );
+    final presenting = !searching && stage != JourneyAnimationStage.paused;
+    canvas.drawLine(
+      Offset(personX + 7, 68 - bob),
+      Offset(
+        personX + (presenting ? 18 : 10 - stride * 2),
+        presenting ? 72 : 81 - bob,
+      ),
+      paint,
+    );
+    _box(
+      canvas,
+      Rect.fromLTWH(personX - 15 + stride * 2, 81 - bob, 10, 13),
+      const Color(0xFFD29442),
+      3,
+    );
+    if (presenting) {
+      if (stage == JourneyAnimationStage.verifying) {
+        _box(
+          canvas,
+          Rect.fromLTWH(personX + 15, 62, 8, 13),
+          const Color(0xFF123C45),
+          2,
         );
-
-        // Inner glowing fill
-        final innerGlow = Paint()
-          ..shader = RadialGradient(
-            colors: [
-              const Color(0xFF00D59B).withValues(alpha: 0.25),
-              Colors.transparent,
-            ],
-          ).createShader(Rect.fromCenter(center: Offset(px, floorY + 5), width: 32, height: 10));
-        canvas.drawOval(
-          Rect.fromCenter(center: Offset(px, floorY + 5), width: 32, height: 10),
-          innerGlow,
+        _box(
+          canvas,
+          Rect.fromLTWH(personX + 17, 64, 4, 7),
+          const Color(0xFF8FE8D5),
+          1,
         );
       } else {
-        // Waiting spot ellipse
-        final spotPaint = Paint()
-          ..color = (isDark ? const Color(0xFF1E3A55) : const Color(0xFFCBDCF0))
-              .withValues(alpha: 0.5)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0;
-        canvas.drawOval(
-          Rect.fromCenter(center: Offset(px, floorY + 5), width: 26, height: 8),
-          spotPaint,
+        _ticket(
+          canvas,
+          Offset(personX + 20, 69),
+          stage == JourneyAnimationStage.payment
+              ? const Color(0xFFE5B647)
+              : const Color(0xFFDBFFF0),
+          .7,
         );
       }
     }
-
-    // Stanchions (Posts & Velvet Rope)
-    _drawStanchionsAndRope(canvas, w, floorY);
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 3. Bangladesh Railway Smart Kiosk / Counter (Right Side)
-    // ─────────────────────────────────────────────────────────────────────────
-    final kioskLeft = w * 0.74;
-    final kioskRight = w * 0.96;
-    final kioskTop = h * 0.12;
-    _drawSmartKiosk(canvas, kioskLeft, kioskRight, kioskTop, floorY);
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 4. Queuing Passengers
-    // ─────────────────────────────────────────────────────────────────────────
-    final wave = math.sin(progress * 2 * math.pi);
-    final stepBob = (math.sin(progress * 4 * math.pi)).abs() * 2.2;
-
-    // --- Passenger 3 (Rear, position ~ w * 0.14) ---
-    _drawStylizedPassenger(
-      canvas: canvas,
-      x: w * 0.14 + (wave * 1.2),
-      floorY: floorY,
-      height: 38.0,
-      width: 13.0,
-      color: isDark ? const Color(0xFF475569) : const Color(0xFF64748B),
-      isUser: false,
-      hasBackpack: true,
-      hasHeadphones: true,
-      bob: stepBob * 0.3,
-    );
-
-    // --- Passenger 2 (Middle, position ~ w * 0.33) ---
-    _drawStylizedPassenger(
-      canvas: canvas,
-      x: w * 0.33 + (wave * 1.6),
-      floorY: floorY,
-      height: 41.0,
-      width: 14.0,
-      color: isDark ? const Color(0xFF38BDF8).withValues(alpha: 0.85) : const Color(0xFF0284C7),
-      isUser: false,
-      hasSuitcase: true,
-      bob: stepBob * 0.6,
-    );
-
-    // --- Passenger 1: THE USER ("YOU", at counter position ~ w * 0.52) ---
-    final userX = w * 0.52 + (wave * 0.8);
-    _drawStylizedPassenger(
-      canvas: canvas,
-      x: userX,
-      floorY: floorY,
-      height: 44.0,
-      width: 15.0,
-      color: const Color(0xFF00D59B),
-      isUser: true,
-      bob: stepBob,
-    );
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // 5. Floating Holographic VIP Ticket & Active Dual-Laser Berth Scanner
-    // ─────────────────────────────────────────────────────────────────────────
-    final ticketX = w * 0.65;
-    final ticketHover = math.sin(progress * 2 * math.pi) * 3.5;
-    final ticketY = h * 0.38 + ticketHover;
-    _drawHolographicTicketAndScanner(canvas, ticketX, ticketY, kioskLeft, kioskTop);
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Helper: Stanchions & Velvet Catenary Guide Rope
-  // ───────────────────────────────────────────────────────────────────────────
-  void _drawStanchionsAndRope(Canvas canvas, double w, double floorY) {
-    final postColor = const Color(0xFFF59E0B);
-    final postGlow = const Color(0xFFFDE68A);
-
-    void drawPost(double px) {
-      // Base
-      final baseRect = Rect.fromCenter(center: Offset(px, floorY), width: 10, height: 4);
-      canvas.drawOval(baseRect, Paint()..color = postColor);
-
-      // Shaft
-      final shaftRect = Rect.fromLTWH(px - 1.5, floorY - 26, 3, 26);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(shaftRect, const Radius.circular(1.5)),
-        Paint()
-          ..shader = LinearGradient(
-            colors: [postGlow, postColor, const Color(0xFF92400E)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ).createShader(shaftRect),
-      );
-
-      // Finial Ball
-      canvas.drawCircle(Offset(px, floorY - 27), 3.0, Paint()..color = postGlow);
-      // Neon collar ring
-      canvas.drawCircle(
-        Offset(px, floorY - 24),
-        1.6,
-        Paint()..color = const Color(0xFF00F0FF),
-      );
-    }
-
-    final post1X = w * 0.05;
-    final post2X = w * 0.69;
-    drawPost(post1X);
-    drawPost(post2X);
-
-    // Velvet Catenary Rope
-    final ropePath = Path()
-      ..moveTo(post1X, floorY - 22)
-      ..quadraticBezierTo(w * 0.37, floorY - 12 + math.sin(progress * 2 * math.pi) * 1.5, post2X, floorY - 22);
-
-    // Rope ambient glow
-    canvas.drawPath(
-      ropePath,
-      Paint()
-        ..color = const Color(0xFFF59E0B).withValues(alpha: 0.30)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3.2
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-    );
-
-    // Rope core
-    canvas.drawPath(
-      ropePath,
-      Paint()
-        ..color = const Color(0xFFD97706)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.8
-        ..strokeCap = StrokeCap.round,
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Helper: Bangladesh Railway Smart Kiosk / Counter
-  // ───────────────────────────────────────────────────────────────────────────
-  void _drawSmartKiosk(
-      Canvas canvas, double left, double right, double top, double floorY) {
-    final width = right - left;
-    final height = floorY - top;
-
-    final kioskRect = Rect.fromLTWH(left, top, width, height);
-
-    // Kiosk Body Outer Shell
-    final shellPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: isDark
-            ? [const Color(0xFF132238), const Color(0xFF091424)]
-            : [const Color(0xFFE2E8F0), const Color(0xFFCBD5E1)],
-      ).createShader(kioskRect);
-
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        kioskRect,
-        topLeft: const Radius.circular(16),
-        topRight: const Radius.circular(16),
-      ),
-      shellPaint,
-    );
-
-    // Kiosk Outer Neon Border
-    canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        kioskRect,
-        topLeft: const Radius.circular(16),
-        topRight: const Radius.circular(16),
-      ),
-      Paint()
-        ..color = (isDark ? const Color(0xFF00D59B) : const Color(0xFF059669))
-            .withValues(alpha: 0.35)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2,
-    );
-
-    // Canopy Roof with Bangladesh Railway Emerald Header
-    final canopyRect = Rect.fromLTWH(left - 3, top - 3, width + 6, 19);
-    final canopyPaint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [Color(0xFF00E699), Color(0xFF059669), Color(0xFF047857)],
-      ).createShader(canopyRect);
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(canopyRect, const Radius.circular(7)),
-      canopyPaint,
-    );
-
-    // Canopy LED line with headlights
-    canvas.drawLine(
-      Offset(left + 4, top + 6),
-      Offset(right - 4, top + 6),
-      Paint()
-        ..color = Colors.white.withValues(alpha: 0.9)
-        ..strokeWidth = 1.6
-        ..strokeCap = StrokeCap.round,
-    );
-
-    // Panoramic Service Window
-    final winRect = Rect.fromLTWH(left + 6, top + 22, width - 12, height - 38);
-    final winPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          const Color(0xFF00F0FF).withValues(alpha: isDark ? 0.25 : 0.16),
-          const Color(0xFF00D59B).withValues(alpha: isDark ? 0.12 : 0.08),
-        ],
-      ).createShader(winRect);
-
-    canvas.drawRRect(RRect.fromRectAndRadius(winRect, const Radius.circular(6)), winPaint);
-
-    // Digital Oscilloscope Terminal Screen inside counter
-    final termRect = Rect.fromLTWH(left + 10, top + 28, width - 20, 20);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(termRect, const Radius.circular(4)),
-      Paint()..color = const Color(0xFF021714),
-    );
-
-    // Animated sine frequency waveform on counter terminal screen
-    final wavePath = Path();
-    final waveStartY = top + 38;
-    wavePath.moveTo(left + 12, waveStartY);
-    for (double wx = 0; wx < width - 24; wx += 2.0) {
-      final s = math.sin((wx * 0.4) + (progress * 6 * math.pi));
-      wavePath.lineTo(left + 12 + wx, waveStartY + s * 4.5);
-    }
-    canvas.drawPath(
-      wavePath,
-      Paint()
-        ..color = const Color(0xFF00E699).withValues(alpha: 0.9)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
-    );
-
-    // Counter Desk Ledge
-    final ledgeRect = Rect.fromLTWH(left - 5, floorY - 14, width + 10, 8);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(ledgeRect, const Radius.circular(4)),
-      Paint()
-        ..shader = LinearGradient(
-          colors: isDark
-              ? [const Color(0xFF1E3A55), const Color(0xFF0F2035)]
-              : [const Color(0xFFCBD5E1), const Color(0xFF94A3B8)],
-        ).createShader(ledgeRect),
-    );
-
-    // Illuminated desk edge LED
-    canvas.drawLine(
-      Offset(left - 4, floorY - 14),
-      Offset(right + 4, floorY - 14),
-      Paint()
-        ..color = const Color(0xFF00F0FF).withValues(alpha: 0.75)
-        ..strokeWidth = 1.2,
-    );
-
-    // Overhead High-Precision Laser Scanner Projector Turret
-    final turretRect = Rect.fromCenter(center: Offset(left + 2, top + 2), width: 8, height: 6);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(turretRect, const Radius.circular(2)),
-      Paint()..color = const Color(0xFF00F0FF),
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Helper: Stylized Passenger Silhouettes & "YOU" Indicator
-  // ───────────────────────────────────────────────────────────────────────────
-  void _drawStylizedPassenger({
-    required Canvas canvas,
-    required double x,
-    required double floorY,
-    required double height,
-    required double width,
-    required Color color,
-    required bool isUser,
-    bool hasBackpack = false,
-    bool hasHeadphones = false,
-    bool hasSuitcase = false,
-    double bob = 0.0,
-  }) {
-    final headRadius = width * 0.38;
-    final topY = floorY - height + bob;
-    final headCenter = Offset(x, topY + headRadius);
-
-    // 1. Soft Elliptical Floor Contact Shadow
-    final shadowRect = Rect.fromCenter(
-      center: Offset(x, floorY + 2),
-      width: width * 1.8,
-      height: 5.0,
-    );
-    canvas.drawOval(
-      shadowRect,
-      Paint()
-        ..color = Colors.black.withValues(alpha: isDark ? 0.40 : 0.20)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-    );
-
-    // 2. Head
-    final headPaint = Paint()..color = color;
-    canvas.drawCircle(headCenter, headRadius, headPaint);
-
-    // Headphone headband & ear cups
-    if (hasHeadphones) {
-      final hpPath = Path()
-        ..addArc(
-          Rect.fromCircle(center: headCenter, radius: headRadius + 1.2),
-          -math.pi * 0.9,
-          math.pi * 0.8,
-        );
-      canvas.drawPath(
-        hpPath,
-        Paint()
-          ..color = const Color(0xFF00F0FF)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4,
-      );
-      // Glowing neon ear cup
-      canvas.drawCircle(
-        Offset(x - headRadius - 0.5, headCenter.dy + 1),
-        1.6,
-        Paint()..color = const Color(0xFF00F0FF),
-      );
-    }
-
-    // 3. Torso & Jacket
-    final torsoTop = headCenter.dy + headRadius + 1.5;
-    final torsoHeight = height * 0.48;
-    final torsoRect = Rect.fromLTWH(x - width / 2, torsoTop, width, torsoHeight);
-
-    final torsoRRect = RRect.fromRectAndCorners(
-      torsoRect,
-      topLeft: Radius.circular(width * 0.45),
-      topRight: Radius.circular(width * 0.45),
-      bottomLeft: const Radius.circular(3),
-      bottomRight: const Radius.circular(3),
-    );
-
-    final bodyShader = isUser
-        ? LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: const [Color(0xFF00E699), Color(0xFF059669)],
-          ).createShader(torsoRect)
-        : null;
-
-    final torsoPaint = Paint()
-      ..color = color
-      ..shader = bodyShader;
-    canvas.drawRRect(torsoRRect, torsoPaint);
-
-    // 4. Legs
-    final legsTop = torsoTop + torsoHeight;
-    final legWidth = width * 0.36;
-    final legHeight = floorY - legsTop;
-
-    final legPaint = Paint()
-      ..color = isUser
-          ? const Color(0xFF034A38)
-          : (isDark ? const Color(0xFF1E293B) : const Color(0xFF475569));
-
-    // Left leg
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(x - width / 2 + 1, legsTop, legWidth, legHeight),
-        const Radius.circular(2),
-      ),
-      legPaint,
-    );
-    // Right leg
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(x + width / 2 - legWidth - 1, legsTop, legWidth, legHeight),
-        const Radius.circular(2),
-      ),
-      legPaint,
-    );
-
-    // 5. Accessories
-    if (hasBackpack) {
-      final packRect = Rect.fromLTWH(x - width / 2 - 3.5, torsoTop + 2, 4.0, torsoHeight * 0.75);
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(packRect, const Radius.circular(2.5)),
-        Paint()..color = const Color(0xFF0F172A),
-      );
-    }
-
-    if (hasSuitcase) {
-      final caseX = x + width / 2 + 2;
-      final caseRect = Rect.fromLTWH(caseX, floorY - 14, 8, 14);
-      // Trolley handle
-      canvas.drawLine(
-        Offset(caseX + 4, floorY - 14),
-        Offset(caseX + 4, floorY - 21),
-        Paint()
-          ..color = const Color(0xFF94A3B8)
-          ..strokeWidth = 1.2,
-      );
-      // Suitcase body
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(caseRect, const Radius.circular(2.5)),
-        Paint()..color = const Color(0xFFF59E0B),
-      );
-    }
-
-    // 6. Radiant "YOU" Floating Holographic Beacon (For the User)
-    if (isUser) {
-      final badgeCenterY = topY - 13.0;
-
-      // Overhead halo ring
-      final haloPaint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4
-        ..color = const Color(0xFF00E699).withValues(alpha: 0.8);
-      canvas.drawOval(
-        Rect.fromCenter(center: Offset(x, topY - 2.5), width: 15, height: 4.5),
-        haloPaint,
-      );
-
-      // Glowing badge ambient aura
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(center: Offset(x, badgeCenterY), width: 34, height: 16),
-          const Radius.circular(8),
-        ),
-        Paint()
-          ..color = const Color(0xFF00D59B).withValues(alpha: 0.35)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
-      );
-
-      // Badge capsule body
-      final badgeRect = Rect.fromCenter(center: Offset(x, badgeCenterY), width: 32, height: 14);
-      final badgePaint = Paint()
-        ..shader = const LinearGradient(
-          colors: [Color(0xFF00E699), Color(0xFF059669)],
-        ).createShader(badgeRect);
-      canvas.drawRRect(RRect.fromRectAndRadius(badgeRect, const Radius.circular(7)), badgePaint);
-
-      // Live pulsating beacon white dot inside badge
-      final beaconAlpha = (0.6 + 0.4 * math.sin(progress * 6 * math.pi)).clamp(0.2, 1.0);
-      canvas.drawCircle(
-        Offset(x - 8, badgeCenterY),
-        2.0,
-        Paint()..color = Colors.white.withValues(alpha: beaconAlpha),
-      );
-
-      // Downward pointer arrow directed at user head
-      final arrowPath = Path()
-        ..moveTo(x - 3, badgeCenterY + 7)
-        ..lineTo(x + 3, badgeCenterY + 7)
-        ..lineTo(x, badgeCenterY + 10.5)
-        ..close();
-      canvas.drawPath(arrowPath, badgePaint);
-
-      // Sharp "YOU" Typography
-      final textPainter = TextPainter(
-        text: const TextSpan(
-          text: 'YOU',
-          style: TextStyle(
-            color: Color(0xFF022C22),
-            fontSize: 7.8,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 0.4,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      textPainter.paint(
-        canvas,
-        Offset(x - textPainter.width / 2 + 3.0, badgeCenterY - textPainter.height / 2),
-      );
-    }
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  // Helper: Floating Holographic VIP Ticket & Active Dual Laser Scanner
-  // ───────────────────────────────────────────────────────────────────────────
-  void _drawHolographicTicketAndScanner(
-      Canvas canvas, double ticketX, double ticketY, double kioskLeft, double kioskTop) {
-    const ticketW = 54.0;
-    const ticketH = 32.0;
-
-    final ticketRect = Rect.fromCenter(
-      center: Offset(ticketX, ticketY),
-      width: ticketW,
-      height: ticketH,
-    );
-
-    // 1. Conical Volumetric Holographic Beam from kiosk turret down to ticket
-    final beamPath = Path()
-      ..moveTo(kioskLeft + 2, kioskTop + 2)
-      ..lineTo(ticketX - ticketW * 0.65, ticketY + ticketH * 0.65)
-      ..lineTo(ticketX + ticketW * 0.65, ticketY + ticketH * 0.65)
-      ..close();
-
-    final beamPaint = Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topRight,
-        end: Alignment.bottomLeft,
-        colors: [
-          const Color(0xFF00F0FF).withValues(alpha: 0.35),
-          const Color(0xFF00D59B).withValues(alpha: 0.12),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(ticketX - ticketW, kioskTop, ticketW * 2, ticketH + 40));
-    canvas.drawPath(beamPath, beamPaint);
-
-    // 2. Active Radar Sonar Rings expanding from ticket center
-    final radarP = (progress * 2) % 1.0;
-    final radarRadius = 14.0 + radarP * 36.0;
-    final radarAlpha = (1.0 - radarP).clamp(0.0, 0.7);
-    canvas.drawCircle(
-      Offset(ticketX, ticketY),
-      radarRadius,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.3
-        ..color = const Color(0xFF00F0FF).withValues(alpha: radarAlpha * 0.6),
-    );
-
-    // 3. Golden VIP Ticket Ambient Bloom Glow
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(ticketRect, const Radius.circular(6)),
-      Paint()
-        ..color = const Color(0xFFF59E0B).withValues(alpha: 0.45)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
-    );
-
-    // 4. Ticket Body (Rich Golden Amber Gradient)
-    final ticketRRect = RRect.fromRectAndRadius(ticketRect, const Radius.circular(6));
-    final ticketPaint = Paint()
-      ..shader = const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          Color(0xFFFDE68A),
-          Color(0xFFF59E0B),
-          Color(0xFFB45309),
-        ],
-        stops: [0.0, 0.5, 1.0],
-      ).createShader(ticketRect);
-    canvas.drawRRect(ticketRRect, ticketPaint);
-
-    // 5. Classic Ticket Punch Notches (Circular cutouts on left and right)
-    final notchPaint = Paint()
-      ..color = isDark ? const Color(0xFF071220) : Colors.white;
-    canvas.drawCircle(Offset(ticketRect.left, ticketY), 3.4, notchPaint);
-    canvas.drawCircle(Offset(ticketRect.right, ticketY), 3.4, notchPaint);
-
-    // 6. Miniature Train Icon / Emblem on Ticket
-    final trainRect = Rect.fromCenter(
-      center: Offset(ticketX - 13, ticketY - 5),
-      width: 11,
-      height: 8,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(trainRect, const Radius.circular(2)),
-      Paint()..color = const Color(0xFF451A03),
-    );
-    // Headlight on mini train
-    canvas.drawCircle(Offset(ticketX - 9, ticketY - 5), 1.2, Paint()..color = const Color(0xFFFDE68A));
-
-    // 7. VIP Berth Badge Tag
-    final badgeTag = Rect.fromLTWH(ticketX - 4, ticketY - 9, 20, 5);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(badgeTag, const Radius.circular(1.5)),
-      Paint()..color = const Color(0xFF78350F),
-    );
-
-    // 8. Barcode / QR Matrix Lines on Ticket
-    final stripePaint = Paint()
-      ..color = const Color(0xFF78350F).withValues(alpha: 0.85)
-      ..strokeWidth = 1.3;
-    for (int s = 0; s < 5; s++) {
-      final sx = ticketX - 3 + s * 4.4;
-      canvas.drawLine(Offset(sx, ticketY - 1), Offset(sx, ticketY + 9), stripePaint);
-    }
-
-    // 9. Diagonal Holographic Light Sheen sweeping across ticket
-    final sheenP = (progress * 1.6) % 1.0;
-    final sheenX = ticketRect.left + (ticketW + 20) * sheenP - 10;
-    final sheenPaint = Paint()
-      ..shader = LinearGradient(
-        colors: [
-          Colors.transparent,
-          Colors.white.withValues(alpha: 0.5),
-          Colors.transparent,
-        ],
-      ).createShader(Rect.fromLTWH(sheenX - 8, ticketRect.top, 16, ticketH));
-    canvas.save();
-    canvas.clipRRect(ticketRRect);
-    canvas.drawRect(Rect.fromLTWH(sheenX - 8, ticketRect.top, 16, ticketH), sheenPaint);
     canvas.restore();
+    canvas.restore();
+  }
 
-    // 10. Active Cyber Laser Berth Scanner (Sweeping Line across Ticket)
-    final scanLineOffset = math.sin(progress * 4 * math.pi);
-    final scanY = ticketY + (ticketH * 0.40) * scanLineOffset;
+  void _box(Canvas canvas, Rect rect, Color color, double radius) =>
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect, Radius.circular(radius)),
+        Paint()..color = color,
+      );
 
-    // Laser bloom
-    canvas.drawLine(
-      Offset(ticketRect.left + 3, scanY),
-      Offset(ticketRect.right - 3, scanY),
-      Paint()
-        ..color = const Color(0xFF00F0FF).withValues(alpha: 0.90)
-        ..strokeWidth = 2.8
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
+  void _ticket(Canvas canvas, Offset center, Color color, double scale) {
+    final rect = Rect.fromCenter(
+      center: center,
+      width: 18 * scale,
+      height: 11 * scale,
     );
-
-    // Laser core (intense white/cyan)
-    canvas.drawLine(
-      Offset(ticketRect.left + 3, scanY),
-      Offset(ticketRect.right - 3, scanY),
-      Paint()
-        ..color = Colors.white
-        ..strokeWidth = 1.3,
-    );
-
-    // Laser focal spark point moving horizontally along the laser beam
-    final laserSpotX = ticketX + math.cos(progress * 8 * math.pi) * (ticketW * 0.35);
-    canvas.drawCircle(
-      Offset(laserSpotX, scanY),
-      2.5,
-      Paint()
-        ..color = Colors.white
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 1),
-    );
-
-    // 11. Orbiting Diamond Sparkles
-    final sparkPaint = Paint()..color = const Color(0xFF67E8F9);
-    for (int p = 0; p < 5; p++) {
-      final sparkP = (progress + p * 0.20) % 1.0;
-      final angle = p * (2 * math.pi / 5) + sparkP * 2 * math.pi;
-      final dist = 24.0 + sparkP * 14.0;
-      final sx = ticketX + math.cos(angle) * dist;
-      final sy = ticketY + math.sin(angle) * dist * 0.65;
-      final sAlpha = (1.0 - sparkP).clamp(0.0, 1.0);
-
-      canvas.drawCircle(
-        Offset(sx, sy),
-        1.3,
-        sparkPaint..color = const Color(0xFF67E8F9).withValues(alpha: sAlpha * 0.9),
+    _box(canvas, rect, color, 2 * scale);
+    final paint = Paint()
+      ..color = const Color(0xFF16705A)
+      ..strokeWidth = scale;
+    for (var i = 0; i < 3; i++) {
+      canvas.drawLine(
+        Offset(rect.left + (5 + i * 3) * scale, rect.top + 3 * scale),
+        Offset(rect.left + (5 + i * 3) * scale, rect.bottom - 3 * scale),
+        paint,
       );
     }
   }
 
   @override
-  bool shouldRepaint(covariant _QueueTicketPainter oldDelegate) {
-    return oldDelegate.progress != progress || oldDelegate.isDark != isDark;
-  }
+  bool shouldRepaint(covariant _RailScenePainter oldDelegate) =>
+      progress != oldDelegate.progress ||
+      dark != oldDelegate.dark ||
+      stage != oldDelegate.stage ||
+      counterLabel != oldDelegate.counterLabel;
 }

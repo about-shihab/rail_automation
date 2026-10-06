@@ -16,7 +16,7 @@ val releaseRequested = gradle.startParameter.taskNames.any { it.contains("releas
 val hasReleaseKeys = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
     .all { !releaseKeys.getProperty(it).isNullOrBlank() }
 if (releaseRequested && !hasReleaseKeys) {
-    logger.warn("Warning: Release signing keys not found in android/key.properties. Falling back to debug signing.")
+    throw GradleException("Release signing requires android/key.properties with production signing keys.")
 }
 
 android {
@@ -61,7 +61,7 @@ android {
             if (hasReleaseKeys) {
                 signingConfig = signingConfigs.getByName("production")
             } else {
-                signingConfig = signingConfigs.getByName("debug")
+                // Release requests without production keys fail above.
             }
         }
     }

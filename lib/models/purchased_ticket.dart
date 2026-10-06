@@ -58,7 +58,7 @@ class PurchasedTicket {
       pnr: json['pnr']?.toString() ?? '',
       orderStatus: json['order_status'] is int
           ? json['order_status'] as int
-          : int.tryParse(json['order_status']?.toString() ?? '1') ?? 1,
+          : int.tryParse(json['order_status']?.toString() ?? '0') ?? 0,
       printDate: json['print_date']?.toString(),
       tripId: json['trip_id'] is int
           ? json['trip_id'] as int

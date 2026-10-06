@@ -9,12 +9,10 @@ import '../services/firebase_user_service.dart';
 import '../services/language_service.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
-import '../services/overlay_service.dart';
 import '../services/secure_store.dart';
 import '../services/theme_service.dart';
 import '../services/web_session_service.dart';
 import '../widgets/train_navigation_bar.dart';
-import '../widgets/turnstile_sheet.dart';
 import '../utils/app_theme.dart';
 import 'admin_screen.dart';
 import 'monitor_dashboard_screen.dart';
@@ -28,7 +26,11 @@ class AppShell extends StatefulWidget {
   final int initialTab;
   const AppShell({super.key, this.initialTab = 0});
 
-  static const tabSearch = 0, tabMonitor = 1, tabAlerts = 2, tabTrips = 2, tabMore = 3;
+  static const tabSearch = 0,
+      tabMonitor = 1,
+      tabAlerts = 2,
+      tabTrips = 2,
+      tabMore = 3;
   static final ValueNotifier<int> tab = ValueNotifier<int>(0);
   static bool _alive = false;
 
@@ -66,6 +68,7 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final monitor = context.watch<MonitorService>();
+    final lang = context.watch<LanguageService>();
     return ValueListenableBuilder<int>(
       valueListenable: AppShell.tab,
       builder: (context, index, _) => Scaffold(
@@ -76,38 +79,41 @@ class _AppShellState extends State<AppShell> {
                 color: const Color(0xFFDC2626),
                 elevation: 4,
                 child: InkWell(
-                  onTap: () async {
-                    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
-                    final label = [
-                      if (monitor.targetTrain != null && monitor.targetTrain!.isNotEmpty)
-                        monitor.targetTrain!,
-                      if (monitor.targetSeatClass != null && monitor.targetSeatClass!.isNotEmpty)
-                        monitor.targetSeatClass!,
-                    ].join(' · ');
-                    final token = await TurnstileDialog.show(context, contextLabel: label);
-                    if (token != null && token.isNotEmpty && context.mounted) {
-                      context.read<MonitorService>().onTurnstileSolved(token);
-                    }
-                  },
+                  onTap: () =>
+                      context.read<MonitorService>().resolveTurnstile(),
                   child: SafeArea(
                     bottom: false,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 10,
+                      ),
                       child: Row(
                         children: [
-                          const Icon(Icons.shield_rounded, color: Colors.white, size: 20),
+                          const Icon(
+                            Icons.shield_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
                           const SizedBox(width: 10),
-                          const Expanded(
+                          Expanded(
                             child: Text(
-                              'Human verification required • Tap to continue booking',
-                              style: TextStyle(
+                              lang.tr(
+                                'Security check · Continue',
+                                'নিরাপত্তা যাচাই · চালিয়ে যান',
+                              ),
+                              style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 13,
                               ),
                             ),
                           ),
-                          const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white, size: 14),
+                          const Icon(
+                            Icons.arrow_forward_ios_rounded,
+                            color: Colors.white,
+                            size: 14,
+                          ),
                         ],
                       ),
                     ),
@@ -115,12 +121,15 @@ class _AppShellState extends State<AppShell> {
                 ),
               ),
             Expanded(
-              child: IndexedStack(index: index, children: const [
-                SearchScreen(),
-                _MonitorTab(),
-                TripsScreen(),
-                ProfileTab(),
-              ]),
+              child: IndexedStack(
+                index: index,
+                children: const [
+                  SearchScreen(),
+                  _MonitorTab(),
+                  TripsScreen(),
+                  ProfileTab(),
+                ],
+              ),
             ),
           ],
         ),
@@ -128,22 +137,18 @@ class _AppShellState extends State<AppShell> {
           selectedIndex: index,
           onDestinationSelected: (i) => AppShell.tab.value = i,
           destinations: [
-            const TrainDestination(
-              label: 'Search',
-            ),
+            TrainDestination(label: lang.tr('Search', 'অনুসন্ধান')),
             TrainDestination(
-              label: 'Tickets',
+              label: lang.tr('Tickets', 'টিকেট'),
               showBadge: monitor.isMonitoring,
               badgeColor: AppColors.primary,
             ),
             TrainDestination(
-              label: 'Trips',
+              label: lang.tr('Trips', 'ট্রিপস'),
               showBadge: monitor.needsTurnstile,
               badgeColor: AppColors.error,
             ),
-            const TrainDestination(
-              label: 'Profile',
-            ),
+            TrainDestination(label: lang.tr('Profile', 'প্রোফাইল')),
           ],
         ),
       ),
@@ -157,12 +162,16 @@ class _MonitorTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = context.watch<MonitorService>();
+    final lang = context.watch<LanguageService>();
     if (m.dateOfJourney.isNotEmpty) return const MonitorDashboardScreen();
     return _Empty(
       icon: Icons.radar_rounded,
-      title: 'No active watch',
-      body: 'Search for a train and tap Watch to get notified when seats open up.',
-      action: 'Search trains',
+      title: lang.tr('No active watch', 'কোনো সক্রিয় নজরদারি নেই'),
+      body: lang.tr(
+        'Search for a train and tap Watch to get notified when seats open up.',
+        'ট্রেন অনুসন্ধান করুন এবং সিট খালি হলে নোটিফিকেশন পেতে নজরদারিতে রাখুন।',
+      ),
+      action: lang.tr('Search trains', 'ট্রেন অনুসন্ধান'),
       onAction: () => AppShell.tab.value = AppShell.tabSearch,
     );
   }
@@ -173,6 +182,7 @@ class ProfileTab extends StatelessWidget {
   const ProfileTab({super.key});
 
   Future<void> _logout(BuildContext context) async {
+    final lang = context.read<LanguageService>();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -180,19 +190,22 @@ class ProfileTab extends StatelessWidget {
           Theme.of(context).brightness == Brightness.dark,
         ),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Sign Out?'),
-        content: const Text(
-          'Are you sure you want to sign out of your Railway account?',
+        title: Text(lang.tr('Sign Out?', 'লগআউট করতে চান?')),
+        content: Text(
+          lang.tr(
+            'Are you sure you want to sign out of your Railway account?',
+            'আপনি কি নিশ্চিত যে আপনার বাংলাদেশ রেলওয়ে অ্যাকাউন্ট থেকে লগআউট করতে চান?',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(lang.tr('Cancel', 'বাতিল')),
           ),
           FilledButton(
             style: FilledButton.styleFrom(backgroundColor: AppColors.error),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Sign Out'),
+            child: Text(lang.tr('Sign Out', 'লগআউট')),
           ),
         ],
       ),
@@ -221,14 +234,105 @@ class ProfileTab extends StatelessWidget {
     }
   }
 
+  void _showLanguageSheet(
+    BuildContext context,
+    LanguageService lang,
+    bool isDark,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.cardBg(isDark),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withValues(alpha: 0.4),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                lang.tr('Select Language', 'ভাষা নির্বাচন করুন'),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+              const SizedBox(height: 14),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(
+                  Icons.language_rounded,
+                  color: AppColors.primary,
+                ),
+                title: const Text(
+                  'English',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                trailing: !lang.isBangla
+                    ? const Icon(
+                        Icons.check_circle_rounded,
+                        color: AppColors.primary,
+                      )
+                    : null,
+                onTap: () {
+                  lang.setLanguage(AppLanguage.en);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const Divider(height: 1),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(
+                  Icons.translate_rounded,
+                  color: AppColors.primary,
+                ),
+                title: const Text(
+                  'বাংলা (Bangla)',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                trailing: lang.isBangla
+                    ? const Icon(
+                        Icons.check_circle_rounded,
+                        color: AppColors.primary,
+                      )
+                    : null,
+                onTap: () {
+                  lang.setLanguage(AppLanguage.bn);
+                  Navigator.pop(ctx);
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final theme = context.watch<ThemeService>();
     final credit = context.watch<CreditService>();
     final lang = context.watch<LanguageService>();
-    final isAdmin = context.watch<FirebaseUserService>().isAdmin;
-    final userPhone = FirebaseUserService().currentPhone ?? 'Railway User';
+    final fbUser = context.watch<FirebaseUserService>();
+    final isAdmin = fbUser.isAdmin;
+    final isBlocked = fbUser.isBlocked;
+    final userPhone =
+        FirebaseUserService().currentPhone ??
+        (lang.isBangla ? 'রেলওয়ে ব্যবহারকারী' : 'Railway User');
 
     Widget tile(
       IconData icon,
@@ -248,10 +352,62 @@ class ProfileTab extends StatelessWidget {
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
-      appBar: AppBar(title: const Text('Profile'), elevation: 0),
+      appBar: AppBar(title: Text(lang.tr('Profile', 'প্রোফাইল')), elevation: 0),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
+          if (isBlocked) ...[
+            Container(
+              padding: const EdgeInsets.all(14),
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: AppColors.error.withValues(alpha: 0.4),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.block_rounded,
+                    color: AppColors.error,
+                    size: 28,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          lang.tr(
+                            'Account Suspended',
+                            'অ্যাকাউন্ট স্থগিত করা হয়েছে',
+                          ),
+                          style: const TextStyle(
+                            color: AppColors.error,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          lang.tr(
+                            'Your account has been suspended by an administrator. Please contact support.',
+                            'আপনার অ্যাকাউন্টটি স্থগিত করা হয়েছে। সহায়তার জন্য প্রশাসকের সাথে যোগাযোগ করুন।',
+                          ),
+                          style: const TextStyle(
+                            color: AppColors.error,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           // ── Real User Profile Card ──
           AppCard(
             child: Row(
@@ -290,9 +446,12 @@ class ProfileTab extends StatelessWidget {
                             ),
                           ),
                           const SizedBox(width: 5),
-                          const Text(
-                            'Active Railway Session',
-                            style: TextStyle(
+                          Text(
+                            lang.tr(
+                              'Active Railway Session',
+                              'সক্রিয় রেলওয়ে সেশন',
+                            ),
+                            style: const TextStyle(
                               color: AppColors.success,
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
@@ -316,10 +475,18 @@ class ProfileTab extends StatelessWidget {
                   credit.credits <= 0
                       ? Icons.bolt_rounded
                       : Icons.account_balance_wallet_outlined,
-                  credit.credits <= 0 ? 'Credits: 0' : 'Credits',
+                  credit.credits <= 0
+                      ? lang.tr('Credits: 0', 'ক্রেডিট: ০')
+                      : lang.tr('Credits', 'ক্রেডিট'),
                   sub: credit.credits <= 0
-                      ? 'Recharge required to book tickets · Tap to Buy Credit'
-                      : '${credit.credits} available · Tap to recharge',
+                      ? lang.tr(
+                          'Recharge required to book tickets · Tap to Buy Credit',
+                          'টিকেট কাটতে ক্রেডিট প্রয়োজন · রিচার্জ করতে ট্যাপ করুন',
+                        )
+                      : lang.tr(
+                          '${credit.credits} available · Tap to recharge',
+                          '${credit.credits} ক্রেডিট উপলব্ধ · রিচার্জ করতে ট্যাপ করুন',
+                        ),
                   trailing: credit.credits <= 0
                       ? Container(
                           padding: const EdgeInsets.symmetric(
@@ -327,13 +494,14 @@ class ProfileTab extends StatelessWidget {
                             vertical: 5,
                           ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                            color: const Color(0xFFF59E0B)
+                                .withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(12),
                             border: Border.all(color: const Color(0xFFF59E0B)),
                           ),
-                          child: const Text(
-                            'Buy Credit',
-                            style: TextStyle(
+                          child: Text(
+                            lang.tr('Buy Credit', 'ক্রেডিট কিনুন'),
+                            style: const TextStyle(
                               color: Color(0xFFF59E0B),
                               fontWeight: FontWeight.bold,
                               fontSize: 12,
@@ -348,13 +516,16 @@ class ProfileTab extends StatelessWidget {
           ),
           const SizedBox(height: 14),
 
-          // ── Admin Panel (visible to admins only) ──
+          // ── User Management (visible to admins only) ──
           if (isAdmin) ...[
             AppCard(
               child: tile(
                 Icons.admin_panel_settings_rounded,
-                'Admin Panel',
-                sub: 'Manage users, credits & recharge requests',
+                lang.tr('User Management', 'ইউজার ম্যানেজমেন্ট'),
+                sub: lang.tr(
+                  'Approve transactions, credits, block & notify',
+                  'লেনদেন অনুমোদন, ক্রেডিট নিয়ন্ত্রণ ও নোটিফিকেশন',
+                ),
                 trailing: const AdminPendingBadge(),
                 onTap: () => Navigator.push(
                   context,
@@ -365,13 +536,13 @@ class ProfileTab extends StatelessWidget {
             const SizedBox(height: 14),
           ],
 
-          // ── Settings (Dark mode & Language only - NO mock data, NO test notification) ──
+          // ── Settings (Dark mode & Language only) ──
           AppCard(
             child: Column(
               children: [
                 tile(
                   Icons.dark_mode_outlined,
-                  'Dark mode',
+                  lang.tr('Dark mode', 'ডার্ক মোড'),
                   trailing: Switch(
                     value: theme.isDarkMode,
                     onChanged: (_) => theme.toggleTheme(),
@@ -379,12 +550,9 @@ class ProfileTab extends StatelessWidget {
                 ),
                 tile(
                   Icons.translate_rounded,
-                  'Language',
+                  lang.tr('Language', 'ভাষা'),
                   sub: lang.isBangla ? 'বাংলা' : 'English',
-                  onTap:
-                      () => lang.setLanguage(
-                        lang.isBangla ? AppLanguage.en : AppLanguage.bn,
-                      ),
+                  onTap: () => _showLanguageSheet(context, lang, isDark),
                 ),
               ],
             ),
@@ -392,41 +560,30 @@ class ProfileTab extends StatelessWidget {
           const SizedBox(height: 14),
 
           // ── Developer Information (Expandable, Collapsed Initially) ──
-          _ExpandableDeveloperCard(isDark: isDark),
+          _ExpandableDeveloperCard(isDark: isDark, lang: lang),
           const SizedBox(height: 14),
 
-          // ── Disclaimer ──
           AppCard(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Icon(Icons.shield_outlined, color: AppColors.textMuted(isDark), size: 18),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Disclaimer',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textPrimary(isDark),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Rail Pro is an independent automation and train ticket monitoring utility designed to assist users with personal ticket availability search and booking on the Bangladesh Railway portal.\n\nThis app is not affiliated with, endorsed by, or operated by Bangladesh Railway (BR) or Shohoz-Synesis-Vincen JV. All ticket reservations, fares, OTPs, and seat allocations are processed directly through the official railway portal.',
+            padding: EdgeInsets.zero,
+            child: ExpansionTile(
+              leading: const Icon(Icons.info_outline_rounded),
+              title: Text(lang.tr('Disclaimer', 'দায়মুক্তি')),
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                  child: Text(
+                    lang.tr(
+                      'Rail Pro is an independent automation and ticket assistant. It is not affiliated with Bangladesh Railway (BR) or Shohoz. Reservations and payments are handled by the official Railway portal.',
+                      'রেল প্রো একটি স্বাধীন টিকেট সহায়ক। এটি বাংলাদেশ রেলওয়ে বা সহজের অনুমোদিত অ্যাপ নয়। বুকিং ও পেমেন্ট সরকারি রেলওয়ে পোর্টালে সম্পন্ন হয়।',
+                    ),
                     style: TextStyle(
                       fontSize: 12,
-                      height: 1.45,
+                      height: 1.5,
                       color: AppColors.textMuted(isDark),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           const SizedBox(height: 14),
@@ -435,8 +592,11 @@ class ProfileTab extends StatelessWidget {
           AppCard(
             child: tile(
               Icons.logout_rounded,
-              'Sign Out',
-              sub: 'Switch or disconnect Railway account',
+              lang.tr('Sign Out', 'লগআউট'),
+              sub: lang.tr(
+                'Switch or disconnect Railway account',
+                'রেলওয়ে অ্যাকাউন্ট পরিবর্তন বা সংযোগ বিচ্ছিন্ন করুন',
+              ),
               onTap: () => _logout(context),
             ),
           ),
@@ -445,7 +605,10 @@ class ProfileTab extends StatelessWidget {
           // ── Version & Footer ──
           Center(
             child: Text(
-              'Rail Pro v1.0.0 · Developed by Abdulla Al Mamun',
+              lang.tr(
+                'Rail Pro v1.0.0 · Developed by Abdulla Al Mamun',
+                'রেল প্রো v১.০.০ · প্রস্তুতকারক: আবদুল্লাহ আল মামুন',
+              ),
               style: TextStyle(
                 fontSize: 11.5,
                 fontWeight: FontWeight.w500,
@@ -461,10 +624,12 @@ class ProfileTab extends StatelessWidget {
 
 class _ExpandableDeveloperCard extends StatefulWidget {
   final bool isDark;
-  const _ExpandableDeveloperCard({required this.isDark});
+  final LanguageService lang;
+  const _ExpandableDeveloperCard({required this.isDark, required this.lang});
 
   @override
-  State<_ExpandableDeveloperCard> createState() => _ExpandableDeveloperCardState();
+  State<_ExpandableDeveloperCard> createState() =>
+      _ExpandableDeveloperCardState();
 }
 
 class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
@@ -472,6 +637,7 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
 
   @override
   Widget build(BuildContext context) {
+    final lang = widget.lang;
     return AppCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -502,7 +668,7 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Developer Information',
+                          lang.tr('Developer Information', 'ডেভেলপার তথ্য'),
                           style: TextStyle(
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
@@ -512,8 +678,14 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
                         const SizedBox(height: 2),
                         Text(
                           _expanded
-                              ? 'Tap to collapse'
-                              : 'Abdulla Al Mamun · Tap to expand',
+                              ? lang.tr(
+                                  'Tap to collapse',
+                                  'সংক্ষেপ করতে ট্যাপ করুন',
+                                )
+                              : lang.tr(
+                                  'Abdulla Al Mamun · Tap to expand',
+                                  'আবদুল্লাহ আল মামুন · বিস্তারিত দেখতে ট্যাপ করুন',
+                                ),
                           style: TextStyle(
                             fontSize: 12,
                             color: AppColors.textMuted(widget.isDark),
@@ -534,15 +706,37 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
           ),
           if (_expanded) ...[
             const Divider(height: 1),
-            const ListTile(
-              leading: Icon(Icons.person_outline_rounded, color: AppColors.primary),
-              title: Text('Abdulla Al Mamun', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Text('Lead Developer & Creator'),
+            ListTile(
+              leading: const Icon(
+                Icons.person_outline_rounded,
+                color: AppColors.primary,
+              ),
+              title: const Text(
+                'Abdulla Al Mamun',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                lang.tr(
+                  'Lead Developer & Creator',
+                  'প্রধান ডেভেলপার এবং নির্মাতা',
+                ),
+              ),
             ),
             ListTile(
-              leading: const Icon(Icons.email_outlined, color: AppColors.primary),
-              title: const Text('connect.abdulla@gmail.com', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text('Tap to copy contact email'),
+              leading: const Icon(
+                Icons.email_outlined,
+                color: AppColors.primary,
+              ),
+              title: const Text(
+                'connect.abdulla@gmail.com',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                lang.tr(
+                  'Tap to copy contact email',
+                  'ইমেইল কপি করতে ট্যাপ করুন',
+                ),
+              ),
               trailing: const Icon(
                 Icons.copy_rounded,
                 size: 18,
@@ -554,15 +748,20 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
                 );
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: const Row(
+                    content: Row(
                       children: [
-                        Icon(
+                        const Icon(
                           Icons.check_circle_rounded,
                           color: Colors.white,
                           size: 20,
                         ),
-                        SizedBox(width: 8),
-                        Text('Email copied to clipboard'),
+                        const SizedBox(width: 8),
+                        Text(
+                          lang.tr(
+                            'Email copied to clipboard',
+                            'ইমেইল ক্লিপবোর্ডে কপি করা হয়েছে',
+                          ),
+                        ),
                       ],
                     ),
                     behavior: SnackBarBehavior.floating,
@@ -587,8 +786,13 @@ class _Empty extends StatelessWidget {
   final IconData icon;
   final String title, body, action;
   final VoidCallback onAction;
-  const _Empty({required this.icon, required this.title, required this.body,
-      required this.action, required this.onAction});
+  const _Empty({
+    required this.icon,
+    required this.title,
+    required this.body,
+    required this.action,
+    required this.onAction,
+  });
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -597,19 +801,36 @@ class _Empty extends StatelessWidget {
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            CircleAvatar(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(
                 radius: 40,
                 backgroundColor: AppColors.primary.withValues(alpha: .12),
-                child: Icon(icon, size: 38, color: AppColors.primary)),
-            const SizedBox(height: 20),
-            Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 8),
-            Text(body, textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textMuted(isDark))),
-            const SizedBox(height: 24),
-            PrimaryButton(label: action, icon: Icons.search_rounded, onPressed: onAction),
-          ]),
+                child: Icon(icon, size: 38, color: AppColors.primary),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                body,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textMuted(isDark)),
+              ),
+              const SizedBox(height: 24),
+              PrimaryButton(
+                label: action,
+                icon: Icons.search_rounded,
+                onPressed: onAction,
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -1,15 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
+
 import '../views/booking_screen.dart';
 import 'booking_service.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
-import '../widgets/turnstile_sheet.dart';
 import 'monitor_service.dart';
-import 'overlay_service.dart';
-import 'secure_store.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class NotificationService {
   static final NotificationService _instance = NotificationService._internal();
@@ -22,6 +24,8 @@ class NotificationService {
   bool _isInitialized = false;
   static final navigatorKey = GlobalKey<NavigatorState>();
   String? _pendingBooking;
+  // Workers receive this from the live UI before each monitoring tick.
+  bool appVisible = false;
 
   static String bookingUrl(String from, String to, String date, String seat) =>
       Uri.https('eticket.railway.gov.bd', '/booking/train/search', {
@@ -36,28 +40,92 @@ class NotificationService {
   static const int idOtp = 802;
   static const int idPurchaseSuccess = 803;
 
+  /// Read the persisted locale again so background-isolate alerts follow changes.
+  static Future<bool> prefersBangla() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      return prefs.getString('app_language_code') != 'en';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  AndroidNotificationDetails _alertDetails({
+    required String channel,
+    required String channelName,
+    required String title,
+    required String body,
+    required String stage,
+    required Color color,
+    List<AndroidNotificationAction> actions = const [],
+    DateTime? expiry,
+    AndroidNotificationCategory? category,
+    bool seatAlert = false,
+  }) => AndroidNotificationDetails(
+    channel,
+    channelName,
+    icon: 'ic_stat_rail',
+    largeIcon: const DrawableResourceAndroidBitmap('ic_notification_brand'),
+    color: color,
+    importance: Importance.high,
+    priority: Priority.high,
+    sound: seatAlert
+        ? const RawResourceAndroidNotificationSound('seat_found')
+        : null,
+    onlyAlertOnce: seatAlert,
+    visibility: NotificationVisibility.private,
+    category: category ?? AndroidNotificationCategory.status,
+    subText: stage,
+    groupKey: 'rail_pro.booking',
+    showWhen: expiry != null,
+    when: expiry?.millisecondsSinceEpoch,
+    usesChronometer: expiry != null,
+    chronometerCountDown: expiry != null,
+    timeoutAfter: expiry
+        ?.difference(DateTime.now())
+        .inMilliseconds
+        .clamp(1, 3600000),
+    autoCancel: true,
+    actions: actions,
+    styleInformation: BigTextStyleInformation(body, contentTitle: title),
+  );
+
   void openBooking(String? payload) {
     if (payload == null) return;
     if (payload == 'rail://trips') {
       final navigator = navigatorKey.currentState;
-      if (navigator == null) { _pendingBooking = payload; return; }
+      if (navigator == null) {
+        _pendingBooking = payload;
+        return;
+      }
       _pendingBooking = null;
       navigator.pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const AppShell(initialTab: AppShell.tabTrips)),
+        MaterialPageRoute(
+          builder: (_) => const AppShell(initialTab: AppShell.tabTrips),
+        ),
         (_) => false,
       );
       return;
     }
     if (payload == 'rail://reservation') {
       final navigator = navigatorKey.currentState;
-      if (navigator == null) { _pendingBooking = payload; return; }
+      if (navigator == null) {
+        _pendingBooking = payload;
+        return;
+      }
       _pendingBooking = null;
-      navigator.push(MaterialPageRoute(builder: (_) => const ReservationScreen()));
+      navigator.push(
+        MaterialPageRoute(builder: (_) => const ReservationScreen()),
+      );
       return;
     }
     if (payload == 'rail://turnstile') {
-      // Try the system-overlay first (works when another app is in front).
-      // Fall back to in-app dialog when overlay permission is not granted.
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (life != null && life != AppLifecycleState.resumed) {
+        _pendingBooking = payload;
+        return;
+      }
       _pendingBooking = null;
       _handleTurnstileRequest(payload);
       return;
@@ -107,34 +175,52 @@ class NotificationService {
     // Sequence Rule: When OTP is sent / ready for payment, clean previous verification alert
     await cancelVerificationAndSearchAlerts();
 
+    // Automatic SMS verification owns this step; alert only when payment is ready.
+    if (state['status'] == 'awaitingOtp' && state['autoVerify'] == true) {
+      try {
+        await _notificationsPlugin.cancel(id: idOtp);
+      } catch (_) {}
+      return;
+    }
+
     final expiry = DateTime.tryParse(state['expiresAt'] ?? '');
     final ready = state['status'] == 'readyForPayment';
-    final trainName = state['train']?['trip_number']?.toString() ??
+    final trainName =
+        state['train']?['trip_number']?.toString() ??
         state['train']?['train_name']?.toString() ??
         'Train';
     final seatType = state['seatClass']?['type']?.toString() ?? '';
-    final title = ready ? 'OTP Verified • Pay Now' : 'Verify OTP & Pay';
-    final body = ready
-        ? '$trainName • $seatType\nOTP verified! Tap to pay & confirm ticket.'
-        : '$trainName • $seatType\nOTP sent to mobile. Tap to verify & pay.';
-
-    final androidDetails = AndroidNotificationDetails(
-      'br_reservations',
-      'Reserved tickets',
-      importance: Importance.max,
-      priority: Priority.high,
-      when: expiry?.millisecondsSinceEpoch,
-      usesChronometer: expiry != null,
-      chronometerCountDown: expiry != null,
-      timeoutAfter: expiry?.difference(DateTime.now()).inMilliseconds.clamp(1, 3600000),
+    final bn = await prefersBangla();
+    final title = ready
+        ? (bn ? 'আসন সংরক্ষিত · পেমেন্ট করুন' : 'Seats held · Pay now')
+        : (bn ? 'ওটিপি যাচাই করুন' : 'Verify your OTP');
+    final description = ready
+        ? (bn
+              ? 'সময় শেষ হওয়ার আগে পেমেন্ট করুন।'
+              : 'Pay before the hold expires.')
+        : (bn
+              ? 'ফোনে পাঠানো ওটিপি যাচাই করুন।'
+              : 'Verify the OTP sent to your phone.');
+    final body =
+        "${[trainName, if (seatType.isNotEmpty) seatType].join(' · ')}\n$description";
+    final androidDetails = _alertDetails(
+      channel: 'br_reservations',
+      channelName: 'Reserved tickets',
+      title: title,
+      body: body,
+      stage: ready ? (bn ? 'পেমেন্ট' : 'Payment') : (bn ? 'ওটিপি' : 'OTP'),
+      color: ready ? const Color(0xFFD39A26) : const Color(0xFF008CBA),
+      expiry: expiry,
+      category: AndroidNotificationCategory.reminder,
       actions: [
         AndroidNotificationAction(
           'purchase',
-          ready ? 'Pay now' : 'Verify & Pay',
+          ready
+              ? (bn ? 'পেমেন্ট করুন' : 'Pay now')
+              : (bn ? 'ওটিপি যাচাই' : 'Verify OTP'),
           showsUserInterface: true,
         ),
       ],
-      styleInformation: BigTextStyleInformation(body),
     );
 
     await _notificationsPlugin.show(
@@ -144,7 +230,10 @@ class NotificationService {
       payload: ready ? BookingService.tripInfoUrl : 'rail://reservation',
       notificationDetails: NotificationDetails(
         android: androidDetails,
-        iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true),
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+        ),
       ),
     );
   }
@@ -162,31 +251,38 @@ class NotificationService {
       await _notificationsPlugin.cancel(id: 99991);
     } catch (_) {}
 
-    final pnrStr = (pnr != null && pnr.isNotEmpty) ? 'PNR: $pnr • ' : '';
-    final body = '$trainName • ${pnrStr}Payment completed. Ticket confirmed!';
-
-    final androidDetails = AndroidNotificationDetails(
-      'br_booking_success',
-      'Booking Success',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
+    final bn = await prefersBangla();
+    final title = bn ? 'টিকিট নিশ্চিত হয়েছে' : 'Ticket confirmed';
+    final body =
+        "$trainName${(pnr != null && pnr.isNotEmpty) ? '\nPNR · $pnr' : ''}";
+    final androidDetails = _alertDetails(
+      channel: 'br_booking_success',
+      channelName: 'Booking Success',
+      title: title,
+      body: body,
+      stage: bn ? 'নিশ্চিত' : 'Confirmed',
+      color: const Color(0xFF009B78),
       actions: [
-        const AndroidNotificationAction('view_ticket', 'View Ticket', showsUserInterface: true),
+        AndroidNotificationAction(
+          'view_ticket',
+          bn ? 'টিকিট দেখুন' : 'View ticket',
+          showsUserInterface: true,
+        ),
       ],
-      styleInformation: BigTextStyleInformation(body),
     );
 
     try {
       await _notificationsPlugin.show(
         id: idPurchaseSuccess,
-        title: 'Ticket Booked Successfully! 🚆',
+        title: title,
         body: body,
         payload: 'rail://trips',
         notificationDetails: NotificationDetails(
           android: androidDetails,
-          iOS: const DarwinNotificationDetails(presentAlert: true, presentSound: true),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
         ),
       );
     } catch (_) {}
@@ -194,53 +290,28 @@ class NotificationService {
 
   void openPendingBooking() => openBooking(_pendingBooking);
 
-  // ── Turnstile: overlay-first, in-app fallback ────────────────────────────
+  // ── Turnstile: in-app overlay ─────────────────────────────────────────────
 
-  /// Attempt to show the Turnstile challenge as a system window overlay that
-  /// floats over any app. Falls back to an in-app modal dialog if the
-  /// SYSTEM_ALERT_WINDOW permission has not been granted.
-  void _handleTurnstileRequest(String payload) {
-    if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
-    // Read stored context label if available (set before triggering notification)
-    SecureStore.read('rail_turnstile_context').then((label) async {
-      if (TurnstileDialog.isShowing || OverlayService.isShowing) return;
-      final contextLabel = label ?? '';
-      // Try overlay path first
-      final canOverlay = await OverlayService.canDrawOverlays();
-      if (canOverlay) {
-        final token = await OverlayService.showTurnstile(contextLabel: contextLabel);
-        if (token != null && token.isNotEmpty) {
-          _onTurnstileSolved(token);
-        }
-        return;
-      }
-      // Fall back: bring app to foreground and show in-app dialog
-      final navigator = navigatorKey.currentState;
-      if (navigator == null) {
-        _pendingBooking = payload;
-        return;
-      }
-      if (!navigator.mounted) return;
-      TurnstileDialog.show(navigator.context, contextLabel: contextLabel).then((token) {
-        if (token != null && token.isNotEmpty) _onTurnstileSolved(token);
-      });
-    });
-  }
-
-  void _onTurnstileSolved(String token) {
+  /// Notification tap → bring the in-app "processing ticket" overlay up, but
+  /// only if a human check is really still pending.
+  Future<void> _handleTurnstileRequest(String payload) async {
     final navigator = navigatorKey.currentState;
-    if (navigator == null || !navigator.mounted) return;
+    if (navigator == null || !navigator.mounted) {
+      _pendingBooking = payload; // replay once the UI is up
+      return;
+    }
     try {
-      navigator.context.read<MonitorService>().onTurnstileSolved(token);
+      final monitor = navigator.context.read<MonitorService>();
+      // An already restored pending check can start on the notification tap.
+      if (!monitor.needsTurnstile) await monitor.restore(startTimers: false);
+      if (monitor.needsTurnstile) await monitor.resolveTurnstile();
     } catch (_) {}
   }
 
   Future<void> initialize({bool background = false}) async {
     if (_isInitialized) return;
 
-    const androidSettings = AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
-    );
+    const androidSettings = AndroidInitializationSettings('ic_stat_rail');
     final darwinSettings = DarwinInitializationSettings(
       requestAlertPermission: !background,
       requestBadgePermission: !background,
@@ -271,16 +342,52 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin
           >();
       if (androidImpl != null) {
-        const verificationChannel = AndroidNotificationChannel(
-          'br_verification_alerts',
-          'Human Verification',
-          description:
-              'Notifications when human verification is required to reserve seats',
-          importance: Importance.high,
-          playSound: true,
-          enableVibration: true,
-        );
-        await androidImpl.createNotificationChannel(verificationChannel);
+        const channels = [
+          AndroidNotificationChannel(
+            'br_seat_found_v2',
+            'Seats found',
+            description: 'Tap to book, with train whistle and Bangla voice',
+            importance: Importance.high,
+            sound: RawResourceAndroidNotificationSound('seat_found'),
+            playSound: true,
+            enableVibration: true,
+          ),
+          AndroidNotificationChannel(
+            'br_broadcast_alerts',
+            'System Announcements',
+            description: 'Announcements and updates from administrator',
+            importance: Importance.max,
+            playSound: true,
+            enableVibration: true,
+          ),
+          AndroidNotificationChannel(
+            'br_verification_alerts_v2',
+            'Human Verification',
+            description: 'Notifications when human verification is required to reserve seats',
+            importance: Importance.high,
+            playSound: true,
+            enableVibration: true,
+          ),
+          AndroidNotificationChannel(
+            'br_reservations',
+            'Reserved tickets',
+            description: 'Reservation and OTP alerts',
+            importance: Importance.max,
+            playSound: true,
+            enableVibration: true,
+          ),
+          AndroidNotificationChannel(
+            'br_booking_success',
+            'Booking Success',
+            description: 'Ticket purchase confirmation alerts',
+            importance: Importance.max,
+            playSound: true,
+            enableVibration: true,
+          ),
+        ];
+        for (final ch in channels) {
+          await androidImpl.createNotificationChannel(ch);
+        }
       }
       if (!background) {
         final launch = await _notificationsPlugin
@@ -313,26 +420,41 @@ class NotificationService {
     String? bookingLink,
     bool needsHumanVerification = false,
   }) async {
-    final String title;
-    final String body;
-    if (needsHumanVerification) {
-      title = 'Seat found — Action needed';
-      body = '$trainName · $seatType · $travelDate\nTap to complete booking now.';
-    } else {
-      title = 'Seats available — $trainName';
-      body = '$seatCount seat${seatCount == 1 ? '' : 's'} · $seatType · $travelDate';
+    if (appVisible ||
+        (navigatorKey.currentState != null &&
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed)) {
+      return;
     }
-    final androidDetails = AndroidNotificationDetails(
-      'br_seat_alerts',
-      'Seat Availability',
-      channelDescription: 'Alerts when train seats become available for booking',
-      importance: Importance.max,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-      ticker: needsHumanVerification ? 'Seat found — action needed' : 'Seats available',
-      actions: const [AndroidNotificationAction('book', 'Book now', showsUserInterface: true)],
-      styleInformation: BigTextStyleInformation(body),
+    final bn = await prefersBangla();
+    final title = bn
+        ? 'আসন পাওয়া গেছে · বুক করতে চাপুন'
+        : 'Seat found · Tap to book';
+    final number = bn
+        ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()
+        : '$seatCount';
+    final description = [
+      if (seatType.isNotEmpty) seatType,
+      if (travelDate.isNotEmpty) travelDate,
+      if (seatCount > 0)
+        '$number ${bn ? 'আসন' : (seatCount == 1 ? 'seat' : 'seats')}',
+    ].join(' · ');
+    final body = '$trainName\n$description';
+    final androidDetails = _alertDetails(
+      channel: 'br_seat_found_v2',
+      channelName: 'Seats found',
+      seatAlert: true,
+      title: title,
+      body: body,
+      stage: bn ? 'আসন' : 'Seats',
+      color: const Color(0xFF009B78),
+      actions: [
+        AndroidNotificationAction(
+          'book',
+          bn ? 'বুক করুন' : 'Book now',
+          showsUserInterface: true,
+        ),
+      ],
     );
 
     final notificationDetails = NotificationDetails(
@@ -346,8 +468,7 @@ class NotificationService {
 
     try {
       await _notificationsPlugin.show(
-        id: '$trainName:$seatType:$travelDate'.codeUnits.fold<int>(
-          0, (value, char) => (value * 31 + char) & 0x7fffffff),
+        id: idSeatFound,
         title: title,
         body: body,
         payload: bookingLink ?? 'https://eticket.railway.gov.bd/',
@@ -360,54 +481,17 @@ class NotificationService {
     required String trainName,
     required String seatType,
   }) async {
-    // Sequence Rule: When human check is needed, clear any previous alerts
+    // Booking continuation replaces the seat alert instead of creating a second alert.
     try {
-      await _notificationsPlugin.cancel(id: idSeatFound);
-      await _notificationsPlugin.cancel(id: idOtp);
-      await _notificationsPlugin.cancel(id: idPurchaseSuccess);
-      await _notificationsPlugin.cancel(id: 772);
-      await _notificationsPlugin.cancel(id: 99991);
+      await _notificationsPlugin.cancel(id: idHumanCheck);
     } catch (_) {}
-
-    final body = '$trainName • $seatType\nTap to verify and continue booking.';
-    final androidDetails = AndroidNotificationDetails(
-      'br_verification_alerts',
-      'Human Verification',
-      channelDescription:
-          'Notifications when human verification is required to reserve seats',
-      importance: Importance.high,
-      priority: Priority.high,
-      playSound: true,
-      enableVibration: true,
-      ticker: 'Seat found — Human check needed',
-      actions: const [
-        AndroidNotificationAction(
-          'verify_human',
-          'Verify now',
-          showsUserInterface: true,
-        ),
-      ],
-      styleInformation: BigTextStyleInformation(body),
+    await triggerSeatAvailableAlert(
+      trainName: trainName,
+      seatType: seatType,
+      seatCount: 0,
+      travelDate: '',
+      bookingLink: 'rail://turnstile',
     );
-
-    final notificationDetails = NotificationDetails(
-      android: androidDetails,
-      iOS: const DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
-    );
-
-    try {
-      await _notificationsPlugin.show(
-        id: idHumanCheck,
-        title: 'Seat Found! Human Check Needed',
-        body: body,
-        payload: 'rail://turnstile',
-        notificationDetails: notificationDetails,
-      );
-    } catch (_) {}
   }
 
   Future<void> testNotification() async {
@@ -417,5 +501,226 @@ class NotificationService {
       seatCount: 4,
       travelDate: '23-Sep-2026',
     );
+  }
+
+  StreamSubscription? _fbNotificationSub;
+  DateTime? _appStartTime;
+  String? _listeningPhone;
+  bool _isListening = false;
+  final Set<String> _seenNotificationDocIds = <String>{};
+  bool _seenIdsLoaded = false;
+
+  Future<void> _loadSeenIds() async {
+    if (_seenIdsLoaded) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = prefs.getStringList('seen_firebase_notifications') ?? [];
+      _seenNotificationDocIds.addAll(list);
+      _seenIdsLoaded = true;
+    } catch (_) {}
+  }
+
+  Future<void> _saveSeenId(String docId) async {
+    _seenNotificationDocIds.add(docId);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final list = _seenNotificationDocIds.toList();
+      final toSave = list.length > 200 ? list.sublist(list.length - 200) : list;
+      await prefs.setStringList('seen_firebase_notifications', toSave);
+    } catch (_) {}
+  }
+
+  Future<void> clearSeenIds() async {
+    _seenNotificationDocIds.clear();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('seen_firebase_notifications');
+    } catch (_) {}
+  }
+
+  static String _normalizePhone(String? raw) {
+    if (raw == null) return '';
+    final digits = raw.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.startsWith('880') && digits.length >= 13) {
+      return digits.substring(2);
+    }
+    return digits;
+  }
+
+  bool _matchesPhone(String? userPhone, String? target, String? targetPhone) {
+    if (target == 'all') return true;
+    final u = _normalizePhone(userPhone);
+    if (u.isEmpty) return false;
+    final t1 = _normalizePhone(target);
+    final t2 = _normalizePhone(targetPhone);
+    return (t1.isNotEmpty && (t1 == u || t1.endsWith(u) || u.endsWith(t1))) ||
+        (t2.isNotEmpty && (t2 == u || t2.endsWith(u) || u.endsWith(t2)));
+  }
+
+  /// Starts listening to broadcast or user-specific notifications from Firestore 'notifications' table
+  void startListeningToFirebaseNotifications(String? phone) async {
+    final cleanPhone = phone?.trim();
+    if (_isListening && _listeningPhone == cleanPhone) {
+      return;
+    }
+    _fbNotificationSub?.cancel();
+    _listeningPhone = cleanPhone;
+    _isListening = true;
+    _appStartTime ??= DateTime.now();
+
+    await _loadSeenIds();
+    debugPrint(
+      '[NotificationService] Listening to notifications for user: "$cleanPhone"',
+    );
+
+    try {
+      _fbNotificationSub = FirebaseFirestore.instance
+          .collection('notifications')
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .snapshots()
+          .listen(
+            (snap) async {
+              for (final change in snap.docChanges) {
+                if (change.type == DocumentChangeType.added) {
+                  final docId = change.doc.id;
+                  // Strict duplicate check: NEVER display the same notification ID twice
+                  if (_seenNotificationDocIds.contains(docId)) {
+                    continue;
+                  }
+
+                  final data = change.doc.data();
+                  if (data == null) continue;
+                  final target = data['target']?.toString() ?? 'all';
+                  final targetPhone = data['targetPhone']?.toString();
+                  final ts = data['createdAt'];
+                  final createdDate = ts is Timestamp ? ts.toDate() : null;
+
+                  // If createdDate is null (pending server timestamp), it was just created right now
+                  final isRecent =
+                      createdDate == null ||
+                      !createdDate.isBefore(
+                        _appStartTime!.subtract(const Duration(minutes: 30)),
+                      );
+
+                  if (!isRecent) {
+                    await _saveSeenId(docId);
+                    continue;
+                  }
+
+                  final isForUser = _matchesPhone(
+                    cleanPhone,
+                    target,
+                    targetPhone,
+                  );
+
+                  if (isForUser) {
+                    await _saveSeenId(docId);
+                    final title = data['title']?.toString() ?? 'Announcement';
+                    final body = data['body']?.toString() ?? '';
+                    debugPrint(
+                      '🔔 [NotificationService] Displaying notification: "$title" - "$body"',
+                    );
+                    await showBroadcastNotification(title: title, body: body);
+                  }
+                }
+              }
+            },
+            onError: (err) {
+              debugPrint(
+                '[NotificationService] Firestore notifications error: $err',
+              );
+            },
+          );
+    } catch (e) {
+      debugPrint('[NotificationService] startListening error: $e');
+    }
+  }
+
+  Future<void> showBroadcastNotification({
+    required String title,
+    required String body,
+  }) async {
+    final notificationDetails = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'br_broadcast_alerts',
+        'System Announcements',
+        channelDescription: 'Announcements and updates from administrator',
+        icon: 'ic_stat_rail',
+        largeIcon: const DrawableResourceAndroidBitmap('ic_notification_brand'),
+        color: const Color(0xFF009B78),
+        visibility: NotificationVisibility.private,
+        importance: Importance.high,
+        priority: Priority.high,
+        styleInformation: BigTextStyleInformation(body, contentTitle: title),
+      ),
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+      ),
+    );
+
+    try {
+      final notifId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      await _notificationsPlugin.show(
+        id: notifId,
+        title: title,
+        body: body,
+        payload: 'rail://trips',
+        notificationDetails: notificationDetails,
+      );
+      debugPrint(
+        '[NotificationService] ✅ Successfully posted system notification',
+      );
+    } catch (e) {
+      debugPrint(
+        '[NotificationService] ❌ Failed to show system notification: $e',
+      );
+    }
+
+    // Also trigger in-app banner for instant visual response
+    final nav = navigatorKey.currentState;
+    if (nav != null && nav.mounted) {
+      ScaffoldMessenger.maybeOf(nav.context)?.showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: const Color(0xFF0284C7),
+          duration: const Duration(seconds: 5),
+          content: Row(
+            children: [
+              const Icon(
+                Icons.notifications_active_rounded,
+                color: Colors.white,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      body,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
   }
 }

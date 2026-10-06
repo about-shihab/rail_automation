@@ -14,8 +14,13 @@ import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 import 'package:rail_automation/widgets/train_navigation_bar.dart';
 import 'package:rail_automation/utils/app_theme.dart';
+import 'package:rail_automation/services/language_service.dart';
 
 void main() {
+  setUp(() async {
+    SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
+    await LanguageService.instance.setLanguage(AppLanguage.en);
+  });
   var fontsLoaded = false;
   for (final dark in [false, true]) {
     testWidgets('journey dashboard fits a narrow screen, dark=$dark', (
@@ -43,6 +48,7 @@ void main() {
       });
       FlutterSecureStorage.setMockInitialValues({});
       SharedPreferences.setMockInitialValues({
+        'app_language_code': 'en',
         MonitorService.preferenceKey: jsonEncode({
           'id': 'design',
           'from': 'Dhaka',
@@ -74,9 +80,7 @@ void main() {
                   selectedIndex: 1,
                   onDestinationSelected: (_) {},
                   destinations: [
-                    const TrainDestination(
-                      label: 'Search',
-                    ),
+                    const TrainDestination(label: 'Search'),
                     TrainDestination(
                       label: 'Tickets',
                       showBadge: monitor.isMonitoring,
@@ -87,9 +91,7 @@ void main() {
                       showBadge: monitor.needsTurnstile,
                       badgeColor: AppColors.error,
                     ),
-                    const TrainDestination(
-                      label: 'Profile',
-                    ),
+                    const TrainDestination(label: 'Profile'),
                   ],
                 ),
               ),
@@ -98,7 +100,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.text('Rail Ticket'), findsOneWidget);
+      await tester.runAsync(
+        () => precacheImage(
+          const AssetImage('assets/icons/app_icon.jpg'),
+          boundaryKey.currentContext!,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Rail Pro'), findsOneWidget);
       expect(find.text('Dhaka'), findsOneWidget);
       expect(find.text('Logs'), findsNothing);
       expect(tester.takeException(), isNull);

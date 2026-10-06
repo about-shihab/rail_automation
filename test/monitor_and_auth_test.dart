@@ -52,42 +52,41 @@ void main() {
   });
 
   group('Ticket search dashboard', () {
-    testWidgets(
-      'Dashboard shows journey UI without logs or polling controls',
-      (WidgetTester tester) async {
-        final proService = ProService();
-        final themeService = ThemeService();
-        final monitorService = MonitorService(proService: proService);
-        final creditService = CreditService();
+    testWidgets('Dashboard shows journey UI without logs or polling controls', (
+      WidgetTester tester,
+    ) async {
+      final proService = ProService();
+      final themeService = ThemeService();
+      final monitorService = MonitorService(proService: proService);
+      final creditService = CreditService();
 
-        // Verify default interval is 120s
-        expect(monitorService.intervalSeconds, 120);
+      // Verify default interval is 120s
+      expect(monitorService.intervalSeconds, 120);
 
-        final languageService = LanguageService();
+      final languageService = LanguageService();
 
-        await tester.pumpWidget(
-          MultiProvider(
-            providers: [
-              ChangeNotifierProvider.value(value: proService),
-              ChangeNotifierProvider.value(value: themeService),
-              ChangeNotifierProvider.value(value: languageService),
-              ChangeNotifierProvider.value(value: creditService),
-              ChangeNotifierProvider.value(value: monitorService),
-            ],
-            child: const MaterialApp(home: MonitorDashboardScreen()),
-          ),
-        );
+      await tester.pumpWidget(
+        MultiProvider(
+          providers: [
+            ChangeNotifierProvider.value(value: proService),
+            ChangeNotifierProvider.value(value: themeService),
+            ChangeNotifierProvider.value(value: languageService),
+            ChangeNotifierProvider.value(value: creditService),
+            ChangeNotifierProvider.value(value: monitorService),
+          ],
+          child: const MaterialApp(home: MonitorDashboardScreen()),
+        ),
+      );
 
-        // Verify the dashboard rendered successfully with header
-        expect(find.text('Rail Ticket'), findsOneWidget);
-        // Verify Live Stats Strip is NOT shown
-        expect(find.text('Total Checks'), findsNothing);
-        expect(find.text('মোট চেক'), findsNothing);
-        expect(find.byType(Slider), findsNothing);
-        expect(find.textContaining('120s'), findsNothing);
-        await tester.pumpWidget(const SizedBox.shrink());
-        monitorService.dispose();
-      },
-    );
+      // Verify the dashboard rendered successfully with header
+      expect(find.text('Rail Pro'), findsOneWidget);
+      // Verify Live Stats Strip is NOT shown
+      expect(find.text('Total Checks'), findsNothing);
+      expect(find.text('মোট চেক'), findsNothing);
+      expect(find.byType(Slider), findsNothing);
+      expect(find.textContaining('120s'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      monitorService.dispose();
+    });
   });
 }
