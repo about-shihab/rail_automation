@@ -25,12 +25,18 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         await tester.runAsync(() async {
-          final file = File('C:/Windows/Fonts/segoeui.ttf');
-          if (await file.exists()) {
-            for (final family in ['Roboto', 'Ahem']) {
-              await (FontLoader(
-                family,
-              )..addFont(file.readAsBytes().then(ByteData.sublistView))).load();
+          for (final path in [
+            'C:/Windows/Fonts/segoeui.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+          ]) {
+            final file = File(path);
+            if (await file.exists()) {
+              for (final family in ['Roboto', 'Ahem']) {
+                await (FontLoader(
+                  family,
+                )..addFont(file.readAsBytes().then(ByteData.sublistView))).load();
+              }
+              break;
             }
           }
           await (FontLoader('MaterialIcons')
@@ -127,6 +133,7 @@ void main() {
         expect(find.text('Seats held · Ready to pay'), findsOneWidget);
         expect(find.text('Standing in reservation queue...'), findsNothing);
         expect(tester.takeException(), isNull);
+        await tester.ensureVisible(find.text('Search Trains'));
         await tester.tap(find.text('Search Trains'));
         expect(presses, 1);
         final boundary =
@@ -143,6 +150,7 @@ void main() {
         });
         update(() => loading = true);
         await tester.pump();
+        await tester.ensureVisible(find.text('Search Trains'));
         await tester.tap(find.text('Search Trains'));
         expect(presses, 1);
         expect(find.byType(CircularProgressIndicator), findsOneWidget);

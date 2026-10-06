@@ -308,13 +308,17 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
                             color: Colors.white,
                           ),
                           SizedBox(width: 5),
-                          Text(
-                            'TICKET PROCESSING',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: 1,
+                          Flexible(
+                            child: Text(
+                              'TICKET PROCESSING',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 1,
+                              ),
                             ),
                           ),
                         ],

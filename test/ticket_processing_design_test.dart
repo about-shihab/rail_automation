@@ -25,11 +25,17 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         await tester.runAsync(() async {
-          final font = File('C:/Windows/Fonts/segoeui.ttf');
-          if (await font.exists()) {
-            final loader = FontLoader('Roboto')
-              ..addFont(font.readAsBytes().then(ByteData.sublistView));
-            await loader.load();
+          for (final path in [
+            'C:/Windows/Fonts/segoeui.ttf',
+            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+          ]) {
+            final font = File(path);
+            if (await font.exists()) {
+              final loader = FontLoader('Roboto')
+                ..addFont(font.readAsBytes().then(ByteData.sublistView));
+              await loader.load();
+              break;
+            }
           }
           await (FontLoader('MaterialIcons')
                 ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf')))
