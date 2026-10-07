@@ -51,6 +51,8 @@ def local_baseline(baseline, artifact):
 
 def prepare(args):
     base = public_url(args.site_url)
+    if args.release_repo and not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', args.release_repo):
+        raise ValueError('Use OWNER/REPO for the public release repository.')
     previous = None
     try:
         request = Request(base + '/update.json', headers={'Cache-Control': 'no-cache'})
@@ -66,13 +68,35 @@ def prepare(args):
             raise
     baseline = re.search(r'^version:\s*(\d+\.\d+\.\d+\+\d+)',
                          (ROOT / 'pubspec.yaml').read_text(), re.M).group(1)
+    # A release may publish successfully before Pages finishes deploying.
+    # Read the public release asset too, so the next build cannot reuse it.
+    for url in ([f'https://github.com/{args.release_repo}/releases/latest/download/update.json']
+                if args.release_repo else []) + ([args.previous_manifest_url]
+                if args.previous_manifest_url else []):
+        if url == args.previous_manifest_url and previous is not None:
+            continue
+        try:
+            with urlopen(Request(public_url(url), headers={'Cache-Control': 'no-cache'}), timeout=20) as response:
+                published = json.load(response)
+            baseline = local_baseline(baseline, published)
+            minimum = published['minimum_build_number']
+            if type(minimum) is not int or not 0 <= minimum <= published['build_number']:
+                raise ValueError('Invalid published minimum build')
+            if previous is None or published['build_number'] > previous['build_number']:
+                previous = published
+        except HTTPError as error:
+            if error.code != 404:
+                raise
     local = ROOT / 'build/public-site/update.json'
     if not os.environ.get('GITHUB_ACTIONS') and local.exists():
         artifact = json.loads(local.read_text())
-        if artifact.get('apk_url', '').startswith(base + '/'):
+        if (artifact.get('apk_url', '').startswith(base + '/') or
+                (args.release_repo and artifact.get('apk_url') ==
+                 f'https://github.com/{args.release_repo}/releases/latest/download/Rail-Pro.apk')):
             baseline = local_baseline(baseline, artifact)
     manifest = next_release(baseline, previous, args.force)
-    manifest['apk_url'] = base + '/downloads/Rail-Pro.apk'
+    manifest['apk_url'] = (f'https://github.com/{args.release_repo}/releases/latest/download/Rail-Pro.apk'
+                           if args.release_repo else base + '/downloads/Rail-Pro.apk')
     path = ROOT / 'build/release-plan.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2) + '\n')
@@ -113,8 +137,10 @@ def bundle(args):
     for name in ('index.html', 'privacy.html', 'website.css', 'website.js'):
         shutil.copy2(ROOT / 'docs' / name, target / name)
     shutil.copytree(ROOT / 'docs/assets', target / 'assets', dirs_exist_ok=True)
-    (target / 'downloads').mkdir(exist_ok=True)
-    shutil.copy2(apk, target / 'downloads/Rail-Pro.apk')
+    if '/releases/latest/download/' not in manifest['apk_url']:
+        (target / 'downloads').mkdir(exist_ok=True)
+        shutil.copy2(apk, target / 'downloads/Rail-Pro.apk')
+    (target / '.nojekyll').touch()
     (target / 'update.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f"Public bundle ready: {target}; SHA-256 {digest}")
 
@@ -125,6 +151,8 @@ if __name__ == '__main__':
     plan = commands.add_parser('prepare')
     plan.add_argument('--site-url', required=True)
     plan.add_argument('--force', action='store_true')
+    plan.add_argument('--release-repo', help='Public OWNER/REPO for release APKs and metadata')
+    plan.add_argument('--previous-manifest-url', help='Existing public metadata for a hosting migration')
     plan.set_defaults(run=prepare)
     package = commands.add_parser('bundle')
     package.add_argument('--aapt', help='Optional path to Android build-tools aapt')

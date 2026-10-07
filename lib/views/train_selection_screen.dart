@@ -49,7 +49,7 @@ class TrainSelectionScreen extends StatelessWidget {
     }
     final session = await AuthSession.load();
     if (!context.mounted) return;
-    if (session == null || !session.isValid) {
+    if (session == null) {
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
@@ -226,7 +226,7 @@ class TrainSelectionScreen extends StatelessWidget {
   Future<void> _openMultiTrainAutoBook(BuildContext context) async {
     final session = await AuthSession.load();
     if (!context.mounted) return;
-    if (session == null || !session.isValid) {
+    if (session == null) {
       Navigator.push(
         context,
         MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
@@ -296,7 +296,7 @@ class TrainSelectionScreen extends StatelessWidget {
     }
     final session = await AuthSession.load();
     if (!context.mounted) return;
-    if (session == null || !session.isValid) {
+    if (session == null) {
       Navigator.push(
         context,
         MaterialPageRoute(

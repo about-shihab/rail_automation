@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 
 import '../views/booking_screen.dart';
+import '../views/webview_login_screen.dart';
 import 'booking_service.dart';
 import 'booking_activity.dart';
 import 'turnstile_gate.dart';
@@ -65,6 +66,7 @@ class NotificationService {
     DateTime? expiry,
     AndroidNotificationCategory? category,
     bool seatAlert = false,
+    bool onlyAlertOnce = false,
   }) => AndroidNotificationDetails(
     channel,
     channelName,
@@ -76,7 +78,7 @@ class NotificationService {
     sound: seatAlert
         ? const RawResourceAndroidNotificationSound('seat_found')
         : null,
-    onlyAlertOnce: seatAlert,
+    onlyAlertOnce: onlyAlertOnce,
     enableVibration: true,
     vibrationPattern: Int64List.fromList([0, 800, 400, 800]),
     visibility: NotificationVisibility.public,
@@ -101,6 +103,18 @@ class NotificationService {
 
   void openBooking(String? payload) {
     if (payload == null) return;
+    if (payload == 'rail://login') {
+      final navigator = navigatorKey.currentState;
+      if (navigator == null || !navigator.mounted) {
+        _pendingBooking = payload;
+        return;
+      }
+      _pendingBooking = null;
+      navigator.push(
+        MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
+      );
+      return;
+    }
     if (payload == 'rail://booking-progress') {
       if (navigatorKey.currentState == null ||
           (WidgetsBinding.instance.lifecycleState != null &&
@@ -227,36 +241,27 @@ class NotificationService {
         state['train']?['train_name']?.toString() ??
         'Train';
     final seatType = state['seatClass']?['type']?.toString() ?? '';
-    final seatCount = (state['seats'] as List?)?.length ?? 0;
-    final travelDate = state['date']?.toString() ?? '';
-
-    // Always trigger high-alert notification whether OTP auto-verify is enabled or not
-    await triggerSeatAvailableAlert(
-      trainName: trainName,
-      seatType: seatType,
-      seatCount: seatCount,
-      travelDate: travelDate,
-      automaticBooking: true,
-      reservationHeld: true,
-    );
-
-    if (state['status'] == 'awaitingOtp' && state['autoVerify'] == true) {
-      return;
-    }
+    await cancelVerificationAndSearchAlerts();
 
     final expiry = DateTime.tryParse(state['expiresAt'] ?? '');
     final ready = state['status'] == 'readyForPayment';
     final bn = await prefersBangla();
     final title = ready
         ? (bn ? 'আসন সংরক্ষিত · পেমেন্ট করুন' : 'Seats held · Pay now')
-        : (bn ? 'ওটিপি যাচাই করুন' : 'Verify your OTP');
+        : (bn
+              ? 'আপনার টিকেট বুকিং কনফার্ম হয়েছে'
+              : 'Your seat reservation is confirmed');
     final description = ready
         ? (bn
-              ? 'সময় শেষ হওয়ার আগে পেমেন্ট করুন।'
-              : 'Pay before the hold expires.')
+              ? 'ওটিপি যাচাই হয়েছে। বুকিং সম্পূর্ণ করতে সময় শেষ হওয়ার আগে টিকেট কিনুন।'
+              : 'OTP verified. Purchase your ticket before the hold expires to complete booking.')
         : (bn
-              ? 'ফোনে পাঠানো ওটিপি যাচাই করুন।'
-              : 'Verify the OTP sent to your phone.');
+              ? (state['autoVerify'] == true
+                    ? 'স্বয়ংক্রিয় ওটিপি যাচাইয়ের অপেক্ষায়। প্রয়োজনে অ্যাপ খুলে ওটিপি দিন। পেমেন্ট এখনও বাকি।'
+                    : 'অ্যাপ খুলে ফোনে পাঠানো ওটিপি যাচাই করুন, তারপর টিকেট কিনুন।')
+              : (state['autoVerify'] == true
+                    ? 'Waiting for automatic OTP verification. Open the app to enter it manually if needed. Payment is still required.'
+                    : 'Open the app to verify your OTP, then purchase your ticket.'));
     final body =
         "${[trainName, if (seatType.isNotEmpty) seatType].join(' · ')}\n$description";
     final androidDetails = _alertDetails(
@@ -298,6 +303,43 @@ class NotificationService {
   }
 
   /// Sequence Rule: After complete purchase, clear OTP notification and show success notification
+  Future<void> showLoginRequired() async {
+    final bn = await prefersBangla();
+    final title = bn ? 'আবার লগইন করুন' : 'Railway login required';
+    final body = bn
+        ? 'সেশন মেয়াদোত্তীর্ণ বা বাতিল হয়েছে। অ্যাপ খুলে লগইন যাচাই করুন।'
+        : 'Your session expired or was invalidated. Open the app to verify login.';
+    try {
+      await _notificationsPlugin.show(
+        id: 804,
+        title: title,
+        body: body,
+        payload: 'rail://login',
+        notificationDetails: NotificationDetails(
+          android: _alertDetails(
+            channel: 'br_login_recovery',
+            channelName: 'Railway login',
+            title: title,
+            body: body,
+            stage: 'Login',
+            color: const Color(0xFF008CBA),
+            onlyAlertOnce: true,
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+        ),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> clearLoginAlert() async {
+    try {
+      await _notificationsPlugin.cancel(id: 804);
+    } catch (_) {}
+  }
+
   Future<void> showPurchaseSuccessAlert({
     required String trainName,
     String? pnr,
@@ -311,7 +353,7 @@ class NotificationService {
     } catch (_) {}
 
     final bn = await prefersBangla();
-    final title = bn ? 'টিকিট নিশ্চিত হয়েছে' : 'Ticket confirmed';
+    final title = bn ? 'আপনার টিকেট বুকিং কনফার্ম হয়েছে' : 'Ticket confirmed';
     final body =
         "$trainName${(pnr != null && pnr.isNotEmpty) ? '\nPNR · $pnr' : ''}";
     final androidDetails = _alertDetails(
@@ -522,6 +564,7 @@ class NotificationService {
       channel: 'br_seat_found_v2',
       channelName: 'Seats found',
       seatAlert: true,
+      onlyAlertOnce: true,
       title: title,
       body: body,
       stage: bn ? 'আসন' : 'Seats',

@@ -38,7 +38,7 @@ void main() async {
   await OverlayService.requestPermission();
 
   final session = await AuthSession.load();
-  final isLoggedIn = session != null && session.isValid;
+  final isLoggedIn = session != null && session.isLoggedIn;
 
   final proService = ProService();
   final themeService = ThemeService();

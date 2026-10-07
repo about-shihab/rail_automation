@@ -1,0 +1,89 @@
+{
+  "poll_interval_seconds": 120,
+  "request_timeout_seconds": 15,
+  "login_retry_interval_seconds": 60,
+  "otp_window_seconds": 180,
+  "api_operations": {
+    "sign_in": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/auth/sign-in",
+      "min_interval_seconds": 0,
+      "payload": {
+        "mobile_number": "{{mobile_number}}",
+        "password": "{{password}}",
+        "cft_response": "{{cft_response}}"
+      }
+    },
+    "search_trips": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2",
+      "min_interval_seconds": 0,
+      "payload": {
+        "from_city": "{{from_city}}",
+        "to_city": "{{to_city}}",
+        "date_of_journey": "{{date_of_journey}}",
+        "seat_class": "{{seat_class}}"
+      }
+    },
+    "seat_layout": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/seat-layout",
+      "min_interval_seconds": 0
+    },
+    "purchase_history": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/purchase-history",
+      "min_interval_seconds": 0,
+      "payload": {}
+    },
+    "download_ticket": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/trips/download-ticket/{order_id}",
+      "min_interval_seconds": 0,
+      "payload": {}
+    },
+    "handshake": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/handshake",
+      "min_interval_seconds": 0,
+      "payload": {
+        "hash": null,
+        "eticket": true,
+        "shohoz": false,
+        "trainBkash": false,
+        "trainNagad": false
+      }
+    },
+    "reserve_seat": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/reserve-seat",
+      "min_interval_seconds": 0,
+      "payload": {
+        "ticket_id": "{{ticket_id}}",
+        "route_id": "{{route_id}}",
+        "extras": "{{extras}}"
+      }
+    },
+    "passenger_details": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/passenger-details",
+      "min_interval_seconds": 0,
+      "payload": {
+        "trip_id": "{{trip_id}}",
+        "trip_route_id": "{{trip_route_id}}",
+        "ticket_ids": "{{ticket_ids}}"
+      }
+    },
+    "verify_otp": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/verify-otp",
+      "min_interval_seconds": 0,
+      "payload": {
+        "trip_id": "{{trip_id}}",
+        "trip_route_id": "{{trip_route_id}}",
+        "ticket_ids": "{{ticket_ids}}",
+        "otp": "{{otp}}"
+      }
+    },
+    "resend_otp": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/resend-otp",
+      "min_interval_seconds": 0,
+      "payload": {
+        "trip_id": "{{trip_id}}",
+        "trip_route_id": "{{trip_route_id}}",
+        "ticket_ids": "{{ticket_ids}}"
+      }
+    }
+  }
+}

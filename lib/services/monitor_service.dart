@@ -1,3 +1,6 @@
+import 'rail_api_client.dart';
+import 'railway_credentials_rejected.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -528,12 +531,7 @@ class MonitorService extends ChangeNotifier {
   }
 
   bool get needsTurnstile => _bookingNeedsVerification;
-  bool get needsLogin =>
-      _lastError != null &&
-      RegExp(
-        r'login|logged in|session expired|401|authenticate',
-        caseSensitive: false,
-      ).hasMatch(_lastError!);
+  bool get needsLogin => RailwayCredentialsRejected.isError(_lastError);
   String get userStatus {
     if (backgroundError != null) {
       return 'Keep the app open while we reconnect background searching.';
@@ -964,8 +962,8 @@ class MonitorService extends ChangeNotifier {
           return;
         }
       }
-      final session = await AuthSession.load();
-      if (session == null || !session.isValid) {
+      var session = await AuthSession.load();
+      if (session == null) {
         _lastError =
             'Not logged in. Please authenticate with Railway credentials.';
         _addLog('Check skipped: No valid login session found.', isError: true);
@@ -999,6 +997,7 @@ class MonitorService extends ChangeNotifier {
           return;
         }
 
+        session = await RailApiClient.current(session);
         if (!_isMonitoring || generation != _generation || _disposed) return;
         if (!await _savedSearchIsActive()) return;
         _lastError = null;

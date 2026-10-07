@@ -1,3 +1,5 @@
+import '../services/railway_credentials_rejected.dart';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -79,13 +81,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       }
     } catch (e) {
       final errStr = e.toString().replaceAll('Exception: ', '');
-      final lower = errStr.toLowerCase();
-      if ((lower.contains('401') ||
-              lower.contains('session expired') ||
-              lower.contains('sign in') ||
-              lower.contains('re-login') ||
-              lower.contains('authenticate')) &&
-          mounted) {
+      if (RailwayCredentialsRejected.isError(e) && mounted) {
         await AuthSession.clear();
         if (mounted) {
           Navigator.pushAndRemoveUntil(
@@ -144,8 +140,8 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         autoVerify: _smsVerify,
         preparedLayout: _preparedLayout,
       );
-      if (_smsVerify) await OtpVerifier.listen();
       await NotificationService().showReservation(state);
+      if (_smsVerify) await OtpVerifier.listen();
       if (mounted) {
         Navigator.pushReplacement(
           context,

@@ -1,6 +1,10 @@
+import '../services/railway_credentials_rejected.dart';
+import 'webview_login_screen.dart';
+
 import 'dart:convert';
 
 import '../services/booking_service.dart';
+import '../services/rail_api_client.dart';
 import '../services/api_service.dart';
 import '../models/purchased_ticket.dart';
 import '../services/secure_store.dart';
@@ -44,10 +48,15 @@ class _BookingScreenState extends State<BookingScreen> {
 
   Future<void> _initWebView() async {
     try {
-      final session = await AuthSession.load();
-      if (session == null || !session.isValid) {
+      var loadedSession = await AuthSession.load();
+      if (loadedSession == null) {
         throw StateError("Please log in again before checkout.");
       }
+      loadedSession = await RailApiClient.current(loadedSession);
+      if (!loadedSession.isValid) {
+        loadedSession = await RailApiClient.refresh(loadedSession);
+      }
+      final session = loadedSession;
       if (!WebSessionService.isRailwayUrl(widget.url)) {
         throw StateError('Invalid Railway booking link');
       }
@@ -201,6 +210,17 @@ class _BookingScreenState extends State<BookingScreen> {
         baseUrl: 'https://eticket.railway.gov.bd/rail-pro-checkout-bootstrap',
       );
     } catch (error) {
+      if (mounted && RailwayCredentialsRejected.isError(error)) {
+        await AuthSession.clear();
+        if (!mounted) return;
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(
+            builder: (_) => const WebviewLoginScreen(clearSession: true),
+          ),
+        );
+        return;
+      }
       if (mounted) {
         setState(() {
           _failureMessage = friendlyErrorMessage(error);

@@ -1,69 +1,76 @@
-# Versions and mandatory updates
+# Versions and public releases
 
-বাংলায় ধাপে ধাপে প্রকাশের নির্দেশনা: [Firebase-এ Rail Pro প্রকাশ করুন](FIREBASE_PUBLISH_BN.md)।
+Railway login recovery, API settings, and booking/OTP alerts:
+[Railway API workflow configuration](RAIL_API_WORKFLOW.md).
 
-The source repository can remain private. APK downloads and update metadata must be on public HTTPS hosting. The app never contains GitHub access tokens. The configured Firebase project is `railautomation-1993`; deployment requires your Firebase Hosting access and CI configuration.
+Website: https://about-shihab.github.io/rail-pro/
 
-## One-time GitHub setup
+APK: https://github.com/about-shihab/rail-pro/releases/latest/download/Rail-Pro.apk
 
-Create repository variables:
+The Flutter source stays in the private `about-shihab/rail_automation` repository.
+Only website assets, release metadata, and the signed APK are published to the
+public `about-shihab/rail-pro` repository. GitHub Pages serves its `main` branch
+root. APKs and `update.json` are attached to versioned GitHub Releases.
 
-| Variable | Value |
-| --- | --- |
-| `FIREBASE_PROJECT_ID` | `railautomation-1993` (or your hosting project) |
-| `PUBLIC_SITE_URL` | `https://railautomation-1993.web.app` (or your public custom domain) |
+## Release workflow
 
-Create repository/environment secrets:
+Push application changes to the private source repository's `main` branch, or run
+**Actions → Android release and public website → Run workflow**. The workflow
+runs Flutter/Python/JavaScript checks, restores production signing, builds the
+APK, verifies its embedded version, and publishes to the public repository.
+GitHub Pages deployment follows the public website commit.
+
+Source-repository secrets required:
 
 | Secret | Purpose |
 | --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | Base64 of the **existing production keystore** |
-| `ANDROID_STORE_PASSWORD` | Existing keystore password |
+| `ANDROID_KEYSTORE_BASE64` | Existing production keystore |
+| `ANDROID_STORE_PASSWORD` | Keystore password |
 | `ANDROID_KEY_ALIAS` | Existing signing alias |
-| `ANDROID_KEY_PASSWORD` | Existing signing-key password |
-| `FIREBASE_SERVICE_ACCOUNT` | Firebase deployment service-account JSON |
+| `ANDROID_KEY_PASSWORD` | Signing key password |
+| `PUBLIC_REPO_TOKEN` | GitHub credential with Contents write access to `about-shihab/rail-pro`; Pages/Administration write access is needed to configure hosting |
 
-Use the same signing certificate for every release. A different certificate cannot update an installed APK. Keep secrets out of git, issues, logs, website files, and app configuration. Set up Firebase Hosting and the deployment service account using [Firebase's GitHub integration](https://firebase.google.com/docs/hosting/github-integration). No credentials are needed by users.
+The publisher checks that the target repository is public, verifies the APK hash,
+uploads the APK and metadata before publishing the release, and copies only the
+website file allowlist. No source files or credentials are copied. Existing
+public repository files are preserved. A published version is never overwritten.
+Keep signing credentials and the publisher token in source-repository Actions
+secrets; they do not belong in the public repository or APK.
 
-## Publish a release
+## Version maintenance
 
-Run **Actions → Android release and public website → Run workflow**. The workflow checks the current public `update.json`, increments the patch version and Android build number, runs checks, signs the APK, and publishes the website, APK, and metadata together. Concurrent releases are serialized. Failed metadata requests abort version allocation; only a 404 allows the initial release. The checked-in `pubspec.yaml` supplies the initial baseline. Raise its major/minor baseline for a larger version change; ordinary patch releases need no edits.
+Release preparation reads the public Pages manifest and the latest Release's
+`update.json`, then increments the highest version/build and the local baseline.
+The release asset prevents reusing a version when Pages deployment is delayed.
+For the first migration, the previous Firebase manifest supplies the existing
+version/build; subsequent GitHub releases do not depend on Firebase availability.
+The initial migrated release follows `1.0.5+6` with `1.0.6+7`.
 
-Leave `force_update` off for ordinary releases. Turn it on when all older builds must update: the new build becomes `minimum_build_number`. Future ordinary releases preserve this minimum. A subsequent larger-build policy can lower the minimum to recover from an accidental requirement. Stale older manifests cannot lower it.
+Concurrent source workflows are serialized. Metadata errors abort allocation;
+only a 404 represents an initial deployment. The APK's embedded version and
+SHA-256 must match the publication manifest. Stable latest-download links remain
+usable by older cached update policies. Release tags preserve past versions.
 
-Only `build/public-site` is published: website files, images, the signed APK and public metadata. Private source, signing files and service accounts are excluded. Stable `/downloads/Rail-Pro.apk` always points to the newest release so cached policies do not rely on deleted version-specific assets.
+Leave `force_update` disabled for ordinary releases. Enabling it sets the new
+build as `minimum_build_number`. Later ordinary releases preserve that minimum.
+The app checks the GitHub Pages manifest at startup, on resume, and periodically
+while monitoring. A mandatory policy blocks new bookings until the user updates.
+Android still asks the user to approve installation.
 
-Example generated metadata (do not publish this example):
+Previously installed APKs that point at Firebase continue checking that old URL
+until upgraded. The migrated APK and later builds use GitHub Pages. Saved searches
+remain on the device, and updates require the same production signing certificate.
 
-```json
-{
-  "version": "1.0.2",
-  "build_number": 3,
-  "minimum_build_number": 3,
-  "apk_url": "https://your-public-domain.example/downloads/Rail-Pro.apk",
-  "sha256": "computed-from-the-signed-apk",
-  "size_bytes": 64000000
-}
-```
-
-## App behavior
-
-Installed version/build come from Android's package manager. The app checks metadata on startup, resume and at most every five minutes during service monitoring. New seat-layout/reservation operations consult cached policy, including in worker isolates. An in-progress startup check is awaited before starting a booking.
-
-A mandatory update replaces navigation, blocks Back dismissal and prevents new bookings. Saved searches remain on the device. Android asks the user to approve APK installation; the app cannot silently replace itself. A cached mandatory policy remains effective offline. Without a valid cached policy, a failed initial check leaves the app usable. Invalid metadata is rejected to avoid locking users behind an unusable download. This is client-side enforcement; APKs predating this feature require backend version enforcement if they must be blocked.
-
-The website reads the same manifest for its download URL, version and size. Before publication, it clearly shows download is unavailable. There is no private GitHub release fallback.
-
-## Local build and alternative hosting
+## Local publication
 
 ```powershell
-python scripts/release.py prepare --site-url https://your-public-domain.example
-# Add --force above to require this release.
+python scripts/release.py prepare --site-url https://about-shihab.github.io/rail-pro --release-repo about-shihab/rail-pro --previous-manifest-url https://railautomation-1993.web.app/update.json
 $release = Get-Content build/release-plan.json | ConvertFrom-Json
-flutter build apk --release --build-name $release.version --build-number $release.build_number --dart-define=UPDATE_MANIFEST_URL=https://your-public-domain.example/update.json
+flutter build apk --release --build-name $release.version --build-number $release.build_number --dart-define=UPDATE_MANIFEST_URL=https://about-shihab.github.io/rail-pro/update.json
 python scripts/release.py bundle
+python scripts/publish_github.py --repo about-shihab/rail-pro
 ```
 
-Deploy `build/public-site` together to Firebase or another public HTTPS host. For Firebase, authenticate locally then run `firebase deploy --only hosting --project YOUR_PROJECT`. Serve `update.json` and `/downloads/Rail-Pro.apk` without login and with caching disabled. Check both URLs from a signed-out browser before enabling mandatory updates. Keep the existing app installed while updating.
-
-The previously published v1.0.1 GitHub APK does not contain this mechanism. Users must first install a release containing it. Repository configuration does not imply GitHub secrets or Firebase deployment are already set up.
+Local publishing uses `GH_TOKEN`/`PUBLIC_REPO_TOKEN`, or your existing GitHub Git
+credential. Git push must also be authenticated; CI configures it with
+`gh auth setup-git`. Pages and APK links are public and need no user login.

@@ -20,7 +20,7 @@
 
 ## Website, downloads and private repository
 
-Firebase-এ প্রথমবার প্রকাশের জন্য [বাংলা নির্দেশনা](docs/FIREBASE_PUBLISH_BN.md) অনুসরণ করুন।
+Public website: https://about-shihab.github.io/rail-pro/ · [APK releases](https://github.com/about-shihab/rail-pro/releases).
 
 The compact website defaults to Bengali and includes an English switch, animated journey illustration, booking demo, screenshots and FAQ. Preview locally:
 
@@ -32,7 +32,7 @@ Open `http://127.0.0.1:8765/docs/`. The demo does not make Railway requests. Ani
 
 Keep this source repository private and publish the website, signed APK and `update.json` on public HTTPS hosting. **Private GitHub release links are not public APK downloads.** Download URL/version/size come from the published manifest. The website shows an unavailable state until distribution is ready.
 
-The [release workflow](.github/workflows/android-release.yml) automatically increments versions and builds, then publishes the website and APK through Firebase Hosting. Its `force_update` option makes older supported builds show a mandatory update screen. Setup, secrets, signing continuity and offline behavior are in [UPDATES.md](docs/UPDATES.md). CI/hosting must be configured before publication; a workflow file alone does not deploy the site.
+The [release workflow](.github/workflows/android-release.yml) automatically increments versions and builds, then publishes the website through GitHub Pages and the APK through Releases in `about-shihab/rail-pro`. Its `force_update` option makes older supported builds show a mandatory update screen. Setup, secrets, signing continuity and offline behavior are in [UPDATES.md](docs/UPDATES.md). CI/hosting must be configured before publication; a workflow file alone does not deploy the site.
 
 ## Development
 

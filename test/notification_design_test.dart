@@ -54,41 +54,32 @@ void main() {
       state['status'] = 'awaitingOtp';
       await NotificationService().showReservation(state);
       notification = latest();
-      expect(notification['title'], 'Verify your OTP');
+      expect(notification['title'], 'Your seat reservation is confirmed');
       expect(notification['payload'], 'rail://reservation');
     },
   );
 
-  test('automatic OTP verification does not post a manual OTP alert', () async {
-    await NotificationService().showReservation({
-      'status': 'awaitingOtp',
-      'autoVerify': true,
-    });
-    expect(latest()['id'], NotificationService.idSeatFound);
-    expect(latest()['title'], 'Seats held · Booking in progress');
-    expect(latest()['payload'], 'rail://booking-progress');
-    expect(
-      calls.where(
-        (call) =>
-            call.method == 'show' &&
-            (call.arguments as Map)['id'] == NotificationService.idOtp,
-      ),
-      isEmpty,
-    );
-    expect(
-      calls.where(
-        (call) =>
-            call.method == 'cancel' &&
-            (call.arguments as Map)['id'] == NotificationService.idSeatFound,
-      ),
-      isEmpty,
-    );
-    await NotificationService().showReservation({
-      'status': 'readyForPayment',
-      'autoVerify': true,
-    });
-    expect(latest()['title'], 'Seats held · Pay now');
-  });
+  test(
+    'automatic OTP posts a reservation alert with a manual fallback',
+    () async {
+      await NotificationService().showReservation({
+        'status': 'awaitingOtp',
+        'autoVerify': true,
+      });
+      expect(latest()['id'], NotificationService.idOtp);
+      expect(latest()['title'], 'Your seat reservation is confirmed');
+      expect(latest()['payload'], 'rail://reservation');
+      expect(latest()['body'], contains('Waiting for automatic OTP'));
+      expect(latest()['body'], contains('Payment is still required'));
+      await NotificationService().showReservation({
+        'status': 'readyForPayment',
+        'autoVerify': true,
+      });
+      expect(latest()['title'], 'Seats held · Pay now');
+      expect(latest()['body'], contains('OTP verified'));
+      expect((latest()['platformSpecifics'] as Map)['onlyAlertOnce'], isFalse);
+    },
+  );
 
   test('seat alerts are delivered even while the app is visible', () async {
     NotificationService().appVisible = true;
@@ -152,7 +143,7 @@ void main() {
       pnr: 'DEMO-PNR',
     );
     notification = latest();
-    expect(notification['title'], 'টিকিট নিশ্চিত হয়েছে');
+    expect(notification['title'], 'আপনার টিকেট বুকিং কনফার্ম হয়েছে');
     expect(notification['payload'], 'rail://trips');
     expect(notification['body'], contains('DEMO-PNR'));
     expect(

@@ -21,9 +21,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  SITE_URL: ${{ vars.PUBLIC_SITE_URL || 'https://railautomation-1993.web.app' }}
-  FIREBASE_PROJECT: ${{ vars.FIREBASE_PROJECT_ID || 'railautomation-1993' }}
-  APK_URL: https://github.com/${{ github.repository }}/releases/latest/download/Rail-Pro.apk
+  SITE_URL: https://about-shihab.github.io/rail-pro
+  PUBLIC_REPO: about-shihab/rail-pro
 
 jobs:
   publish:
@@ -31,6 +30,8 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-java@v4
         with:
@@ -73,12 +74,12 @@ jobs:
       - name: Assign the next version
         id: version
         env:
-          FORCE: ${{ github.event.inputs.force_update == true || contains(github.event.head_commit.message, '[force update]') || contains(github.event.head_commit.message, '[force-update]') }}
+          FORCE: ${{ inputs.force_update == true || contains(github.event.head_commit.message, '[force update]') || contains(github.event.head_commit.message, '[force-update]') }}
         run: |
           if [ "$FORCE" = "true" ]; then
-            python scripts/release.py prepare --site-url "$SITE_URL" --force
+            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json --force
           else
-            python scripts/release.py prepare --site-url "$SITE_URL"
+            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json
           fi
 
       - name: Analyze and test
@@ -109,28 +110,13 @@ jobs:
       - name: Bundle the website
         run: python scripts/release.py bundle
 
-      - name: Publish the APK to GitHub Releases
+      - name: Publish APK and website to the public distribution repository
         env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk Rail-Pro.apk
-          gh release create "v$VERSION" Rail-Pro.apk \
-            --target "$GITHUB_SHA" --title "Rail Pro $VERSION" --generate-notes || \
-          gh release upload "v$VERSION" Rail-Pro.apk --clobber
-
-      - name: Remove the APK from the site and point links at the release
-        run: |
-          rm -rf build/public-site/downloads
-          sed -i "s#$SITE_URL/downloads/Rail-Pro.apk#$APK_URL#g; s#/downloads/Rail-Pro.apk#$APK_URL#g" \
-            build/public-site/index.html build/public-site/update.json
-
-      - name: Deploy the website to Firebase
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ env.FIREBASE_PROJECT }}
-          channelId: live
+          test -n "$GH_TOKEN" || { echo "PUBLIC_REPO_TOKEN is required for cross-repository publishing."; exit 1; }
+          gh auth setup-git
+          python scripts/publish_github.py --repo "$PUBLIC_REPO"
 
       - uses: actions/upload-artifact@v4
         with:

@@ -9,18 +9,34 @@ import 'notification_service.dart';
 
 class OtpVerifier {
   static bool _verifying = false;
+  static Future<void> _manualFallback(String id) async {
+    final current = await BookingService.pending();
+    if (current?['id'] != id ||
+        current?['status'] != 'awaitingOtp' ||
+        current?['autoVerify'] != true) {
+      return;
+    }
+    current!['autoVerify'] = false;
+    await BookingService.save(current);
+    await NotificationService().showReservation(current);
+  }
+
   static Future<void> listen() async {
     final state = await BookingService.pending();
     if (state?['status'] != 'awaitingOtp' || state?['autoVerify'] != true) {
       return;
     }
     await SmsService().startListening(
+      onUnavailable: () async => _manualFallback('${state!['id']}'),
       onOtpReceived: (otp) async {
         if (_verifying) return;
         _verifying = true;
         try {
           final auth = await AuthSession.load();
-          if (auth == null || !auth.isValid) return;
+          if (auth == null) {
+            await _manualFallback('${state!['id']}');
+            return;
+          }
           final updated = await BookingService.verifyOtp(otp, auth);
           SmsService().stopListening();
           await NotificationService().showReservation(updated);
@@ -34,6 +50,8 @@ class OtpVerifier {
           }
         } catch (_) {
           // Keep manual verification available; do not log the code or SMS.
+          SmsService().stopListening();
+          await _manualFallback('${state!['id']}');
         } finally {
           _verifying = false;
         }

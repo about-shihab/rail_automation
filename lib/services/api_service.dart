@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'rail_api_client.dart';
 import 'app_config.dart';
 import 'booking_activity.dart';
 import 'secure_store.dart';
@@ -43,9 +44,6 @@ class ApiService {
       };
       queryParams['seat_class'] = requestSeatClass(seatClass);
 
-      final uri = Uri.parse('$baseUrl/bookings/search-trips-v2')
-          .replace(queryParameters: queryParams);
-
       final headers = <String, String>{
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -81,15 +79,13 @@ class ApiService {
         headers['Cookie'] = authSession.cookie!;
       }
 
-      final response = await http
-          .get(uri, headers: headers)
-          .timeout(
-            Duration(
-              seconds: AppConfig.instance.number('request_timeout_seconds'),
-            ),
-            onTimeout: () =>
-                throw Exception('Connection timed out. Shohoz server is slow.'),
-          );
+      final response = await RailApiClient.request(
+        operation: 'search_trips',
+        method: 'GET',
+        payload: queryParams,
+        auth: authSession,
+        headers: headers,
+      );
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(response.body) as Map<String, dynamic>;
@@ -436,9 +432,6 @@ class ApiService {
         queryParams['cft_response'] = cftResponse;
       }
 
-      final uri = Uri.parse('$baseUrl/bookings/seat-layout')
-          .replace(queryParameters: queryParams);
-
       final headers = <String, String>{
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
@@ -479,13 +472,13 @@ class ApiService {
       if (authSession.cookie?.isNotEmpty == true) {
         headers['Cookie'] = authSession.cookie!;
       }
-      final response = await http
-          .get(uri, headers: headers)
-          .timeout(
-            Duration(
-              seconds: AppConfig.instance.number('request_timeout_seconds'),
-            ),
-          );
+      final response = await RailApiClient.request(
+        operation: 'seat_layout',
+        method: 'GET',
+        payload: queryParams,
+        auth: authSession,
+        headers: headers,
+      );
       if (response.statusCode != 200) {
         String? serverMsg;
         try {
@@ -1112,8 +1105,6 @@ class ApiService {
     required AuthSession authSession,
   }) async {
     return BookingActivity.instance.run(BookingActivityStage.tickets, () async {
-      final uri = Uri.parse('$baseUrl/purchase-history');
-
       final headers = <String, String>{
         'Accept': 'application/json',
         'Content-Type': 'application/json',
@@ -1139,13 +1130,13 @@ class ApiService {
         headers['X-Device-Id'] = authSession.deviceId;
       }
 
-      final response = await http
-          .get(uri, headers: headers)
-          .timeout(
-            Duration(
-              seconds: AppConfig.instance.number('request_timeout_seconds'),
-            ),
-          );
+      final response = await RailApiClient.request(
+        operation: 'purchase_history',
+        method: 'GET',
+        payload: <String, dynamic>{},
+        auth: authSession,
+        headers: headers,
+      );
       if (response.statusCode == 200) {
         final json = jsonDecode(response.body) as Map<String, dynamic>;
         final data = json['data'] as List<dynamic>? ?? [];
@@ -1168,8 +1159,6 @@ class ApiService {
     required AuthSession authSession,
   }) async {
     return BookingActivity.instance.run(BookingActivityStage.tickets, () async {
-      final uri = Uri.parse('$baseUrl/trips/download-ticket/$orderId');
-
       final headers = <String, String>{
         'Accept': 'application/pdf, application/json, */*',
         'Origin': 'https://eticket.railway.gov.bd',
@@ -1194,13 +1183,13 @@ class ApiService {
         headers['X-Device-Id'] = authSession.deviceId;
       }
 
-      final response = await http
-          .get(uri, headers: headers)
-          .timeout(
-            Duration(
-              seconds: AppConfig.instance.number('request_timeout_seconds'),
-            ),
-          );
+      final response = await RailApiClient.request(
+        operation: 'download_ticket',
+        method: 'GET',
+        payload: {'order_id': orderId},
+        auth: authSession,
+        headers: headers,
+      );
       if (response.statusCode == 200) {
         final bytes = response.bodyBytes;
         // If server returned a JSON wrapper containing the download URL:

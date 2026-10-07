@@ -1,3 +1,4 @@
+import '../services/railway_credentials_rejected.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -49,7 +50,7 @@ class _TripsScreenState extends State<TripsScreen> {
 
     try {
       final session = await AuthSession.load();
-      if (session == null || !session.isValid) {
+      if (session == null) {
         if (mounted) {
           setState(() {
             _loadingPurchased = false;
@@ -69,12 +70,7 @@ class _TripsScreenState extends State<TripsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        final errStr = e.toString().toLowerCase();
-        if (errStr.contains('401') ||
-            errStr.contains('session expired') ||
-            errStr.contains('re-login') ||
-            errStr.contains('authenticate') ||
-            errStr.contains('unauthorized')) {
+        if (RailwayCredentialsRejected.isError(e)) {
           await AuthSession.clear();
           if (mounted) {
             setState(() {
@@ -103,7 +99,7 @@ class _TripsScreenState extends State<TripsScreen> {
 
     try {
       final session = await AuthSession.load();
-      if (session == null || !session.isValid) {
+      if (session == null) {
         // If no active app session, open the official purchase history portal in browser
         await TicketDownloadService.openInBrowser(
           TicketDownloadService.purchaseHistoryUrl,
@@ -161,12 +157,7 @@ class _TripsScreenState extends State<TripsScreen> {
       );
 
       if (mounted) {
-        final errStr = e.toString().toLowerCase();
-        if (errStr.contains('401') ||
-            errStr.contains('session expired') ||
-            errStr.contains('re-login') ||
-            errStr.contains('authenticate') ||
-            errStr.contains('unauthorized')) {
+        if (RailwayCredentialsRejected.isError(e)) {
           await AuthSession.clear();
           if (!mounted) return;
           Navigator.push(

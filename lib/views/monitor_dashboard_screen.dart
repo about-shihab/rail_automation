@@ -6,7 +6,6 @@ import 'app_shell.dart';
 
 import 'package:provider/provider.dart';
 
-import '../models/auth_session.dart';
 import '../services/booking_service.dart';
 import '../services/credit_service.dart';
 import '../services/language_service.dart';
@@ -109,12 +108,6 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     if (_sessionExpired || !mounted) return;
     final m = context.read<MonitorService>();
     if (m.needsLogin) {
-      final session = await AuthSession.load();
-      if (session != null && session.isValid) {
-        // Current saved session is completely valid; clear the stale error
-        m.clearErrors();
-        return;
-      }
       setState(() => _sessionExpired = true);
       await Future.delayed(const Duration(milliseconds: 900));
       if (mounted && !_redirecting) {

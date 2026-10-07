@@ -1,3 +1,5 @@
+import '../services/railway_credentials_rejected.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -75,7 +77,7 @@ class _SearchScreenState extends State<SearchScreen>
   Future<void> _initSession() async {
     final session = await AuthSession.load();
     if (!mounted) return;
-    if (session == null || !session.isValid) {
+    if (session == null) {
       if (mounted) {
         Navigator.pushReplacement(
           context,
@@ -192,7 +194,7 @@ class _SearchScreenState extends State<SearchScreen>
       return;
     }
     await _saveStationHistory(_fromCity, _toCity);
-    if (_auth == null || !_auth!.isValid) {
+    if (_auth == null) {
       _logout();
       return;
     }
@@ -224,12 +226,7 @@ class _SearchScreenState extends State<SearchScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        final errStr = e.toString().toLowerCase();
-        if (errStr.contains('401') ||
-            errStr.contains('session expired') ||
-            errStr.contains('re-login') ||
-            errStr.contains('authenticate') ||
-            errStr.contains('unauthorized')) {
+        if (RailwayCredentialsRejected.isError(e)) {
           _logout();
           return;
         }

@@ -53,15 +53,24 @@ class SmsService {
         ?.group(1);
   }
 
-  Future<void> startListening({void Function(String)? onOtpReceived}) async {
+  Future<void> startListening({
+    void Function(String)? onOtpReceived,
+    void Function()? onUnavailable,
+  }) async {
     if (_subscription != null || _starting) return;
     _starting = true;
     try {
-      if (!await hasPermission()) return;
+      if (!await hasPermission()) {
+        onUnavailable?.call();
+        return;
+      }
       _startedAt = DateTime.now();
       _timeout = Timer(
         Duration(seconds: AppConfig.instance.number('otp_window_seconds')),
-        stopListening,
+        () {
+          stopListening();
+          onUnavailable?.call();
+        },
       );
       _subscription = _events.receiveBroadcastStream().listen(
         (event) {
@@ -80,8 +89,12 @@ class SmsService {
         },
         onError: (_) {
           stopListening();
+          onUnavailable?.call();
         },
       );
+    } catch (_) {
+      stopListening();
+      onUnavailable?.call();
     } finally {
       _starting = false;
     }

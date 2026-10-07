@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../utils/railway_stations.dart';
+import 'rail_api_config.dart';
 
 /// Public operational settings only. Credentials never belong in this table.
 class AppConfig extends ChangeNotifier {
@@ -18,11 +20,22 @@ class AppConfig extends ChangeNotifier {
     'low_availability_threshold': 4,
     'max_seats': 4,
     'default_seat_class': 'SNIGDHA',
-    'seat_classes': ['ALL', 'SNIGDHA', 'S_CHAIR', 'AC_S', 'AC_B', 'F_SEAT', 'F_BERTH', 'SHOVON'],
+    'seat_classes': [
+      'ALL',
+      'SNIGDHA',
+      'S_CHAIR',
+      'AC_S',
+      'AC_B',
+      'F_SEAT',
+      'F_BERTH',
+      'SHOVON',
+    ],
     'stations': railwayStations,
     'sms_senders': ['RAILWAY', 'SHOHOZ', 'BANGLADESH RAILWAY'],
     'otp_length': 6,
     'otp_window_seconds': 180,
+    'login_retry_interval_seconds': 60,
+    'api_operations': <String, dynamic>{},
   };
   Map<String, dynamic> _values = Map.of(defaults);
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _subscription;
@@ -31,6 +44,8 @@ class AppConfig extends ChangeNotifier {
   String string(String key) => _values[key] as String;
   List<String> strings(String key) => List<String>.from(_values[key]);
   int get pollSeconds => number('poll_interval_seconds');
+  Map<String, dynamic> apiOperation(String key) =>
+      Map<String, dynamic>.from(_values['api_operations'][key] ?? {});
 
   static Map<String, dynamic> validate(Map<String, dynamic> input) {
     final result = Map<String, dynamic>.of(defaults);
@@ -42,6 +57,7 @@ class AppConfig extends ChangeNotifier {
       'max_seats': (1, 4),
       'otp_length': (4, 8),
       'otp_window_seconds': (30, 600),
+      'login_retry_interval_seconds': (10, 3600),
     };
 
     // Check for minutes-based time limit aliases from DB (e.g. time_limit_minutes: 60 or time_limit: 60)
@@ -61,37 +77,52 @@ class AppConfig extends ChangeNotifier {
         timeLimitSecs = n <= 180 ? n * 60 : n;
       }
     }
-    if (timeLimitSecs != null && timeLimitSecs >= 60 && timeLimitSecs <= 86400) {
+    if (timeLimitSecs != null &&
+        timeLimitSecs >= 60 &&
+        timeLimitSecs <= 86400) {
       result['free_monitor_seconds'] = timeLimitSecs;
     }
 
     for (final entry in limits.entries) {
-      if (entry.key == 'free_monitor_seconds' && timeLimitSecs != null) continue;
+      if (entry.key == 'free_monitor_seconds' && timeLimitSecs != null) {
+        continue;
+      }
       final raw = input[entry.key];
-      final val = raw is num ? raw.toInt() : (raw is String ? int.tryParse(raw) : null);
+      final val = raw is num
+          ? raw.toInt()
+          : (raw is String ? int.tryParse(raw) : null);
       if (val != null && val >= entry.value.$1 && val <= entry.value.$2) {
         result[entry.key] = val;
       }
     }
     for (final key in ['seat_classes', 'stations', 'sms_senders']) {
       final value = input[key];
-      if (value is List && value.isNotEmpty && value.every((e) => e is String && e.trim().isNotEmpty)) {
+      if (value is List &&
+          value.isNotEmpty &&
+          value.every((e) => e is String && e.trim().isNotEmpty)) {
         result[key] = value.cast<String>().toSet().toList();
       }
     }
     final seat = input['default_seat_class'];
-    if (seat is String && seat != 'ALL' && (result['seat_classes'] as List).contains(seat)) {
+    if (seat is String &&
+        seat != 'ALL' &&
+        (result['seat_classes'] as List).contains(seat)) {
       result['default_seat_class'] = seat;
     }
+    result['api_operations'] = RailApiConfig.validate(input['api_operations']);
     return result;
   }
 
-  final Map<String, dynamic> _rawFirestoreData = {};
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _settingsSubscription;
+  final Map<String, Map<String, dynamic>> _documents = {};
+  Map<String, dynamic> get _rawFirestoreData => {
+    ...?_documents['workflow'],
+    ...?_documents['settings'],
+  };
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _settingsSubscription;
 
   Future<void> _updateFromDoc(String source, Map<String, dynamic>? data) async {
-    if (data == null) return;
-    _rawFirestoreData.addAll(data);
+    _documents[source] = data ?? {};
     _values = validate(_rawFirestoreData);
     syncError = null;
     final prefs = await SharedPreferences.getInstance();
@@ -105,23 +136,23 @@ class AppConfig extends ChangeNotifier {
     try {
       final firestore = FirebaseFirestore.instance;
       // Fetch workflow doc & settings doc
-      final workflowDoc = await firestore.collection('app_config').doc('workflow').get();
-      final settingsDoc = await firestore.collection('app_config').doc('settings').get();
+      final workflowDoc = await firestore
+          .collection('app_config')
+          .doc('workflow')
+          .get();
+      final settingsDoc = await firestore
+          .collection('app_config')
+          .doc('settings')
+          .get();
 
-      if (workflowDoc.exists && workflowDoc.data() != null) {
-        _rawFirestoreData.addAll(workflowDoc.data()!);
-      }
-      if (settingsDoc.exists && settingsDoc.data() != null) {
-        _rawFirestoreData.addAll(settingsDoc.data()!);
-      }
+      _documents['workflow'] = workflowDoc.data() ?? {};
+      _documents['settings'] = settingsDoc.data() ?? {};
 
-      if (_rawFirestoreData.isNotEmpty) {
-        _values = validate(_rawFirestoreData);
-        syncError = null;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString(cacheKey, jsonEncode(_values));
-        notifyListeners();
-      }
+      _values = validate(_rawFirestoreData);
+      syncError = null;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(cacheKey, jsonEncode(_values));
+      notifyListeners();
     } catch (e) {
       debugPrint('[AppConfig] Firestore sync error: $e');
     }
@@ -138,14 +169,16 @@ class AppConfig extends ChangeNotifier {
         .collection('app_config')
         .doc('workflow')
         .snapshots()
-        .listen((doc) {
-      if (doc.exists && doc.data() != null) {
-        unawaited(_updateFromDoc('workflow', doc.data()));
-      }
-    }, onError: (_) {
-      syncError = 'Using cached settings; database settings are unavailable.';
-      notifyListeners();
-    });
+        .listen(
+          (doc) {
+            unawaited(_updateFromDoc('workflow', doc.data()));
+          },
+          onError: (_) {
+            syncError =
+                'Using cached settings; database settings are unavailable.';
+            notifyListeners();
+          },
+        );
 
     _settingsSubscription?.cancel();
     _settingsSubscription = FirebaseFirestore.instance
@@ -153,17 +186,17 @@ class AppConfig extends ChangeNotifier {
         .doc('settings')
         .snapshots()
         .listen((doc) {
-      if (doc.exists && doc.data() != null) {
-        unawaited(_updateFromDoc('settings', doc.data()));
-      }
-    }, onError: (_) {});
+          unawaited(_updateFromDoc('settings', doc.data()));
+        }, onError: (_) {});
   }
 
   Future<void> reloadCache() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
     try {
-      _values = validate(jsonDecode(prefs.getString(cacheKey) ?? '{}') as Map<String, dynamic>);
+      _values = validate(
+        jsonDecode(prefs.getString(cacheKey) ?? '{}') as Map<String, dynamic>,
+      );
     } catch (_) {
       _values = Map.of(defaults);
     }

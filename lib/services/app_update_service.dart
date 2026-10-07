@@ -56,7 +56,7 @@ class AppUpdateService extends ChangeNotifier {
   static final instance = AppUpdateService();
   static const endpoint = String.fromEnvironment(
     'UPDATE_MANIFEST_URL',
-    defaultValue: 'https://railautomation-1993.web.app/update.json',
+    defaultValue: 'https://about-shihab.github.io/rail-pro/update.json',
   );
   static const cacheKey = 'rail_update_policy_v1';
   static const installedKey = 'rail_installed_build';

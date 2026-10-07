@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:http/http.dart' as http;
+import 'rail_api_client.dart';
+import 'rail_api_config.dart';
 
 import '../models/auth_session.dart';
 import '../models/seat_layout.dart';
@@ -177,9 +178,6 @@ class BookingService {
           ? BookingActivityStage.verifying
           : BookingActivityStage.reserving,
       () async {
-        if (!auth.isValid) {
-          throw StateError('Login expired. Please sign in again.');
-        }
         final actionToken = await SecureStore.read('rail_action_token');
         final headers = <String, String>{
           'Accept': 'application/json',
@@ -194,14 +192,15 @@ class BookingService {
           if (auth.cookie?.isNotEmpty == true) 'Cookie': auth.cookie!,
           'X-Action-Token': ?actionToken,
         };
-        final uri = Uri.parse('${ApiService.baseUrl}$path');
-        final future = method == 'PATCH'
-            ? http.patch(uri, headers: headers, body: jsonEncode(body))
-            : http.post(uri, headers: headers, body: jsonEncode(body));
-        final response = await future.timeout(
-          Duration(
-            seconds: AppConfig.instance.number('request_timeout_seconds'),
-          ),
+        final operation = RailApiConfig.paths.entries
+            .firstWhere((entry) => entry.value == path)
+            .key;
+        final response = await RailApiClient.request(
+          operation: operation,
+          method: method,
+          payload: body,
+          auth: auth,
+          headers: headers,
         );
         final nextToken = response.headers['x-action-token'];
         if (nextToken != null) {

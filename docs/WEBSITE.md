@@ -16,4 +16,4 @@ Styles and interaction live in `docs/website.css` and `docs/website.js`. The int
 
 `docs/privacy.html` renders the repository privacy policy. Regenerate it when the source policy changes.
 
-Download URL, version and size come from public `update.json`, generated alongside the signed APK by the release workflow. Before publication, the download button shows an unavailable state. Root preview reads `docs/update.json`; the hosted page reads `update.json` beside itself. A private repository requires separate public distribution, such as Firebase Hosting. See [UPDATES.md](UPDATES.md) for automatic versioning, mandatory updates and configuration.
+Download URL, version and size come from public `update.json`, generated alongside the signed APK by the release workflow. Before publication, the download button shows an unavailable state. Root preview reads `docs/update.json`; the hosted page reads `update.json` beside itself. A private repository requires separate public distribution, using GitHub Pages and Releases in `about-shihab/rail-pro`. See [UPDATES.md](UPDATES.md) for automatic versioning, mandatory updates and configuration.
