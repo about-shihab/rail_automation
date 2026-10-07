@@ -42,10 +42,12 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   String _savedPhone = '';
   String _savedPassword = '';
   Timer? _sessionRetry;
+  Timer? _loadingTimeoutTimer;
 
   @override
   void dispose() {
     _sessionRetry?.cancel();
+    _loadingTimeoutTimer?.cancel();
     super.dispose();
   }
 
@@ -110,6 +112,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
             },
             onPageStarted: (url) {
               _sessionRetry?.cancel();
+              _loadingTimeoutTimer?.cancel();
               if (mounted) setState(() => _isLoading = true);
             },
             onPageFinished: (url) async {
@@ -128,7 +131,8 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
               }
               // Keep loading overlay active while auto-login proceeds in the webview.
               // Reveal the page if manual interaction is needed after timeout.
-              Future.delayed(const Duration(seconds: 8), () {
+              _loadingTimeoutTimer?.cancel();
+              _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
                 if (mounted && !_hasNavigated && _isLoading) {
                   setState(() => _isLoading = false);
                 }
@@ -462,6 +466,8 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       return;
     }
     _hasNavigated = true;
+    _sessionRetry?.cancel();
+    _loadingTimeoutTimer?.cancel();
     setState(() => _isLoading = true);
     try {
       final payload = AuthSession.decodeJwtPayload(token);
