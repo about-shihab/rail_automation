@@ -94,12 +94,16 @@ class TurnstileGate {
   ///  * [forceFresh] true → execute the preloaded widget for this booking.
   /// Returns null when the user cancelled or the UI isn't available
   /// (app in background → caller should fall back to a notification).
-  Future<String?> acquire({String label = '', bool forceFresh = false}) {
+  Future<String?> acquire({
+    String label = '',
+    bool forceFresh = false,
+    String? siteKey,
+  }) {
     final running = _inflight;
     if (running != null) return running; // one prompt, many waiters
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh).whenComplete(() {
+    f = _acquire(label, forceFresh, siteKey).whenComplete(() {
       if (identical(_inflight, f)) {
         _inflight = null;
         _route = null;
@@ -110,15 +114,21 @@ class TurnstileGate {
     return f;
   }
 
-  Future<String?> _acquire(String label, bool forceFresh) async {
+  Future<String?> _acquire(
+    String label,
+    bool forceFresh, [
+    String? siteKey,
+  ]) async {
     // Capture a pending silent execution before any async storage/navigation.
     // It may finish while the overlay is mounting; its result still belongs
     // to this request and must not start a second challenge.
+    final targetKey = siteKey ??
+        (label == 'Railway login' ? '0x4AAAAAAB5VTjZ90pUxRuXR' : null);
     final session = TurnstileSession.instance;
     final pending = session.generating
-        ? session.generate()
+        ? session.generate(targetKey)
         : (forceFresh && workerAcquire == null && canShowUi
-              ? session.generateWhenAttached()
+              ? session.generateWhenAttached(targetKey)
               : null);
     if (forceFresh) {
       await invalidate();
@@ -130,7 +140,7 @@ class TurnstileGate {
     if (worker != null) return worker(label);
     if (!canShowUi) return null;
 
-    final request = pending ?? session.generateWhenAttached();
+    final request = pending ?? session.generateWhenAttached(targetKey);
     final nav = NotificationService.navigatorKey.currentState!;
     HapticFeedback.mediumImpact();
 

@@ -37,7 +37,7 @@ class TurnstileSession extends ChangeNotifier {
     _ready = null;
   }
 
-  Future<String?> generate() {
+  Future<String?> generate([String? siteKey]) {
     if (_pending != null) return _pending!.future;
     if (!attached) return Future.value(null);
     final pending = Completer<String?>();
@@ -47,13 +47,13 @@ class TurnstileSession extends ChangeNotifier {
     error = null;
     notifyListeners();
     _armTimeout();
-    unawaited(_execute(id));
+    unawaited(_execute(id, siteKey));
     return pending.future;
   }
 
   /// A cold notification launch may reach the booking UI before Android has
   /// attached its platform view. Keep loading instead of dropping the request.
-  Future<String?> generateWhenAttached() async {
+  Future<String?> generateWhenAttached([String? siteKey]) async {
     if (!attached) {
       final id = _requestId;
       final waiter = _attachmentWaiter ??= Completer<void>();
@@ -67,10 +67,10 @@ class TurnstileSession extends ChangeNotifier {
       }
       if (!attached || id != _requestId) return null;
     }
-    return generate();
+    return generate(siteKey);
   }
 
-  Future<void> _execute(int id) async {
+  Future<void> _execute(int id, [String? siteKey]) async {
     try {
       final pending = _pending!;
       if (!_ready!.isCompleted) await _evaluate!(bootstrap);
@@ -79,7 +79,11 @@ class TurnstileSession extends ChangeNotifier {
         pending.future.then<void>((_) {}),
       ]).timeout(const Duration(seconds: 30));
       if (_pending == null || id != _requestId) return;
-      await _evaluate!('window.__railBegin($id);');
+      if (siteKey != null && siteKey.isNotEmpty) {
+        await _evaluate!('window.__railBegin($id, ${jsonEncode(siteKey)});');
+      } else {
+        await _evaluate!('window.__railBegin($id);');
+      }
     } catch (_) {
       if (_pending != null && id == _requestId) {
         fail('Security check unavailable. Please retry.');
@@ -174,15 +178,18 @@ class TurnstileSession extends ChangeNotifier {
 (function () {
   if (window.__railPrepared) return;
   window.__railPrepared = true;
+  var defaultSiteKey = ${jsonEncode('0x4AAAAAACNkZ_TxQr_zpcZW')};
+  var currentSiteKey = defaultSiteKey;
   var widget = null, active = null, used = false;
   function post(status, extra, id) {
     window.flutter_inappwebview.callHandler('TurnstileBridge',
       Object.assign({status: status, requestId: id}, extra || {}));
   }
-  function render() {
+  function render(key) {
     try {
+    currentSiteKey = key || defaultSiteKey;
     widget = turnstile.render('#challenge', {
-      sitekey: ${jsonEncode('0x4AAAAAACNkZ_TxQr_zpcZW')},
+      sitekey: currentSiteKey,
       size: 'compact', theme: 'auto', appearance: 'interaction-only',
       execution: 'execute', retry: 'never',
       'refresh-expired': 'manual', 'refresh-timeout': 'manual',
@@ -204,16 +211,28 @@ class TurnstileSession extends ChangeNotifier {
     }
   }
   window.__railCancel = function () { active = null; };
-  window.__railBegin = function (id) {
+  window.__railBegin = function (id, sitekey) {
     active = null;
-    if (used) turnstile.reset(widget);
-    used = true;
-    active = id;
-    turnstile.execute(widget);
+    var target = sitekey || defaultSiteKey;
+    if (widget !== null && currentSiteKey !== target) {
+      try { turnstile.remove(widget); } catch (e) {}
+      widget = null;
+      used = false;
+    }
+    if (widget === null) {
+      active = id;
+      render(target);
+      turnstile.execute(widget);
+    } else {
+      if (used) turnstile.reset(widget);
+      used = true;
+      active = id;
+      turnstile.execute(widget);
+    }
   };
   var script = document.createElement('script');
   script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-  script.onload = render;
+  script.onload = function() { render(defaultSiteKey); };
   script.onerror = function () {
     window.__railPrepared = false;
     script.remove();

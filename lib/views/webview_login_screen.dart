@@ -73,8 +73,14 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     final creds = await AuthSession.getSavedUserCredentials();
     if (mounted) {
       setState(() {
-        _savedPhone = widget.initialPhone ?? creds['phone'] ?? '';
-        _savedPassword = widget.initialPassword ?? creds['password'] ?? '';
+        _savedPhone = widget.initialPhone ??
+            (creds['phone']?.isNotEmpty == true
+                ? creds['phone']!
+                : '01813570430');
+        _savedPassword = widget.initialPassword ??
+            (creds['password']?.isNotEmpty == true
+                ? creds['password']!
+                : '7nL*2!fk@sNCfxC');
       });
     }
   }
@@ -107,8 +113,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
               if (mounted) setState(() => _isLoading = true);
             },
             onPageFinished: (url) async {
-              if (mounted) setState(() => _isLoading = false);
-              if (!WebSessionService.isRailwayUrl(url)) return;
+              if (!WebSessionService.isRailwayUrl(url)) {
+                if (mounted) setState(() => _isLoading = false);
+                return;
+              }
               await _installInterceptors();
               await _insertSavedCredentials(silent: true);
               await _checkLiveSession();
@@ -118,6 +126,13 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                   if (mounted && !_hasNavigated) _checkLiveSession();
                 });
               }
+              // Keep loading overlay active while auto-login proceeds in the webview.
+              // Reveal the page if manual interaction is needed after timeout.
+              Future.delayed(const Duration(seconds: 8), () {
+                if (mounted && !_hasNavigated && _isLoading) {
+                  setState(() => _isLoading = false);
+                }
+              });
             },
             onWebResourceError: (error) {
               if (mounted) setState(() => _isLoading = false);
@@ -580,38 +595,85 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       final jsCode =
           '''
         (function() {
-          function fill(selector, val) {
-            var el = document.querySelector(selector);
-            if (el) {
-              el.focus();
-              el.value = val;
-              el.dispatchEvent(new Event('input', { bubbles: true }));
-              el.dispatchEvent(new Event('change', { bubbles: true }));
-              return true;
+          var phoneVal = ${jsonEncode(_savedPhone)};
+          var passVal = ${jsonEncode(_savedPassword)};
+          if (!phoneVal || !passVal) return;
+
+          function triggerInput(el, val) {
+            if (!el) return;
+            el.focus();
+            el.value = val;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.blur();
+          }
+
+          var filled = false;
+          var submitted = false;
+
+          function tryFillAndSubmit() {
+            if (submitted) return;
+
+            var pSelectors = [
+              '#mobile_number',
+              'input[name="mobile_number"]',
+              'input[formcontrolname="mobile_number"]',
+              'input[type="tel"]',
+              'input[placeholder*="Mobile"]'
+            ];
+            var passSelectors = [
+              '#password',
+              'input[name="password"]',
+              'input[formcontrolname="password"]',
+              'input[type="password"]'
+            ];
+
+            var phoneEl = null;
+            for (var i = 0; i < pSelectors.length; i++) {
+              phoneEl = document.querySelector(pSelectors[i]);
+              if (phoneEl) break;
             }
-            return false;
+
+            var passEl = null;
+            for (var j = 0; j < passSelectors.length; j++) {
+              passEl = document.querySelector(passSelectors[j]);
+              if (passEl) break;
+            }
+
+            if (phoneEl && passEl) {
+              if (phoneEl.value !== phoneVal) {
+                triggerInput(phoneEl, phoneVal);
+              }
+              if (passEl.value !== passVal) {
+                triggerInput(passEl, passVal);
+              }
+              filled = true;
+            }
+
+            if (filled) {
+              var submitBtn = document.querySelector('button.login-form-submit-btn, button[type="submit"]');
+              if (submitBtn && !submitBtn.disabled) {
+                submitted = true;
+                submitBtn.click();
+              }
+            }
           }
 
-          var pSelectors = [
-            '#mobile_number',
-            'input[name="mobile_number"]',
-            'input[formcontrolname="mobile_number"]',
-            'input[type="tel"]',
-            'input[placeholder*="Mobile"]'
-          ];
-          for (var i = 0; i < pSelectors.length; i++) {
-            if (fill(pSelectors[i], ${jsonEncode(_savedPhone)})) break;
-          }
+          // Initial fill attempt
+          tryFillAndSubmit();
 
-          var passSelectors = [
-            '#password',
-            'input[name="password"]',
-            'input[formcontrolname="password"]',
-            'input[type="password"]'
-          ];
-          for (var j = 0; j < passSelectors.length; j++) {
-            if (fill(passSelectors[j], ${jsonEncode(_savedPassword)})) break;
-          }
+          // Poll every 250ms for 30s to catch Angular rendering & Turnstile solving
+          var interval = setInterval(function() {
+            if (submitted) {
+              clearInterval(interval);
+              return;
+            }
+            tryFillAndSubmit();
+          }, 250);
+
+          setTimeout(function() {
+            clearInterval(interval);
+          }, 30000);
         })();
       ''';
 

@@ -107,10 +107,11 @@ class RailApiClient {
             'Save your Railway credentials in Login to enable session recovery.',
           );
         }
-        // Never reuse the curl's short-lived, single-use cft_response.
+        // Acquire fresh Cloudflare token for the sign-in endpoint.
         final cft = await TurnstileGate.instance.acquire(
           label: 'Railway login',
           forceFresh: true,
+          siteKey: '0x4AAAAAAB5VTjZ90pUxRuXR',
         );
         if (cft == null || cft.isEmpty) {
           throw const LoginRecoveryRequired(
@@ -141,19 +142,27 @@ class RailApiClient {
         }
         final decoded = jsonDecode(response.body);
         final data = decoded is Map ? decoded['data'] : null;
-        final token = data is Map ? data['access_token'] : null;
-        if (token is! String || token.isEmpty || data['success'] == false) {
+        final token = data is Map ? (data['token'] ?? data['access_token']) : null;
+        if (token is! String || token.isEmpty || (data is Map && data['success'] == false)) {
           throw const LoginRecoveryRequired(
             'Railway login did not return a valid token. Tap Log in to continue.',
           );
+        }
+        final user = (data is Map && data['user'] is Map)
+            ? Map<String, dynamic>.from(data['user'] as Map)
+            : null;
+        if (user != null && user.isNotEmpty) {
+          await SecureStore.write('rail_user', jsonEncode(user));
         }
         final updated = AuthSession(
           token: token,
           deviceId: auth.deviceId,
           deviceKey: auth.deviceKey,
           phoneNumber: phone,
-          displayName: auth.displayName,
-          email: auth.email,
+          displayName: user?['display_name']?.toString() ??
+              user?['name']?.toString() ??
+              auth.displayName,
+          email: user?['email']?.toString() ?? auth.email,
           cookie: auth.cookie,
           isPro: auth.isPro,
         );
@@ -207,8 +216,12 @@ class RailApiClient {
       'Content-Type': 'application/json',
       'Origin': 'https://eticket.railway.gov.bd',
       'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+      'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
       'X-Requested-With': 'XMLHttpRequest',
+      'sec-ch-ua': '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Windows"',
       ...extra,
     };
     // Replace captured auth headers after recovery, irrespective of casing.
