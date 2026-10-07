@@ -53,12 +53,16 @@ updates the saved session and removes the previous session's action token.
 Generic Cloudflare failures, timeouts, and server errors do not replay mutations.
 Only an explicit incorrect username/password response from sign-in causes an
 automatic redirect to the Login WebView. Other recovery failures show an error
-and keep the current screen available.
+and keep the current screen available. The search error includes a **Log in**
+action, and **Profile → Railway login** is always available for manual recovery.
 
 Login uses a fresh, single-use `cft_response` from the existing verification flow.
 The token captured in curl cannot be used for recurring logins. When credentials
 are unavailable, verification cannot be shown, or login fails, the app posts a
-login-required notification. Tapping it opens the Railway Login screen. A login
+login-required notification. Tapping it opens a fresh Railway Login screen,
+clearing stale browser/session storage while retaining saved credentials and
+search settings. Canceling verification does not start the login cooldown;
+successful manual login clears any previous cooldown. A login
 performed in another browser can invalidate the token even before its JWT expiry;
 the server-rejection path handles that case.
 

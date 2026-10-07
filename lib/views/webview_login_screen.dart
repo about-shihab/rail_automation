@@ -58,7 +58,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   Future<void> _prepareWebView() async {
     try {
       await _loadSavedCredentials();
-      if (widget.clearSession) await WebSessionService.clear();
+      if (widget.clearSession) {
+        await AuthSession.clear();
+        await SecureStore.delete('rail_action_token');
+        await WebSessionService.clear();
+      }
       if (mounted) _initWebView();
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
@@ -482,6 +486,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         isLoggedIn: true,
       );
       await AuthSession.save(session);
+      await SecureStore.delete('rail_login_attempt_at');
       unawaited(FirebaseUserService().syncUserOnLogin(session));
       _navigateToSearch();
     } catch (_) {

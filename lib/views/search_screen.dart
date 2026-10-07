@@ -1,4 +1,5 @@
 import '../services/railway_credentials_rejected.dart';
+import '../services/login_recovery_required.dart';
 
 import 'dart:async';
 
@@ -233,6 +234,14 @@ class _SearchScreenState extends State<SearchScreen>
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(e.toString().replaceAll('Exception: ', '')),
+            action: e is LoginRecoveryRequired
+                ? SnackBarAction(
+                    label: LanguageService.instance.tr('Log in', 'লগইন'),
+                    textColor: Colors.white,
+                    onPressed: () =>
+                        NotificationService().openBooking('rail://login'),
+                  )
+                : null,
             backgroundColor: AppColors.error,
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(

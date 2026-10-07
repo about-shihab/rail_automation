@@ -13,6 +13,7 @@ import 'package:rail_automation/services/app_config.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/otp_verifier.dart';
 import 'package:rail_automation/services/rail_api_client.dart';
+import 'package:rail_automation/services/login_recovery_required.dart';
 import 'package:rail_automation/services/rail_api_config.dart';
 import 'package:rail_automation/services/railway_credentials_rejected.dart';
 import 'package:rail_automation/services/secure_store.dart';
@@ -138,6 +139,62 @@ void main() {
     expect((await AuthSession.load())!.token, auth.token);
   });
 
+  test('cancelled verification allows an immediate recovery retry', () async {
+    TurnstileGate.instance.workerAcquire = (_) async {
+      challenges++;
+      return challenges == 1 ? null : 'fresh-cft';
+    };
+    var logins = 0;
+    await http.runWithClient(
+      () async {
+        await expectLater(request(), throwsA(isA<LoginRecoveryRequired>()));
+        expect(await SecureStore.read('rail_login_attempt_at'), isNull);
+        expect((await request()).statusCode, 200);
+      },
+      () => MockClient((req) async {
+        if (req.url.path.endsWith('sign-in')) {
+          logins++;
+          return http.Response('{"data":{"access_token":"renewed"}}', 200);
+        }
+        return http.Response(
+          '{}',
+          req.headers['Authorization'] == 'Bearer old-session' ? 401 : 200,
+        );
+      }),
+    );
+    expect(logins, 1);
+    expect(challenges, 2);
+  });
+
+  test(
+    'cooldown offers manual login without another API login attempt',
+    () async {
+      await SecureStore.write(
+        'rail_login_attempt_at',
+        '${DateTime.now().millisecondsSinceEpoch}',
+      );
+      await http.runWithClient(
+        () async {
+          await expectLater(
+            request(),
+            throwsA(
+              isA<LoginRecoveryRequired>().having(
+                (e) => e.message,
+                'message',
+                contains('Tap Log in'),
+              ),
+            ),
+          );
+        },
+        () => MockClient((req) async {
+          expect(req.url.path, isNot(endsWith('sign-in')));
+          return http.Response('{}', 401);
+        }),
+      );
+      expect(challenges, 0);
+    },
+  );
+
   test('expired JWT refreshes before sending the operation', () async {
     final jwt =
         'e30.${base64Url.encode(utf8.encode('{"exp":1}')).replaceAll('=', '')}.sig';
@@ -213,7 +270,7 @@ void main() {
     var calls = 0;
     await http.runWithClient(
       () async {
-        await expectLater(request(), throwsStateError);
+        await expectLater(request(), throwsA(isA<LoginRecoveryRequired>()));
       },
       () => MockClient((_) async {
         calls++;
@@ -261,8 +318,8 @@ void main() {
       var logins = 0;
       await http.runWithClient(
         () async {
-          await expectLater(request(), throwsStateError);
-          await expectLater(request(), throwsStateError);
+          await expectLater(request(), throwsA(isA<LoginRecoveryRequired>()));
+          await expectLater(request(), throwsA(isA<LoginRecoveryRequired>()));
         },
         () => MockClient((req) async {
           if (req.url.path.endsWith('sign-in')) {

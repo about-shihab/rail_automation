@@ -7,6 +7,7 @@ import 'app_config.dart';
 import 'notification_service.dart';
 import 'rail_api_config.dart';
 import 'railway_credentials_rejected.dart';
+import 'login_recovery_required.dart';
 import 'secure_store.dart';
 import 'turnstile_gate.dart';
 
@@ -43,7 +44,9 @@ class RailApiClient {
       response = await _send(operation, method, payload, session, headers);
       if (_authRejected(response)) {
         await NotificationService().showLoginRequired();
-        throw StateError('Session expired. Open Railway login to continue.');
+        throw const LoginRecoveryRequired(
+          'Session expired. Tap Log in to continue.',
+        );
       }
     }
     return response;
@@ -83,8 +86,14 @@ class RailApiClient {
             DateTime.now().millisecondsSinceEpoch - last <
                 AppConfig.instance.number('login_retry_interval_seconds') *
                     1000) {
-          throw StateError(
-            'Login recovery is waiting. Please sign in to continue.',
+          final seconds =
+              ((AppConfig.instance.number('login_retry_interval_seconds') *
+                              1000 -
+                          (DateTime.now().millisecondsSinceEpoch - last)) /
+                      1000)
+                  .ceil();
+          throw LoginRecoveryRequired(
+            'Automatic login can retry in $seconds seconds. Tap Log in to continue now.',
           );
         }
         final credentials = await AuthSession.getSavedUserCredentials();
@@ -94,23 +103,26 @@ class RailApiClient {
             password.isEmpty ||
             (auth.phoneNumber?.isNotEmpty == true &&
                 phone != auth.phoneNumber)) {
-          throw StateError(
+          throw const LoginRecoveryRequired(
             'Save your Railway credentials in Login to enable session recovery.',
           );
         }
-        await SecureStore.write(
-          'rail_login_attempt_at',
-          '${DateTime.now().millisecondsSinceEpoch}',
-        );
         // Never reuse the curl's short-lived, single-use cft_response.
         final cft = await TurnstileGate.instance.acquire(
           label: 'Railway login',
           forceFresh: true,
         );
         if (cft == null || cft.isEmpty) {
-          throw StateError('Open the app to verify Railway login.');
+          throw const LoginRecoveryRequired(
+            'Tap Log in to verify Railway login.',
+          );
         }
         await TurnstileGate.instance.invalidate();
+        // A cancelled or unavailable human check is not a login API attempt.
+        await SecureStore.write(
+          'rail_login_attempt_at',
+          '${DateTime.now().millisecondsSinceEpoch}',
+        );
         final response = await _send(
           'sign_in',
           'POST',
@@ -123,7 +135,7 @@ class RailApiClient {
           throw const RailwayCredentialsRejected();
         }
         if (response.statusCode != 200) {
-          throw StateError(
+          throw const LoginRecoveryRequired(
             'Railway login recovery failed. Please sign in again.',
           );
         }
@@ -131,7 +143,9 @@ class RailApiClient {
         final data = decoded is Map ? decoded['data'] : null;
         final token = data is Map ? data['access_token'] : null;
         if (token is! String || token.isEmpty || data['success'] == false) {
-          throw StateError('Railway login did not return a valid token.');
+          throw const LoginRecoveryRequired(
+            'Railway login did not return a valid token. Tap Log in to continue.',
+          );
         }
         final updated = AuthSession(
           token: token,
@@ -144,7 +158,9 @@ class RailApiClient {
           isPro: auth.isPro,
         );
         if (!updated.isValid) {
-          throw StateError('Railway returned an expired token.');
+          throw const LoginRecoveryRequired(
+            'Railway returned an expired token. Tap Log in to continue.',
+          );
         }
         await AuthSession.save(updated);
         await SecureStore.delete('rail_action_token');

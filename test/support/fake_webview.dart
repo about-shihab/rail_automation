@@ -3,11 +3,23 @@ import 'package:webview_flutter_platform_interface/webview_flutter_platform_inte
 
 class FakeWebViewPlatform extends WebViewPlatform {
   late FakeWebViewController controller;
+  int cookieClears = 0;
+  int cacheClears = 0;
+  int storageClears = 0;
+
+  @override
+  PlatformWebViewCookieManager createPlatformCookieManager(
+    PlatformWebViewCookieManagerCreationParams params,
+  ) => FakeCookieManager(params, () => cookieClears++);
 
   @override
   PlatformWebViewController createPlatformWebViewController(
     PlatformWebViewControllerCreationParams params,
-  ) => controller = FakeWebViewController(params);
+  ) => controller = FakeWebViewController(
+    params,
+    onClearCache: () => cacheClears++,
+    onClearStorage: () => storageClears++,
+  );
 
   @override
   PlatformNavigationDelegate createPlatformNavigationDelegate(
@@ -21,7 +33,18 @@ class FakeWebViewPlatform extends WebViewPlatform {
 }
 
 class FakeWebViewController extends PlatformWebViewController {
-  FakeWebViewController(super.params) : super.implementation();
+  FakeWebViewController(
+    super.params, {
+    required this.onClearCache,
+    required this.onClearStorage,
+  }) : super.implementation();
+  final VoidCallback onClearCache;
+  final VoidCallback onClearStorage;
+
+  @override
+  Future<void> clearCache() async => onClearCache();
+  @override
+  Future<void> clearLocalStorage() async => onClearStorage();
 
   late JavaScriptChannelParams channel;
   FakeNavigationDelegate? delegate;
@@ -115,4 +138,14 @@ class FakeWebViewWidget extends PlatformWebViewWidget {
     color: Color(0xfff1f5f4),
     child: Center(child: Text('Human verification')),
   );
+}
+
+class FakeCookieManager extends PlatformWebViewCookieManager {
+  FakeCookieManager(super.params, this.onClear) : super.implementation();
+  final VoidCallback onClear;
+  @override
+  Future<bool> clearCookies() async {
+    onClear();
+    return true;
+  }
 }

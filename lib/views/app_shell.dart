@@ -619,6 +619,19 @@ class ProfileTab extends StatelessWidget {
           ),
           const SizedBox(height: 14),
 
+          AppCard(
+            child: tile(
+              Icons.login_rounded,
+              lang.tr('Railway login', 'আবার রেলওয়ে লগইন'),
+              sub: lang.tr(
+                'Sign in again to renew your Railway session',
+                'রেলওয়ে সেশন নবায়ন করতে আবার লগইন করুন',
+              ),
+              onTap: () => NotificationService().openBooking('rail://login'),
+            ),
+          ),
+          const SizedBox(height: 14),
+
           // ── Sign Out Card ──
           AppCard(
             child: tile(

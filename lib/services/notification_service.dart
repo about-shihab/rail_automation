@@ -111,7 +111,9 @@ class NotificationService {
       }
       _pendingBooking = null;
       navigator.push(
-        MaterialPageRoute(builder: (_) => const WebviewLoginScreen()),
+        MaterialPageRoute(
+          builder: (_) => const WebviewLoginScreen(clearSession: true),
+        ),
       );
       return;
     }

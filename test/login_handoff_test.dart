@@ -13,6 +13,8 @@ import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/services/theme_service.dart';
+import 'package:rail_automation/services/secure_store.dart';
+import 'package:rail_automation/services/notification_service.dart';
 import 'package:rail_automation/services/trip_history_service.dart';
 import 'package:rail_automation/views/app_shell.dart';
 import 'package:rail_automation/views/webview_login_screen.dart';
@@ -43,7 +45,10 @@ void main() {
           ChangeNotifierProvider.value(value: TripHistoryService()),
           ChangeNotifierProvider.value(value: FirebaseUserService()),
         ],
-        child: const MaterialApp(home: WebviewLoginScreen()),
+        child: MaterialApp(
+          navigatorKey: NotificationService.navigatorKey,
+          home: const WebviewLoginScreen(),
+        ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 50));
@@ -64,6 +69,10 @@ void main() {
       }),
     );
     await monitor.restore(startTimers: false);
+    await SecureStore.write(
+      'rail_login_attempt_at',
+      '${DateTime.now().millisecondsSinceEpoch}',
+    );
     await showLogin(tester);
     final message = jsonEncode({
       'type': 'STORAGE_TOKEN',
@@ -85,8 +94,39 @@ void main() {
     expect(find.byType(AppShell), findsOneWidget);
     expect(AppShell.tab.value, AppShell.tabSearch);
     expect((await AuthSession.load())?.token, 'fresh-login-token');
+    expect(await SecureStore.read('rail_login_attempt_at'), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'manual relogin clears stale session but keeps saved credentials',
+    (tester) async {
+      await AuthSession.save(
+        AuthSession(token: 'stale-token', deviceId: 'device', deviceKey: 'key'),
+      );
+      await AuthSession.saveUserCredentials('01700000000', 'test-password');
+      await SecureStore.write('rail_action_token', 'stale-action');
+      await showLogin(tester);
+      NotificationService().openBooking('rail://login');
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(await AuthSession.load(), isNull);
+      expect(await SecureStore.read('rail_action_token'), isNull);
+      expect(
+        (await AuthSession.getSavedUserCredentials())['phone'],
+        '01700000000',
+      );
+      expect(
+        (await AuthSession.getSavedUserCredentials())['password'],
+        'test-password',
+      );
+      expect(webview.cookieClears, 1);
+      expect(webview.cacheClears, 1);
+      expect(webview.storageClears, 1);
+      expect(webview.controller.url, 'https://eticket.railway.gov.bd/login');
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('expired or off-origin bridge sessions never complete login', (
     tester,
