@@ -24,7 +24,6 @@ import '../services/web_session_service.dart';
 import '../services/firebase_user_service.dart';
 import '../services/credit_service.dart';
 import '../utils/app_theme.dart';
-import '../widgets/fancy_train_loader.dart';
 import '../widgets/station_autocomplete.dart';
 import '../widgets/journey_search_button.dart';
 
@@ -624,21 +623,6 @@ class _SearchScreenState extends State<SearchScreen>
               ),
             ],
           ),
-
-          // Loading overlay
-          if (_loading)
-            Positioned.fill(
-              child: ColoredBox(
-                color: AppColors.scaffoldBg(isDark).withValues(alpha: 0.9),
-                child: FancyTrainLoader(
-                  message: LanguageService.of(
-                    context,
-                    listen: false,
-                  ).t('searching'),
-                  showCard: true,
-                ),
-              ),
-            ),
         ],
       ),
     );

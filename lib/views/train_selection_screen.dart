@@ -16,7 +16,6 @@ import 'webview_login_screen.dart';
 import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'watch_options_dialog.dart';
-import 'reservation_screen.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
   final TripSearchResponse searchResponse;
@@ -40,10 +39,7 @@ class TrainSelectionScreen extends StatelessWidget {
     final monitor = context.read<MonitorService>();
     if (await BookingService.pending() != null) {
       if (context.mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ReservationScreen()),
-        );
+        AppShell.goTo(context, AppShell.tabMonitor);
       }
       return;
     }
@@ -125,6 +121,7 @@ class TrainSelectionScreen extends StatelessWidget {
               backgroundColor: AppColors.primaryDark,
             ),
           );
+          AppShell.goTo(context, AppShell.tabMonitor);
           return;
         }
       } else {
@@ -210,6 +207,7 @@ class TrainSelectionScreen extends StatelessWidget {
     );
     if (intent == null || !context.mounted) return;
     final selectedTrain = searchResponse.trains.where((t) => t.tripNumber == train).firstOrNull;
+    AppShell.goTo(context, AppShell.tabMonitor);
     monitor.startMonitoring(
       intent: intent,
       fromCity: fromCity,
@@ -220,10 +218,13 @@ class TrainSelectionScreen extends StatelessWidget {
       departureDateTimeJd: selectedTrain?.departureDateTimeJd,
       departureDateTime: selectedTrain?.departureDateTime,
     );
-    AppShell.goTo(context, AppShell.tabMonitor);
   }
 
   Future<void> _openMultiTrainAutoBook(BuildContext context) async {
+    if (await BookingService.pending() != null) {
+      if (context.mounted) AppShell.goTo(context, AppShell.tabMonitor);
+      return;
+    }
     final session = await AuthSession.load();
     if (!context.mounted) return;
     if (session == null) {
@@ -262,7 +263,9 @@ class TrainSelectionScreen extends StatelessWidget {
       ),
     );
 
-    if (selectedTrains == null || selectedTrains.isEmpty || !context.mounted) return;
+    if (selectedTrains == null || selectedTrains.isEmpty || !context.mounted) {
+      return;
+    }
 
     final intent = await showWatchOptions(
       context,
@@ -271,6 +274,7 @@ class TrainSelectionScreen extends StatelessWidget {
     );
     if (intent == null || !context.mounted) return;
 
+    AppShell.goTo(context, AppShell.tabMonitor);
     monitor.startMonitoring(
       intent: intent,
       fromCity: fromCity,
@@ -279,7 +283,6 @@ class TrainSelectionScreen extends StatelessWidget {
       targetTrains: selectedTrains,
       targetSeatClass: initialClass,
     );
-    AppShell.goTo(context, AppShell.tabMonitor);
   }
 
   Future<void> _book(BuildContext context, TrainTrip train) async {

@@ -533,6 +533,20 @@ class BookingService {
     if (data['success'] != true) {
       throw StateError('Railway did not verify this OTP.');
     }
+    // The website updates its logged-in user from the OTP response before
+    // looking up initialPurchaseData<phone_number> on the payment page.
+    final user = await checkoutUser(auth);
+    final verifiedUser = data['user'];
+    if (verifiedUser is Map) {
+      if (verifiedUser['name'] != null) {
+        user['display_name'] = verifiedUser['name'];
+      }
+      final mobile = verifiedUser['mobile'] ?? verifiedUser['phone_number'];
+      if (mobile != null && '$mobile'.isNotEmpty) {
+        user['phone_number'] = '$mobile';
+      }
+    }
+    await SecureStore.write('rail_user', jsonEncode(user));
     state['status'] = 'readyForPayment';
     state['otp'] = otp;
     await save(state);
@@ -611,6 +625,34 @@ class BookingService {
     if (data['success'] != true) {
       throw StateError('Railway could not resend the OTP.');
     }
+  }
+
+  /// Checkout indexes the reservation by the user object's phone_number,
+  /// rather than the native session's phone or the login payload's mobile.
+  static Future<Map<String, dynamic>> checkoutUser(AuthSession auth) async {
+    final raw = await SecureStore.read('rail_user');
+    Map<String, dynamic> user = {};
+    try {
+      final decoded = jsonDecode(raw ?? '{}');
+      if (decoded is Map) user = Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    final credentials = await AuthSession.getSavedUserCredentials();
+    final candidates = [
+      user['phone_number'],
+      user['mobile_number'],
+      user['mobile'],
+      auth.phoneNumber,
+      credentials['phone'],
+    ];
+    final phone = candidates
+        .map((v) => v?.toString().trim() ?? '')
+        .firstWhere((v) => v.isNotEmpty, orElse: () => '');
+    if (phone.isNotEmpty) user['phone_number'] = phone;
+    if (user['display_name'] == null && auth.displayName != null) {
+      user['display_name'] = auth.displayName;
+    }
+    if (user['email'] == null && auth.email != null) user['email'] = auth.email;
+    return user;
   }
 
   static Map<String, dynamic> webStorage(

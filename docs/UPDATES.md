@@ -1,5 +1,10 @@
 # Versions and public releases
 
+Search uses one API loading overlay. Starting auto-book, adding a train to an
+active search, and reopening an existing reservation lead to the Tickets tab.
+After OTP verification, checkout restores the Railway user phone and reservation
+under the same storage key before opening the trip-info payment page.
+
 Railway login recovery, API settings, and booking/OTP alerts:
 [Railway API workflow configuration](RAIL_API_WORKFLOW.md).
 

@@ -11,6 +11,7 @@ import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/sms_service.dart';
+import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/models/purchased_ticket.dart';
 import 'package:rail_automation/views/booking_screen.dart';
 
@@ -74,6 +75,23 @@ void main() {
             webview.controller.scripts.first,
             contains('initialPurchaseData01700000000'),
           );
+          // Railway uses localStorage.user.phone_number to find this exact key.
+          final script = webview.controller.scripts.first;
+          final localValues = jsonDecode(
+            script.split('Object.entries(')[1].split(').forEach')[0],
+          );
+          final user = jsonDecode(localValues['user']);
+          final sessionValues = jsonDecode(
+            script.split('Object.entries(')[2].split(').forEach')[0],
+          );
+          expect(user['phone_number'], '01700000000');
+          expect(
+            jsonDecode(
+              sessionValues['initialPurchaseData${user['phone_number']}'],
+            )['reservedSeats'],
+            isNotEmpty,
+          );
+
           expect(
             webview.controller.scripts.first,
             contains('continue_booking_otp_verified'),
@@ -112,6 +130,55 @@ void main() {
       );
     },
   );
+
+  test(
+    'checkout normalizes mobile-only identity and preserves the profile',
+    () async {
+      await SecureStore.write(
+        'rail_user',
+        jsonEncode({
+          'mobile_number': '01700000000',
+          'display_name': 'Test user',
+          'id': 123,
+        }),
+      );
+      final user = await BookingService.checkoutUser(
+        (await AuthSession.load())!,
+      );
+      expect(user['phone_number'], '01700000000');
+      expect(user['id'], 123);
+      expect(user['display_name'], 'Test user');
+    },
+  );
+
+  test('OTP response updates the identity used by checkout', () async {
+    final state = (await BookingService.pending())!;
+    state['status'] = 'awaitingOtp';
+    await BookingService.save(state);
+    await SecureStore.write('rail_user', jsonEncode({'id': 123}));
+    await http.runWithClient(
+      () async {
+        await BookingService.verifyOtp('123456', (await AuthSession.load())!);
+        final user = await BookingService.checkoutUser(
+          (await AuthSession.load())!,
+        );
+        expect(user['phone_number'], '01700000000');
+        expect(user['display_name'], 'Verified user');
+        expect(user['id'], 123);
+      },
+      () => MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'data': {
+              'success': true,
+              'user': {'name': 'Verified user', 'mobile': '01700000000'},
+            },
+          }),
+          200,
+        ),
+      ),
+    );
+  });
 
   testWidgets('success URL alone never confirms or clears unpaid reservation', (
     tester,

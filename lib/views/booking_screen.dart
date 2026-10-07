@@ -98,7 +98,7 @@ class _BookingScreenState extends State<BookingScreen> {
           ? BookingService.tripInfoUrl
           : widget.url;
 
-      final userRaw = await SecureStore.read('rail_user');
+      final user = await BookingService.checkoutUser(session);
       final cftToken = await SecureStore.read('rail_cft_token');
       final values = <String, String>{
         'token': session.token.startsWith('Bearer ')
@@ -106,17 +106,13 @@ class _BookingScreenState extends State<BookingScreen> {
             : session.token,
         'uudid': session.deviceId,
         'ssdk': session.deviceKey,
-        'user': ?userRaw,
+        'user': jsonEncode(user),
         if (cftToken != null && cftToken.isNotEmpty) 'cft_token': cftToken,
       };
       Map<String, dynamic> storage = {};
       if (reservation != null &&
           ['awaitingOtp', 'readyForPayment'].contains(reservation['status'])) {
-        final user = userRaw == null
-            ? <String, dynamic>{}
-            : jsonDecode(userRaw) as Map<String, dynamic>;
-        final phone =
-            user['phone_number']?.toString() ?? session.phoneNumber ?? '';
+        final phone = user['phone_number']?.toString() ?? '';
         if (phone.isNotEmpty && reservation['expiresAt'] != null) {
           storage = BookingService.webStorage(reservation, phone);
         }
@@ -125,6 +121,8 @@ class _BookingScreenState extends State<BookingScreen> {
       if (isReadyForPayment && storage.isEmpty) {
         throw StateError('Reservation phone or checkout data is missing.');
       }
+      final actionToken = await SecureStore.read('rail_action_token');
+      if (actionToken?.isNotEmpty == true) storage['atk'] = actionToken;
 
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
