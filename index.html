@@ -237,14 +237,14 @@ section h2::after{content:"";position:absolute;left:0;bottom:0;width:48px;height
   <div class="wrap">
     <nav>
       <a class="logo" href="#"><i><svg viewBox="0 0 24 24" fill="none" stroke="#241500" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="14" rx="3"/><path d="M5 11h14M9 21l2-4M15 21l-2-4"/></svg></i>রেল প্রো</a>
-      <a class="btn main sm dl" href="#"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>ডাউনলোড</a>
+      <a class="btn main sm dl" href="https://github.com/about-shihab/rail-pro/releases/latest/download/Rail-Pro.apk"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>ডাউনলোড</a>
     </nav>
     <div class="hgrid">
       <div>
         <h1>টিকিটের জন্য আর সারারাত জেগে থাকতে হবে না</h1>
         <p class="lead">রুট, ক্লাস আর সিট সংখ্যা ঠিক করে দিন। সিট খালি হলেই রেল প্রো আপনার জন্য সিট ধরে রাখার চেষ্টা করবে। পেমেন্ট করবেন আপনি নিজে।</p>
         <div class="cta">
-          <a class="btn main dl" href="#"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>অ্যান্ড্রয়েড অ্যাপ ডাউনলোড</a>
+          <a class="btn main dl" href="https://github.com/about-shihab/rail-pro/releases/latest/download/Rail-Pro.apk"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>অ্যান্ড্রয়েড অ্যাপ ডাউনলোড</a>
           <a class="btn ghost" href="#how">কীভাবে কাজ করে</a>
           <a class="btn ghost" href="https://www.facebook.com/railpro" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M14 8h3V4h-3a4 4 0 0 0-4 4v2H7v4h3v7h4v-7h3l1-4h-4V8z"/></svg>ফেসবুকে ফলো করুন</a>
         </div>
@@ -324,7 +324,7 @@ section h2::after{content:"";position:absolute;left:0;bottom:0;width:48px;height
     <div class="final">
       <h2>পরের টিকিটটা আর মিস নয়</h2>
       <p>অ্যাপটি নামিয়ে ২টি ফ্রি ক্রেডিট নিয়ে আজই সিট খোঁজা শুরু করুন।</p>
-      <a class="btn main dl" href="#"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>অ্যান্ড্রয়েড অ্যাপ ডাউনলোড</a>
+      <a class="btn main dl" href="https://github.com/about-shihab/rail-pro/releases/latest/download/Rail-Pro.apk"><svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14"/></svg>অ্যান্ড্রয়েড অ্যাপ ডাউনলোড</a>
       <a class="btn ghost" href="https://www.facebook.com/railpro" target="_blank" rel="noopener" style="margin-left:8px"><svg viewBox="0 0 24 24"><path d="M14 8h3V4h-3a4 4 0 0 0-4 4v2H7v4h3v7h4v-7h3l1-4h-4V8z"/></svg>ফেসবুকে ফলো করুন</a>
     </div>
     <p class="note">জেনে রাখুন: অ্যান্ড্রয়েডে সার্ভিস সর্বোচ্চ ৫ ঘণ্টা চলে। ওয়েব ও ডেস্কটপে অ্যাপ খোলা রাখতে হয়। রেলওয়ে নতুন যাচাই চাইলে অফিসিয়াল বুকিং পেজে শেষ করুন।</p>
@@ -337,8 +337,26 @@ section h2::after{content:"";position:absolute;left:0;bottom:0;width:48px;height
 (function(){
   document.documentElement.classList.add('js');
   /* এখানে আপনার অ্যাপের ডাউনলোড লিংক বসান (APK বা Play Store) */
-  var DOWNLOAD_URL="https://github.com/about-shihab/rail_automation/releases/download/v1.0.2/Rail-Pro.apk";
+  var DOWNLOAD_URL="https://github.com/about-shihab/rail-pro/releases/latest/download/Rail-Pro.apk";
   document.querySelectorAll('.dl').forEach(function(a){a.href=DOWNLOAD_URL});
+  fetch('update.json', {cache:'no-store'}).then(function(response){
+    if(!response.ok) throw new Error('Release metadata unavailable');
+    return response.json();
+  }).then(function(release){
+    if(!/^\d+\.\d+\.\d+$/.test(release.version) ||
+       !Number.isSafeInteger(release.build_number) || release.build_number<1 ||
+       !Number.isSafeInteger(release.size_bytes) || release.size_bytes<1 ||
+       release.apk_url!==DOWNLOAD_URL) return;
+    document.querySelectorAll('.dl').forEach(function(a){
+      a.title='Rail Pro v'+release.version;
+    });
+    var info=document.createElement('p');
+    info.className='release-version';
+    info.textContent='v'+release.version+' · Android APK · '+(release.size_bytes/1048576).toFixed(1)+' MB';
+    var target=document.querySelector('.final');
+    if(target) target.appendChild(info);
+  }).catch(function(){ /* The stable public APK link stays available. */ });
+
 
   var h=document.querySelector('.hero h1');
   h.innerHTML=h.textContent.trim().split(/\s+/).map(function(w,i){return '<span style="--i:'+i+'">'+w+'</span>'}).join(' ');
