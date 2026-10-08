@@ -80,7 +80,7 @@ class _TripsScreenState extends State<TripsScreen> {
               (tripId != null && t.tripId == tripId) ||
               (trainName.isNotEmpty &&
                   t.trainName.toLowerCase().contains(trainName.toLowerCase())) ||
-              (doj.isNotEmpty && t.dateOfJourney.contains(doj)),
+              (doj.isNotEmpty && t.journeyDate.contains(doj)),
           orElse: () => tickets.firstWhere(
             (t) => t.isConfirmed && !t.isRefunded && t.pnr.isNotEmpty && tripId != null && t.tripId == tripId,
             orElse: () => tickets.first,

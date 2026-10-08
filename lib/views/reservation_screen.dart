@@ -133,7 +133,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
               t.trainName.toLowerCase().contains(trainName.toLowerCase())) {
             return true;
           }
-          if (doj.isNotEmpty && t.dateOfJourney.contains(doj)) return true;
+          if (doj.isNotEmpty && t.journeyDate.contains(doj)) return true;
           return false;
         },
         orElse: () => tickets.firstWhere(

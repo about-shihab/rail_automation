@@ -596,7 +596,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                     style: TextStyle(fontSize: 11.5, color: Colors.grey),
                   ),
                   value: _resume,
-                  activeColor: AppColors.primary,
+                  activeThumbColor: AppColors.primary,
                   onChanged: widget.busy
                       ? null
                       : (value) => setState(() {
@@ -640,7 +640,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                     style: TextStyle(fontSize: 11.5, color: Colors.grey),
                   ),
                   value: _pushAnnouncements,
-                  activeColor: AppColors.primary,
+                  activeThumbColor: AppColors.primary,
                   onChanged: widget.busy
                       ? null
                       : (value) => setState(() {
@@ -864,7 +864,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
             _buildFieldInput(field, isDark),
             const SizedBox(height: 14),
           ],
-          if (extraWidget != null) extraWidget,
+          ?extraWidget,
         ],
       ),
     );
