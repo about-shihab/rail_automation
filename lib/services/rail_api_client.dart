@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -6,10 +8,9 @@ import '../models/auth_session.dart';
 import 'app_config.dart';
 import 'notification_service.dart';
 import 'rail_api_config.dart';
-import 'railway_credentials_rejected.dart';
 import 'login_recovery_required.dart';
 import 'secure_store.dart';
-import 'turnstile_gate.dart';
+import 'session_recovery.dart';
 
 /// One bounded recovery for explicit auth rejections. Unknown mutation outcomes
 /// and generic Cloudflare 403 responses are never replayed.
@@ -43,9 +44,11 @@ class RailApiClient {
       session = await refresh(session, rejectedToken: session.token);
       response = await _send(operation, method, payload, session, headers);
       if (_authRejected(response)) {
-        await NotificationService().showLoginRequired();
+        if (!SessionRecovery.instance.canRunWebView) {
+          await NotificationService().showLoginRequired();
+        }
         throw const LoginRecoveryRequired(
-          'Session expired. Tap Log in to continue.',
+          'Session expired. Please sign in again.',
         );
       }
     }
@@ -68,6 +71,12 @@ class RailApiClient {
     }
   }
 
+  /// Signs in again after the token expired or was rejected. This runs the real
+  /// Railway login page in a background WebView with the saved credentials
+  /// (the user only sees a loading screen) and stores the new session and
+  /// credentials. If that cannot finish, [LoginRecoveryRequired] or
+  /// [RailwayCredentialsRejected] is thrown and the caller shows the visible
+  /// login WebView.
   static Future<AuthSession> refresh(
     AuthSession auth, {
     String? rejectedToken,
@@ -79,104 +88,16 @@ class RailApiClient {
         if (latest.isValid && latest.token != (rejectedToken ?? auth.token)) {
           return latest;
         }
-        final last = int.tryParse(
-          await SecureStore.read('rail_login_attempt_at') ?? '',
+        return await SessionRecovery.instance.recover(
+          previous: auth,
+          rejectedToken: rejectedToken ?? auth.token,
         );
-        if (last != null &&
-            DateTime.now().millisecondsSinceEpoch - last <
-                AppConfig.instance.number('login_retry_interval_seconds') *
-                    1000) {
-          final seconds =
-              ((AppConfig.instance.number('login_retry_interval_seconds') *
-                              1000 -
-                          (DateTime.now().millisecondsSinceEpoch - last)) /
-                      1000)
-                  .ceil();
-          throw LoginRecoveryRequired(
-            'Automatic login can retry in $seconds seconds. Tap Log in to continue now.',
-          );
-        }
-        final credentials = await AuthSession.getSavedUserCredentials();
-        final phone = credentials['phone'] ?? '';
-        final password = credentials['password'] ?? '';
-        if (phone.isEmpty ||
-            password.isEmpty ||
-            (auth.phoneNumber?.isNotEmpty == true &&
-                phone != auth.phoneNumber)) {
-          throw const LoginRecoveryRequired(
-            'Save your Railway credentials in Login to enable session recovery.',
-          );
-        }
-        // Acquire fresh Cloudflare token for the sign-in endpoint.
-        final cft = await TurnstileGate.instance.acquire(
-          label: 'Railway login',
-          forceFresh: true,
-          siteKey: '0x4AAAAAAB5VTjZ90pUxRuXR',
-        );
-        if (cft == null || cft.isEmpty) {
-          throw const LoginRecoveryRequired(
-            'Tap Log in to verify Railway login.',
-          );
-        }
-        await TurnstileGate.instance.invalidate();
-        // A cancelled or unavailable human check is not a login API attempt.
-        await SecureStore.write(
-          'rail_login_attempt_at',
-          '${DateTime.now().millisecondsSinceEpoch}',
-        );
-        final response = await _send(
-          'sign_in',
-          'POST',
-          {'mobile_number': phone, 'password': password, 'cft_response': cft},
-          auth,
-          {},
-          authenticated: false,
-        );
-        if (RailwayCredentialsRejected.isResponse(response.body)) {
-          throw const RailwayCredentialsRejected();
-        }
-        if (response.statusCode != 200) {
-          throw const LoginRecoveryRequired(
-            'Railway login recovery failed. Please sign in again.',
-          );
-        }
-        final decoded = jsonDecode(response.body);
-        final data = decoded is Map ? decoded['data'] : null;
-        final token = data is Map ? (data['token'] ?? data['access_token']) : null;
-        if (token is! String || token.isEmpty || (data is Map && data['success'] == false)) {
-          throw const LoginRecoveryRequired(
-            'Railway login did not return a valid token. Tap Log in to continue.',
-          );
-        }
-        final user = (data is Map && data['user'] is Map)
-            ? Map<String, dynamic>.from(data['user'] as Map)
-            : null;
-        if (user != null && user.isNotEmpty) {
-          await SecureStore.write('rail_user', jsonEncode(user));
-        }
-        final updated = AuthSession(
-          token: token,
-          deviceId: auth.deviceId,
-          deviceKey: auth.deviceKey,
-          phoneNumber: phone,
-          displayName: user?['display_name']?.toString() ??
-              user?['name']?.toString() ??
-              auth.displayName,
-          email: user?['email']?.toString() ?? auth.email,
-          cookie: auth.cookie,
-          isPro: auth.isPro,
-        );
-        if (!updated.isValid) {
-          throw const LoginRecoveryRequired(
-            'Railway returned an expired token. Tap Log in to continue.',
-          );
-        }
-        await AuthSession.save(updated);
-        await SecureStore.delete('rail_action_token');
-        await NotificationService().clearLoginAlert();
-        return updated;
       } catch (_) {
-        await NotificationService().showLoginRequired();
+        // In the foreground the app opens the login screen itself; the
+        // notification is only for the background search service.
+        if (!SessionRecovery.instance.canRunWebView) {
+          await NotificationService().showLoginRequired();
+        }
         rethrow;
       } finally {
         _refreshes.remove(key);
@@ -193,6 +114,13 @@ class RailApiClient {
     bool authenticated = true,
   }) async {
     final settings = AppConfig.instance.apiOperation(operation);
+    if (settings['enabled'] == false) {
+      throw StateError(
+        'This Railway action is temporarily unavailable. Please try again later.',
+      );
+    }
+    // The database may override the HTTP verb; the caller's verb is the default.
+    final verb = (settings['method'] as String?) ?? method;
     var url =
         settings['url'] as String? ??
         '${RailApiConfig.baseUrl}${RailApiConfig.paths[operation]}';
@@ -203,7 +131,7 @@ class RailApiClient {
           )
         : runtime;
     var uri = Uri.parse(url);
-    if (method == 'GET' && body.isNotEmpty) {
+    if (verb == 'GET' && body.isNotEmpty) {
       uri = uri.replace(
         queryParameters: {
           for (final e in body.entries)
@@ -216,14 +144,31 @@ class RailApiClient {
       'Content-Type': 'application/json',
       'Origin': 'https://eticket.railway.gov.bd',
       'Referer': 'https://eticket.railway.gov.bd/',
-      'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
       'X-Requested-With': 'XMLHttpRequest',
-      'sec-ch-ua': '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+      'sec-ch-ua':
+          '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Sec-Fetch-Site': 'same-site',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Dest': 'empty',
       ...extra,
     };
+    // Database overrides (allow-listed, non-secret): global first, then the
+    // per-operation set. Matching is case-insensitive.
+    for (final overrides in [
+      AppConfig.instance.apiHeaders,
+      Map<String, String>.from(settings['headers'] as Map? ?? const {}),
+    ]) {
+      for (final entry in overrides.entries) {
+        headers.removeWhere(
+          (key, _) => key.toLowerCase() == entry.key.toLowerCase(),
+        );
+        headers[entry.key] = entry.value;
+      }
+    }
     // Replace captured auth headers after recovery, irrespective of casing.
     headers.removeWhere(
       (key, _) => [
@@ -261,13 +206,42 @@ class RailApiClient {
     });
     _queues[operation] = slot;
     await slot;
-    final future = switch (method) {
-      'GET' => http.get(uri, headers: headers),
-      'PATCH' => http.patch(uri, headers: headers, body: jsonEncode(body)),
-      _ => http.post(uri, headers: headers, body: jsonEncode(body)),
-    };
-    return future.timeout(
-      Duration(seconds: AppConfig.instance.number('request_timeout_seconds')),
+    final timeout = Duration(
+      seconds:
+          settings['timeout_seconds'] as int? ??
+          AppConfig.instance.number('request_timeout_seconds'),
     );
+    // Only idempotent reads are retried; a mutation with an unknown outcome
+    // must never be replayed.
+    final retries = verb == 'GET' ? (settings['retries'] as int? ?? 0) : 0;
+    final retryDelay = Duration(
+      seconds: settings['retry_delay_seconds'] as int? ?? 2,
+    );
+    for (var attempt = 0; ; attempt++) {
+      try {
+        final pendingResponse = switch (verb) {
+          'GET' => http.get(uri, headers: headers),
+          'PATCH' => http.patch(uri, headers: headers, body: jsonEncode(body)),
+          _ => http.post(uri, headers: headers, body: jsonEncode(body)),
+        };
+        final response = await pendingResponse.timeout(timeout);
+        final transient =
+            response.statusCode == 429 || response.statusCode >= 500;
+        if (transient && attempt < retries) {
+          await Future<void>.delayed(retryDelay * (attempt + 1));
+          continue;
+        }
+        return response;
+      } on TimeoutException {
+        if (attempt >= retries) rethrow;
+        await Future<void>.delayed(retryDelay * (attempt + 1));
+      } on SocketException {
+        if (attempt >= retries) rethrow;
+        await Future<void>.delayed(retryDelay * (attempt + 1));
+      } on http.ClientException {
+        if (attempt >= retries) rethrow;
+        await Future<void>.delayed(retryDelay * (attempt + 1));
+      }
+    }
   }
 }

@@ -1,4 +1,4 @@
-import '../services/railway_credentials_rejected.dart';
+import '../services/login_flow.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
@@ -70,7 +70,7 @@ class _TripsScreenState extends State<TripsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        if (RailwayCredentialsRejected.isError(e)) {
+        if (LoginFlow.needsLogin(e)) {
           await AuthSession.clear();
           if (mounted) {
             setState(() {
@@ -157,7 +157,7 @@ class _TripsScreenState extends State<TripsScreen> {
       );
 
       if (mounted) {
-        if (RailwayCredentialsRejected.isError(e)) {
+        if (LoginFlow.needsLogin(e)) {
           await AuthSession.clear();
           if (!mounted) return;
           Navigator.push(

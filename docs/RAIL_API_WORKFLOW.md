@@ -12,6 +12,20 @@ It is configuration data, not a Firebase CLI deployment file. This source change
 does not write configuration to the live database. Restrict configuration writes
 to administrators in your Firestore rules.
 
+Admins can also open **More → Admin → Configuration** in the app. The form edits
+search intervals, backoff, reservation expiry, session limits, and OTP timing.
+Expandable JSON editors cover API operations, request headers, and Turnstile site
+keys. Invalid values are rejected before saving. A save updates only changed
+fields in their current owning document (`settings` when it overrides a field,
+otherwise `workflow`), preserving other configuration. Concurrent changes to an
+edited field require reloading before saving. Firestore must grant the admin
+account read and write access to these documents; the existing app admin role
+check does not replace server-side rules.
+
+The Configuration tab also includes **Push admin announcements**. Keep it off
+until the sender and secure device registration are configured; deployment and
+validation steps are in [ADMIN_PUSH_NOTIFICATIONS.md](ADMIN_PUSH_NOTIFICATIONS.md).
+
 Each `api_operations` entry supports:
 
 | Field | Meaning |
@@ -36,6 +50,29 @@ default 60), including across app restarts and workers through encrypted storage
 at zero unless the API requires otherwise: delaying reservation or OTP calls uses
 up the Railway seat-hold window. Background scheduling on iOS remains subject to
 the operating system's minimum interval and execution limits.
+
+## Journey scheduling and departure deadline
+
+Searches more than 10 calendar days before the journey wait until midnight in
+Bangladesh, 10 days before the journey date. The Search screen offers **Schedule
+Search** for these dates, with class, quantity and automatic OTP options. Until
+sales open, manual refresh and background jobs make no Railway search requests.
+The Tickets screen shows the scheduled start. Schedules survive app restarts.
+
+Monitoring has no maximum-hours setting: it ends at the selected train's
+departure. For multiple trains, it continues until the last selected departure
+and excludes departed trains from alerts and booking. When a timetable is not
+yet available, the deadline is the end of the journey date and is refined when
+search results arrive. Pausing, booking and cancellation keep their existing
+behavior. Legacy `service_max_session_hours` does not limit a search.
+
+Android uses a delayed WorkManager job to start scheduled searches and recurring
+15-minute checks as a fallback after the foreground service ends. The foreground
+service still yields after five hours to respect Android's data-sync runtime
+limit. WorkManager timing can be deferred by Android, network availability and
+battery restrictions; scheduled background checks do not promise the fast
+foreground polling interval. Force-stopping the app prevents jobs until it is
+opened again. iOS scheduling remains subject to its background execution limits.
 
 ## Login recovery
 

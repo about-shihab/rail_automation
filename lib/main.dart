@@ -17,12 +17,15 @@ import 'utils/app_theme.dart';
 import 'services/credit_service.dart';
 import 'services/trip_history_service.dart';
 import 'services/app_config.dart';
+import 'services/admin_push_service.dart';
 import 'services/overlay_service.dart';
 import 'views/app_shell.dart';
 import 'views/webview_login_screen.dart';
 import 'widgets/turnstile_host.dart';
 import 'widgets/app_update_gate.dart';
 import 'widgets/booking_activity_overlay.dart';
+import 'widgets/session_recovery_host.dart';
+import 'services/login_flow.dart';
 import 'services/app_update_service.dart';
 
 void main() async {
@@ -52,6 +55,11 @@ void main() async {
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
   await firebaseUserService.initialize(proService: proService);
+  unawaited(
+    AdminPushService.instance.initialize(
+      phone: isLoggedIn ? session.phoneNumber : null,
+    ),
+  );
   await AppConfig.instance.initialize();
   unawaited(creditService.syncPackagesFromFirestore());
   if (session != null && isLoggedIn) {
@@ -120,6 +128,13 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (widget.startLoggedIn) {
+      // Token expired while the app was closed? Sign in again behind a
+      // loading screen before the user hits an error.
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => unawaited(LoginFlow.ensureSession()),
+      );
+    }
     if (ForegroundMonitor.initialized) {
       ForegroundMonitor.connectVerificationUi();
       _monitorUpdates = ForegroundMonitor.updates.listen((_) {
@@ -136,6 +151,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      unawaited(AdminPushService.instance.refresh());
       unawaited(ForegroundMonitor.syncBookingActivity());
       unawaited(AppUpdateService.instance.refresh(force: true));
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -143,6 +159,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
           NotificationService().openPendingBooking();
         }
       });
+      unawaited(LoginFlow.ensureSession());
       unawaited(_syncMonitor(startTimers: true));
       unawaited(OtpVerifier.listen());
       firebaseUser.setUserActive(true);
@@ -182,7 +199,11 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       darkTheme: AppThemes.darkTheme,
       themeMode: themeService.themeMode,
       builder: (context, child) => AppUpdateGate(
-        child: TurnstileHost(child: BookingActivityOverlay(child: child!)),
+        child: TurnstileHost(
+          child: SessionRecoveryHost(
+            child: BookingActivityOverlay(child: child!),
+          ),
+        ),
       ),
       home: widget.startLoggedIn
           ? AppShell(

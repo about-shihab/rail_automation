@@ -44,40 +44,11 @@ class ApiService {
       };
       queryParams['seat_class'] = requestSeatClass(seatClass);
 
+      // Browser fingerprint, auth and device headers are applied centrally by
+      // RailApiClient (and can be overridden from the database).
       final headers = <String, String>{
         'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Origin': 'https://eticket.railway.gov.bd',
-        'Referer': 'https://eticket.railway.gov.bd/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'X-Requested-With': 'XMLHttpRequest',
-        'sec-ch-ua':
-            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-ch-ua-mobile': '?0',
-        'Sec-Fetch-Site': 'same-site',
-        'Sec-Fetch-Mode': 'cors',
-        'Sec-Fetch-Dest': 'empty',
       };
-
-      if (authSession.token.isNotEmpty) {
-        headers['Authorization'] = authSession.token.startsWith('Bearer ')
-            ? authSession.token
-            : 'Bearer ${authSession.token}';
-      }
-
-      final devId = authSession.deviceId.isNotEmpty
-          ? authSession.deviceId
-          : AuthSession.generateUuid();
-      headers['X-Device-Id'] = devId;
-
-      if (authSession.deviceKey.isNotEmpty) {
-        headers['X-Device-Key'] = authSession.deviceKey;
-      }
-
-      if (authSession.cookie != null && authSession.cookie!.isNotEmpty) {
-        headers['Cookie'] = authSession.cookie!;
-      }
 
       final response = await RailApiClient.request(
         operation: 'search_trips',

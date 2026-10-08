@@ -42,7 +42,11 @@ class BookingService {
   static const storageKey = 'rail_pending_reservation_v1';
   static const tripInfoUrl =
       'https://eticket.railway.gov.bd/booking/train/trip-info';
-  static const reservationTimeoutMinutes = 5;
+
+  /// How long Railway holds a reserved seat. Configurable from the database
+  /// (`reservation_timeout_minutes`, default 5).
+  static int get reservationTimeoutMinutes =>
+      AppConfig.instance.number('reservation_timeout_minutes');
 
   static final _layoutRequests = <(int, int, String), Future<BookingLayout>>{};
 
@@ -106,7 +110,8 @@ class BookingService {
         await TripHistoryService().updateTripStatus(
           id,
           TripBookingStatus.expired,
-          failureReason: 'Reservation timed out after 5 minutes',
+          failureReason:
+              'Reservation timed out after $reservationTimeoutMinutes minutes',
         );
         await clear();
         return null;
@@ -153,7 +158,7 @@ class BookingService {
     }
     if (!value.containsKey('expiresAt')) {
       value['expiresAt'] = DateTime.now()
-          .add(const Duration(minutes: reservationTimeoutMinutes))
+          .add(Duration(minutes: reservationTimeoutMinutes))
           .toUtc()
           .toIso8601String();
     }

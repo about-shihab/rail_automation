@@ -1,4 +1,4 @@
-import '../services/railway_credentials_rejected.dart';
+import '../services/login_flow.dart';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -81,7 +81,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       }
     } catch (e) {
       final errStr = e.toString().replaceAll('Exception: ', '');
-      if (RailwayCredentialsRejected.isError(e) && mounted) {
+      if (LoginFlow.needsLogin(e) && mounted) {
         await AuthSession.clear();
         if (mounted) {
           Navigator.pushAndRemoveUntil(

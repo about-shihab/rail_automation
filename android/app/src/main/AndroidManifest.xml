@@ -10,6 +10,12 @@
         android:label="Rail Pro"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="br_broadcast_alerts" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_rail" />
         <service
             android:name="id.flutter.flutter_background_service.BackgroundService"
             android:exported="false"

@@ -523,10 +523,10 @@ class ProfileTab extends StatelessWidget {
             AppCard(
               child: tile(
                 Icons.admin_panel_settings_rounded,
-                lang.tr('User Management', 'ইউজার ম্যানেজমেন্ট'),
+                lang.tr('Admin', 'অ্যাডমিন'),
                 sub: lang.tr(
-                  'Approve transactions, credits, block & notify',
-                  'লেনদেন অনুমোদন, ক্রেডিট নিয়ন্ত্রণ ও নোটিফিকেশন',
+                  'Users, credits, notifications & app configuration',
+                  'ইউজার, ক্রেডিট, নোটিফিকেশন ও অ্যাপ কনফিগারেশন',
                 ),
                 trailing: const AdminPendingBadge(),
                 onTap: () => Navigator.push(

@@ -234,7 +234,7 @@ void main() {
       monitor.startMonitoring(
         fromCity: 'Dhaka',
         toCity: 'Chattogram',
-        dateOfJourney: '30-Sep-2026',
+        dateOfJourney: DateTime.now().add(const Duration(days: 20)).toIso8601String().split('T').first,
         targetSeatClass: 'SNIGDHA',
         targetTrains: ['Subarna Express', 'Sonar Bangla Express'],
       );

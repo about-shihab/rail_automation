@@ -29,6 +29,7 @@ dependencies:
   url_launcher: ^6.3.3
   # Pinned: 6.1.5's Android plugin uses a ProGuard file rejected by AGP 9.
   flutter_inappwebview: 6.2.0-beta.3
+  firebase_messaging: ^16.7.0
 
 dev_dependencies:
   flutter_test:

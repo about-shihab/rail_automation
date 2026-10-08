@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -19,16 +20,28 @@ class TripHistoryService extends ChangeNotifier {
   List<TripRecord> get trips => List.unmodifiable(_trips);
 
   List<TripRecord> get successfulTrips => _trips
-      .where((t) =>
-          t.status == TripBookingStatus.successful ||
-          t.status == TripBookingStatus.awaitingOtp)
+      .where(
+        (t) =>
+            t.status == TripBookingStatus.successful ||
+            t.status == TripBookingStatus.awaitingOtp,
+      )
       .toList();
 
   List<TripRecord> get failedTrips => _trips
-      .where((t) =>
-          t.status == TripBookingStatus.failed ||
-          t.status == TripBookingStatus.expired)
+      .where(
+        (t) =>
+            t.status == TripBookingStatus.failed ||
+            t.status == TripBookingStatus.expired,
+      )
       .toList();
+
+  /// Current status of a recorded trip, or null if it is unknown.
+  TripBookingStatus? statusOf(String id) {
+    for (final trip in _trips) {
+      if (trip.id == id) return trip.status;
+    }
+    return null;
+  }
 
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -37,15 +50,18 @@ class TripHistoryService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getStringList(_prefTripsKey);
       if (raw != null) {
-        _trips = raw.map((item) {
-          try {
-            return TripRecord.fromJson(
-              jsonDecode(item) as Map<String, dynamic>,
-            );
-          } catch (_) {
-            return null;
-          }
-        }).whereType<TripRecord>().toList();
+        _trips = raw
+            .map((item) {
+              try {
+                return TripRecord.fromJson(
+                  jsonDecode(item) as Map<String, dynamic>,
+                );
+              } catch (_) {
+                return null;
+              }
+            })
+            .whereType<TripRecord>()
+            .toList();
       }
       notifyListeners();
       unawaited(_syncFromFirestore());

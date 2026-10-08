@@ -1,10 +1,27 @@
 {
-  "poll_interval_seconds": 120,
+  "poll_interval_seconds": 60,
   "request_timeout_seconds": 15,
+  "search_jitter_percent": 15,
+  "search_backoff_multiplier": 2,
+  "search_max_backoff_seconds": 300,
+  "search_near_departure_minutes": 180,
+  "search_near_departure_interval_seconds": 30,
+  "reservation_timeout_minutes": 5,
+  "resume_search_after_expiry": true,
+  "admin_push_enabled": false,
   "login_retry_interval_seconds": 60,
   "otp_window_seconds": 180,
+  "api_headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9"
+  },
+  "turnstile_site_keys": {
+    "sign_in": "0x4AAAAAAB5VTjZ90pUxRuXR"
+  },
   "api_operations": {
     "sign_in": {
+      "enabled": true,
+      "timeout_seconds": 20,
       "url": "https://railspaapi.shohoz.com/v1.0/web/auth/sign-in",
       "min_interval_seconds": 0,
       "payload": {
@@ -14,8 +31,14 @@
       }
     },
     "search_trips": {
+      "enabled": true,
+      "method": "GET",
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/search-trips-v2",
-      "min_interval_seconds": 0,
+      "poll_interval_seconds": 60,
+      "min_interval_seconds": 5,
+      "timeout_seconds": 15,
+      "retries": 1,
+      "retry_delay_seconds": 3,
       "payload": {
         "from_city": "{{from_city}}",
         "to_city": "{{to_city}}",
@@ -24,6 +47,9 @@
       }
     },
     "seat_layout": {
+      "enabled": true,
+      "timeout_seconds": 20,
+      "retries": 1,
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/seat-layout",
       "min_interval_seconds": 0
     },
@@ -49,6 +75,9 @@
       }
     },
     "reserve_seat": {
+      "enabled": true,
+      "timeout_seconds": 20,
+      "retries": 0,
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/reserve-seat",
       "min_interval_seconds": 0,
       "payload": {
@@ -58,6 +87,8 @@
       }
     },
     "passenger_details": {
+      "enabled": true,
+      "timeout_seconds": 20,
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/passenger-details",
       "min_interval_seconds": 0,
       "payload": {
@@ -67,6 +98,8 @@
       }
     },
     "verify_otp": {
+      "enabled": true,
+      "timeout_seconds": 20,
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/verify-otp",
       "min_interval_seconds": 0,
       "payload": {
@@ -77,8 +110,9 @@
       }
     },
     "resend_otp": {
+      "enabled": true,
       "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/resend-otp",
-      "min_interval_seconds": 0,
+      "min_interval_seconds": 30,
       "payload": {
         "trip_id": "{{trip_id}}",
         "trip_route_id": "{{trip_route_id}}",

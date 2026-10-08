@@ -14,6 +14,7 @@ Future<BookingIntent?> showWatchOptions(
   String? seatClass,
   String? trainName,
   List<String>? targetTrains,
+  String? scheduledStart,
 }) => showModalBottomSheet<BookingIntent>(
   context: context,
   isScrollControlled: true,
@@ -23,6 +24,7 @@ Future<BookingIntent?> showWatchOptions(
     seatClass: seatClass,
     trainName: trainName,
     targetTrains: targetTrains,
+    scheduledStart: scheduledStart,
   ),
 );
 
@@ -30,7 +32,13 @@ class _WatchSheet extends StatefulWidget {
   final String? seatClass;
   final String? trainName;
   final List<String>? targetTrains;
-  const _WatchSheet({this.seatClass, this.trainName, this.targetTrains});
+  final String? scheduledStart;
+  const _WatchSheet({
+    this.seatClass,
+    this.trainName,
+    this.targetTrains,
+    this.scheduledStart,
+  });
   @override
   State<_WatchSheet> createState() => _WatchSheetState();
 }
@@ -154,6 +162,15 @@ class _WatchSheetState extends State<_WatchSheet> {
                 ],
               ),
               const SizedBox(height: 18),
+              if (widget.scheduledStart != null) ...[
+                Text(
+                  lang.tr(
+                    'Search starts ${widget.scheduledStart} (Bangladesh time), when your journey is within 10 days. Any train on this route can be booked in your selected class. Monitoring continues until departure.',
+                    'যাত্রার ১০ দিন আগে ${widget.scheduledStart} (বাংলাদেশ সময়) থেকে অনুসন্ধান শুরু হবে। এই রুটের যেকোনো ট্রেনে আপনার নির্বাচিত শ্রেণিতে বুকিং হবে। ট্রেন ছাড়া পর্যন্ত অনুসন্ধান চলবে।',
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
               Container(
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
@@ -361,6 +378,8 @@ class _WatchSheetState extends State<_WatchSheet> {
               JourneySearchButton(
                 label: credit.credits <= 0
                     ? lang.tr('Add credits', 'ক্রেডিট যোগ করুন')
+                    : widget.scheduledStart != null
+                    ? lang.tr('Schedule', 'সময়সূচি করুন')
                     : lang.tr('Start', 'শুরু করুন'),
                 icon: credit.credits <= 0
                     ? Icons.bolt_rounded

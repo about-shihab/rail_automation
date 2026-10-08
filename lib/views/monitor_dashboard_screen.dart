@@ -328,7 +328,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final ready = p?['status'] == 'readyForPayment' && !expired;
     final otp = p?['status'] == 'awaitingOtp' && !expired;
     final step = _step(m, p);
-    final isActive = m.isMonitoring && p == null && !m.needsLogin;
+    final isActive =
+        m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin;
     final exactError =
         m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
 
@@ -349,6 +350,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         onGuide: _showWalkthroughGuide,
         credits: credit.credits,
         isMonitoring: m.isMonitoring,
+        isScheduled: m.isScheduled,
       ),
       body: Stack(
         children: [
@@ -382,6 +384,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                             dateOfJourney: m.dateOfJourney,
                             step: step,
                             isActive: isActive,
+                            scheduledStart: m.isScheduled
+                                ? m.scheduledStartLabel
+                                : null,
                             ready: ready,
                             otp: otp,
                             credits: credit.credits,
@@ -498,11 +503,13 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   final VoidCallback? onGuide;
   final int credits;
   final bool isMonitoring;
+  final bool isScheduled;
 
   const _TopBar({
     this.onGuide,
     required this.credits,
     required this.isMonitoring,
+    this.isScheduled = false,
   });
 
   @override
@@ -582,7 +589,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                         const SizedBox(width: 4),
                         Flexible(
                           child: Text(
-                            isMonitoring
+                            isScheduled
+                                ? lang.tr('SCHEDULED', 'নির্ধারিত')
+                                : isMonitoring
                                 ? lang.tr('LIVE RADAR', 'লাইভ রাডার')
                                 : lang.tr('STANDBY', 'স্ট্যান্ডবাই'),
                             maxLines: 1,
@@ -920,6 +929,7 @@ class _CockpitHudCard extends StatelessWidget {
   final bool otp;
   final int credits;
   final String? remainingTime;
+  final String? scheduledStart;
   final AnimationController queueCtrl;
   final AnimationController pulseCtrl;
   final bool isDark;
@@ -937,6 +947,7 @@ class _CockpitHudCard extends StatelessWidget {
     required this.otp,
     required this.credits,
     this.remainingTime,
+    this.scheduledStart,
     required this.queueCtrl,
     required this.pulseCtrl,
     required this.isDark,
@@ -944,6 +955,9 @@ class _CockpitHudCard extends StatelessWidget {
   });
 
   String _statusTitle(LanguageService lang) {
+    if (scheduledStart != null) {
+      return lang.tr('Search scheduled', 'অনুসন্ধান নির্ধারিত');
+    }
     if (ready) {
       return lang.tr(
         'Seats held · Ready to pay',
@@ -1186,6 +1200,20 @@ class _CockpitHudCard extends StatelessWidget {
           const SizedBox(height: 12),
 
           // ── C. Illuminated Queue / Scanner Chamber ──
+          if (scheduledStart != null) ...[
+            Text(
+              lang.tr(
+                'Starts $scheduledStart (Bangladesh time) · 10 days before your journey',
+                'শুরু: $scheduledStart (বাংলাদেশ সময়) · যাত্রার ১০ দিন আগে',
+              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textPrimary(isDark),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           Container(
             constraints: const BoxConstraints(minHeight: 172),
             decoration: BoxDecoration(
@@ -1206,7 +1234,9 @@ class _CockpitHudCard extends StatelessWidget {
                   height: 176,
                   showCard: false,
                   subMessage: ready || otp ? null : '',
-                  message: !isActive && !ready && !otp && credits > 0
+                  message: scheduledStart != null
+                      ? _statusTitle(lang)
+                      : !isActive && !ready && !otp && credits > 0
                       ? lang.tr('Search paused', 'অনুসন্ধান স্থগিত')
                       : _statusTitle(lang),
                   stage: ready
@@ -1288,7 +1318,9 @@ class _CockpitHudCard extends StatelessWidget {
                                     : lang.tr('AWAITING OTP', 'ওটিপি যাচাই'))
                               : (credits <= 0
                                     ? 'ZERO CREDITS • RECHARGE'
-                                    : (isActive
+                                    : (scheduledStart != null
+                                          ? lang.tr('SCHEDULED', 'নির্ধারিত')
+                                          : isActive
                                           ? lang.tr(
                                               'SEARCHING',
                                               'সক্রিয় অনুসন্ধান',

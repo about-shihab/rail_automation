@@ -1,4 +1,4 @@
-import '../services/railway_credentials_rejected.dart';
+import '../services/login_flow.dart';
 import 'webview_login_screen.dart';
 
 import 'dart:convert';
@@ -208,7 +208,7 @@ class _BookingScreenState extends State<BookingScreen> {
         baseUrl: 'https://eticket.railway.gov.bd/rail-pro-checkout-bootstrap',
       );
     } catch (error) {
-      if (mounted && RailwayCredentialsRejected.isError(error)) {
+      if (mounted && LoginFlow.needsLogin(error)) {
         await AuthSession.clear();
         if (!mounted) return;
         Navigator.pushReplacement(

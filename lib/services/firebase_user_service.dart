@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -8,6 +9,7 @@ import '../models/auth_session.dart';
 import 'pro_service.dart';
 import 'credit_service.dart';
 import 'notification_service.dart';
+import 'admin_push_service.dart';
 
 /// Service responsible for managing user data in Firebase Firestore:
 /// - Stores and syncs user profiles in the 'users' collection (keyed by phone number).
@@ -23,7 +25,8 @@ class FirebaseUserService extends ChangeNotifier {
   bool _isAdmin = false;
   bool _isBlocked = false;
   String? _currentPhone;
-  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userDocSubscription;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+  _userDocSubscription;
   ProService? _proService;
 
   bool get isFirebaseReady => _isFirebaseReady;
@@ -35,7 +38,8 @@ class FirebaseUserService extends ChangeNotifier {
   bool get isBlocked => _isBlocked;
 
   String? get currentPhone => _currentPhone;
-  FirebaseFirestore? get firestore => _isFirebaseReady ? FirebaseFirestore.instance : null;
+  FirebaseFirestore? get firestore =>
+      _isFirebaseReady ? FirebaseFirestore.instance : null;
 
   /// Initialize Firebase with user project configuration
   Future<void> initialize({ProService? proService}) async {
@@ -51,7 +55,9 @@ class FirebaseUserService extends ChangeNotifier {
       unawaited(CreditService().syncPackagesFromFirestore());
     } catch (e) {
       _isFirebaseReady = false;
-      debugPrint('[FirebaseUserService] Firebase initialize skipped or offline: $e');
+      debugPrint(
+        '[FirebaseUserService] Firebase initialize skipped or offline: $e',
+      );
     }
   }
 
@@ -75,7 +81,9 @@ class FirebaseUserService extends ChangeNotifier {
     if (phone.isEmpty) {
       phone = normalizePhone(session.displayName);
     }
-    if (phone.isEmpty && session.email != null && session.email!.contains('@')) {
+    if (phone.isEmpty &&
+        session.email != null &&
+        session.email!.contains('@')) {
       phone = session.email!.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '_');
     }
     if (phone.isEmpty) {
@@ -84,20 +92,27 @@ class FirebaseUserService extends ChangeNotifier {
     }
 
     _currentPhone = phone;
+    unawaited(AdminPushService.instance.bindPhone(phone));
     _startListeningToUserDoc(phone);
 
     if (!_isFirebaseReady) {
-      debugPrint('[FirebaseUserService] Firebase not initialized. Retrying initialize...');
+      debugPrint(
+        '[FirebaseUserService] Firebase not initialized. Retrying initialize...',
+      );
       await initialize(proService: _proService);
     }
 
     if (!_isFirebaseReady) {
-      debugPrint('🚨 [FirebaseUserService] syncUserOnLogin skipped: Firebase is not available.');
+      debugPrint(
+        '🚨 [FirebaseUserService] syncUserOnLogin skipped: Firebase is not available.',
+      );
       return;
     }
 
     try {
-      debugPrint('🚀 [FirebaseUserService] Writing user "$phone" to Firestore "users" collection...');
+      debugPrint(
+        '🚀 [FirebaseUserService] Writing user "$phone" to Firestore "users" collection...',
+      );
       final docRef = FirebaseFirestore.instance.collection('users').doc(phone);
       final snapshot = await docRef.get();
 
@@ -114,7 +129,8 @@ class FirebaseUserService extends ChangeNotifier {
           'phone': phone,
           'displayName': session.displayName ?? '',
           'email': session.email ?? '',
-          'credits': CreditService().credits, // Preserve current credits (default 2 or deducted)
+          'credits': CreditService()
+              .credits, // Preserve current credits (default 2 or deducted)
           'isPro': false, // Admin can toggle this in Firebase console
           'is_admin': false,
           'is_blocked': false,
@@ -124,7 +140,9 @@ class FirebaseUserService extends ChangeNotifier {
           'lastLoginAt': now,
           'recentActivity': [loginLog],
         }, SetOptions(merge: true));
-        debugPrint('✅ [FirebaseUserService] Successfully created user "$phone" in Firestore!');
+        debugPrint(
+          '✅ [FirebaseUserService] Successfully created user "$phone" in Firestore!',
+        );
       } else {
         // Update existing user profile
         final data = snapshot.data();
@@ -151,11 +169,17 @@ class FirebaseUserService extends ChangeNotifier {
         }
 
         await docRef.set(updateData, SetOptions(merge: true));
-        debugPrint('✅ [FirebaseUserService] Successfully updated user "$phone" in Firestore!');
+        debugPrint(
+          '✅ [FirebaseUserService] Successfully updated user "$phone" in Firestore!',
+        );
       }
 
       // Record in dedicated activity_logs subcollection
-      await _writeSubcollectionLog(phone, action: 'LOGIN', details: 'User logged in');
+      await _writeSubcollectionLog(
+        phone,
+        action: 'LOGIN',
+        details: 'User logged in',
+      );
       unawaited(CreditService().syncFromFirestore());
       notifyListeners();
     } catch (e) {
@@ -175,30 +199,41 @@ class FirebaseUserService extends ChangeNotifier {
         .doc(phone)
         .snapshots()
         .listen(
-      (snapshot) {
-        if (snapshot.exists) {
-          final data = snapshot.data();
-          final isPro = data?['isPro'] == true;
-          _proService?.updateProStatus(isPro);
-          _isAdmin = data?['is_admin'] == true || data?['role']?.toString().toLowerCase() == 'admin';
-          _isBlocked = data?['is_blocked'] == true;
+          (snapshot) {
+            if (snapshot.exists) {
+              final data = snapshot.data();
+              final isPro = data?['isPro'] == true;
+              _proService?.updateProStatus(isPro);
+              _isAdmin =
+                  data?['is_admin'] == true ||
+                  data?['role']?.toString().toLowerCase() == 'admin';
+              _isBlocked = data?['is_blocked'] == true;
 
-          // Automatically populate is_admin and is_blocked if missing in Firestore
-          if (data != null && (!data.containsKey('is_admin') || !data.containsKey('is_blocked'))) {
-            unawaited(FirebaseFirestore.instance.collection('users').doc(phone).set({
-              if (!data.containsKey('is_admin')) 'is_admin': false,
-              if (!data.containsKey('is_blocked')) 'is_blocked': false,
-            }, SetOptions(merge: true)));
-          }
+              // Automatically populate is_admin and is_blocked if missing in Firestore
+              if (data != null &&
+                  (!data.containsKey('is_admin') ||
+                      !data.containsKey('is_blocked'))) {
+                unawaited(
+                  FirebaseFirestore.instance.collection('users').doc(phone).set(
+                    {
+                      if (!data.containsKey('is_admin')) 'is_admin': false,
+                      if (!data.containsKey('is_blocked')) 'is_blocked': false,
+                    },
+                    SetOptions(merge: true),
+                  ),
+                );
+              }
 
-          NotificationService().startListeningToFirebaseNotifications(phone);
-          notifyListeners();
-        }
-      },
-      onError: (err) {
-        debugPrint('[FirebaseUserService] User doc listener error: $err');
-      },
-    );
+              NotificationService().startListeningToFirebaseNotifications(
+                phone,
+              );
+              notifyListeners();
+            }
+          },
+          onError: (err) {
+            debugPrint('[FirebaseUserService] User doc listener error: $err');
+          },
+        );
   }
 
   /// Update active / inactive status of user
@@ -215,7 +250,9 @@ class FirebaseUserService extends ChangeNotifier {
 
       await logActivity(
         action: isActive ? 'USER_ACTIVE' : 'USER_INACTIVE',
-        details: isActive ? 'App opened / active in foreground' : 'App paused / sent to background',
+        details: isActive
+            ? 'App opened / active in foreground'
+            : 'App paused / sent to background',
       );
     } catch (e) {
       debugPrint('[FirebaseUserService] setUserActive error: $e');
@@ -253,7 +290,8 @@ class FirebaseUserService extends ChangeNotifier {
 
         await logActivity(
           action: 'MONITORING_START',
-          details: 'Searching $fromCity -> $toCity on $dateOfJourney (Train: ${targetTrain ?? "ALL"}, Seat: ${targetSeatClass ?? "ALL"})',
+          details:
+              'Searching $fromCity -> $toCity on $dateOfJourney (Train: ${targetTrain ?? "ALL"}, Seat: ${targetSeatClass ?? "ALL"})',
         );
       } else {
         await docRef.set({
@@ -323,17 +361,22 @@ class FirebaseUserService extends ChangeNotifier {
           .doc(phone)
           .collection('activity_logs')
           .add({
-        'action': action,
-        'details': details,
-        'timestamp': FieldValue.serverTimestamp(),
-      });
+            'action': action,
+            'details': details,
+            'timestamp': FieldValue.serverTimestamp(),
+          });
     } catch (_) {}
   }
 
   /// Clear session and stop listener
   Future<void> clearSession() async {
+    await AdminPushService.instance.signOut();
+    NotificationService().startListeningToFirebaseNotifications(null);
     if (_currentPhone != null && _isFirebaseReady) {
-      await logActivity(action: 'LOGOUT', details: 'User signed out or cleared session');
+      await logActivity(
+        action: 'LOGOUT',
+        details: 'User signed out or cleared session',
+      );
       await setUserActive(false);
     }
     _userDocSubscription?.cancel();

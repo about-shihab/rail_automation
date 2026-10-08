@@ -7,6 +7,7 @@ import '../services/admin_service.dart';
 import '../services/firebase_user_service.dart';
 import '../services/notification_service.dart';
 import '../utils/app_theme.dart';
+import 'admin_config_tab.dart';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -88,7 +89,7 @@ class AdminScreen extends StatelessWidget {
     if (!isAdmin) {
       return Scaffold(
         backgroundColor: AppColors.scaffoldBg(isDark),
-        appBar: AppBar(title: const Text('User Management')),
+        appBar: AppBar(title: const Text('Admin')),
         body: Center(
           child: Text(
             'Admin access required',
@@ -99,18 +100,20 @@ class AdminScreen extends StatelessWidget {
     }
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         backgroundColor: AppColors.scaffoldBg(isDark),
         appBar: AppBar(
-          title: const Text('User Management'),
+          title: const Text('Admin'),
           elevation: 0,
           bottom: const TabBar(
+            isScrollable: true,
             indicatorColor: AppColors.primary,
             tabs: [
               Tab(icon: Icon(Icons.people_alt_rounded), text: 'Users'),
               Tab(icon: Icon(Icons.receipt_long_rounded), text: 'Transactions'),
               Tab(icon: Icon(Icons.notifications_active_rounded), text: 'Notifications'),
+              Tab(icon: Icon(Icons.settings_rounded), text: 'Configuration'),
             ],
           ),
         ),
@@ -119,6 +122,7 @@ class AdminScreen extends StatelessWidget {
             _UsersTab(),
             _RechargesTab(),
             _NotificationsTab(),
+            AdminConfigTab(),
           ],
         ),
       ),

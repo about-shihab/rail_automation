@@ -22,7 +22,15 @@ void callbackDispatcher() {
         await BackgroundMonitor.cancel();
         return true;
       }
+      // The native service owns fast polling while it is running. WorkManager
+      // keeps the saved search alive between service sessions and after reboot.
+      if (!kIsWeb &&
+          defaultTargetPlatform == TargetPlatform.android &&
+          await ForegroundMonitor.isRunning) {
+        return true;
+      }
       await monitor.checkNow();
+      if (!monitor.isMonitoring) await BackgroundMonitor.cancel();
       return monitor.lastError == null;
     } finally {
       monitor.dispose();
@@ -41,29 +49,45 @@ class BackgroundMonitor {
   static Future<void> initialize() async {
     if (supported) await Workmanager().initialize(callbackDispatcher);
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      await Workmanager().cancelByUniqueName(taskName);
       await ForegroundMonitor.initialize();
     }
   }
 
-  static Future<void> schedule() async {
+  static Future<void> schedule({
+    DateTime? startsAt,
+    bool replaceSchedule = false,
+  }) async {
     if (!supported) return;
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      await ForegroundMonitor.start();
-      return;
+    if (replaceSchedule) {
+      await Workmanager().cancelByUniqueName(taskName);
     }
+    final wait = startsAt?.difference(DateTime.now()) ?? Duration.zero;
+    final delay = wait.isNegative ? Duration.zero : wait;
     await Workmanager().registerPeriodicTask(
       taskName,
       taskName,
       frequency: const Duration(minutes: 15),
+      // A single job handles both sales opening and recurring checks, avoiding
+      // concurrent opening/fallback workers after a long network outage.
+      initialDelay: delay > Duration.zero ? delay : const Duration(minutes: 15),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
       constraints: Constraints(networkType: NetworkType.connected),
     );
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      if (delay > Duration.zero) {
+        await ForegroundMonitor.stop();
+      } else {
+        await ForegroundMonitor.start();
+      }
+    }
   }
 
   static Future<void> cancel() async {
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       await ForegroundMonitor.stop();
     }
-    if (supported) await Workmanager().cancelByUniqueName(taskName);
+    if (supported) {
+      await Workmanager().cancelByUniqueName(taskName);
+    }
   }
 }

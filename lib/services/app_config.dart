@@ -35,6 +35,20 @@ class AppConfig extends ChangeNotifier {
     'otp_length': 6,
     'otp_window_seconds': 180,
     'login_retry_interval_seconds': 60,
+    // Seat-search scheduling (see SearchScheduler).
+    'search_jitter_percent': 10,
+    'search_backoff_multiplier': 2.0,
+    'search_max_backoff_seconds': 300,
+    'search_near_departure_minutes': 0,
+    'search_near_departure_interval_seconds': 0,
+    // Reservation hold (Railway keeps a seat for 5 minutes) and what to do
+    // when it expires unpaid.
+    'reservation_timeout_minutes': 5,
+    'resume_search_after_expiry': true,
+    'admin_push_enabled': false,
+    // Non-secret request headers / Turnstile keys, overridable from the DB.
+    'api_headers': <String, dynamic>{},
+    'turnstile_site_keys': <String, dynamic>{},
     'api_operations': <String, dynamic>{},
   };
   Map<String, dynamic> _values = Map.of(defaults);
@@ -43,9 +57,26 @@ class AppConfig extends ChangeNotifier {
   int number(String key) => _values[key] as int;
   String string(String key) => _values[key] as String;
   List<String> strings(String key) => List<String>.from(_values[key]);
+  bool boolean(String key) => _values[key] == true;
+  double decimal(String key) => (_values[key] as num).toDouble();
   int get pollSeconds => number('poll_interval_seconds');
+
+  /// Seconds between seat searches. A value on the `search_trips` operation
+  /// wins over the global `poll_interval_seconds`.
+  int get searchIntervalSeconds {
+    final value = apiOperation('search_trips')['poll_interval_seconds'];
+    return value is int ? value : pollSeconds;
+  }
+
   Map<String, dynamic> apiOperation(String key) =>
       Map<String, dynamic>.from(_values['api_operations'][key] ?? {});
+
+  Map<String, String> get apiHeaders =>
+      Map<String, String>.from(_values['api_headers'] as Map);
+
+  /// Turnstile site key for [purpose], or null to use the built-in default.
+  String? siteKey(String purpose) =>
+      (_values['turnstile_site_keys'] as Map)[purpose] as String?;
 
   static Map<String, dynamic> validate(Map<String, dynamic> input) {
     final result = Map<String, dynamic>.of(defaults);
@@ -58,6 +89,11 @@ class AppConfig extends ChangeNotifier {
       'otp_length': (4, 8),
       'otp_window_seconds': (30, 600),
       'login_retry_interval_seconds': (10, 3600),
+      'search_jitter_percent': (0, 50),
+      'search_max_backoff_seconds': (10, 3600),
+      'search_near_departure_minutes': (0, 1440),
+      'search_near_departure_interval_seconds': (0, 3600),
+      'reservation_timeout_minutes': (1, 15),
     };
 
     // Check for minutes-based time limit aliases from DB (e.g. time_limit_minutes: 60 or time_limit: 60)
@@ -109,6 +145,26 @@ class AppConfig extends ChangeNotifier {
         (result['seat_classes'] as List).contains(seat)) {
       result['default_seat_class'] = seat;
     }
+    final multiplier = input['search_backoff_multiplier'];
+    final multiplierValue = multiplier is num
+        ? multiplier.toDouble()
+        : (multiplier is String ? double.tryParse(multiplier) : null);
+    if (multiplierValue != null &&
+        multiplierValue >= 1.0 &&
+        multiplierValue <= 4.0) {
+      result['search_backoff_multiplier'] = multiplierValue;
+    }
+    if (input['resume_search_after_expiry'] is bool) {
+      result['resume_search_after_expiry'] =
+          input['resume_search_after_expiry'];
+    }
+    if (input['admin_push_enabled'] is bool) {
+      result['admin_push_enabled'] = input['admin_push_enabled'];
+    }
+    result['api_headers'] = RailApiConfig.validateHeaders(input['api_headers']);
+    result['turnstile_site_keys'] = RailApiConfig.validateSiteKeys(
+      input['turnstile_site_keys'],
+    );
     result['api_operations'] = RailApiConfig.validate(input['api_operations']);
     return result;
   }

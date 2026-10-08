@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../models/credit_transaction.dart';
 import 'firebase_user_service.dart';
+import 'app_config.dart';
 
 class AdminException implements Exception {
   final String message;
@@ -41,7 +44,9 @@ class AdminUser {
       email: d['email']?.toString() ?? '',
       credits: (d['credits'] is num) ? (d['credits'] as num).toInt() : 0,
       isActive: d['isActive'] == true,
-      isAdmin: d['is_admin'] == true || d['role']?.toString().toLowerCase() == 'admin',
+      isAdmin:
+          d['is_admin'] == true ||
+          d['role']?.toString().toLowerCase() == 'admin',
       isBlocked: d['is_blocked'] == true,
       lastActiveAt: last is Timestamp ? last.toDate() : null,
     );
@@ -93,10 +98,18 @@ class AdminService {
   factory AdminService() => instance;
 
   static const _approvedWords = {
-    'approved', 'success', 'completed', 'accept', 'accepted',
+    'approved',
+    'success',
+    'completed',
+    'accept',
+    'accepted',
   };
   static const _rejectedWords = {
-    'rejected', 'declined', 'failed', 'cancelled', 'canceled',
+    'rejected',
+    'declined',
+    'failed',
+    'cancelled',
+    'canceled',
   };
 
   /// Same interpretation of `status` as CreditService uses on the user side.
@@ -143,11 +156,13 @@ class AdminService {
         .orderBy('createdAt', descending: true)
         .limit(300)
         .snapshots()
-        .map((snap) => snap.docs.map((doc) {
-              final d = doc.data();
-              d['id'] = doc.id;
-              return CreditTransaction.fromJson(d);
-            }).toList());
+        .map(
+          (snap) => snap.docs.map((doc) {
+            final d = doc.data();
+            d['id'] = doc.id;
+            return CreditTransaction.fromJson(d);
+          }).toList(),
+        );
   }
 
   Stream<int> watchPendingCount() {
@@ -198,8 +213,8 @@ class AdminService {
         'action': delta > 0 ? 'ADMIN_CREDIT_ADDED' : 'ADMIN_CREDIT_REMOVED',
         'details':
             'Admin ${delta > 0 ? 'added' : 'removed'} ${delta.abs()} credit(s). '
-                'Balance: $current → $next'
-                '${(note ?? '').trim().isEmpty ? '' : ' · ${note!.trim()}'}',
+            'Balance: $current → $next'
+            '${(note ?? '').trim().isEmpty ? '' : ' · ${note!.trim()}'}',
         'timestamp': FieldValue.serverTimestamp(),
       });
       return next;
@@ -240,14 +255,10 @@ class AdminService {
         'approvedAt': FieldValue.serverTimestamp(),
         'approvedBy': _adminPhone,
       });
-      tx.set(
-        userRef,
-        {
-          'credits': FieldValue.increment(credits),
-          'lastCreditRechargedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
+      tx.set(userRef, {
+        'credits': FieldValue.increment(credits),
+        'lastCreditRechargedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
       tx.set(userRef.collection('activity_logs').doc(), {
         'action': 'RECHARGE_APPROVED',
         'details':
@@ -328,10 +339,18 @@ class AdminService {
     final cleanBody = body.trim();
     if (cleanTitle.isEmpty) throw AdminException('Title cannot be empty');
     if (cleanBody.isEmpty) throw AdminException('Message body cannot be empty');
+    if (utf8.encode(cleanTitle).length > 256 ||
+        utf8.encode(cleanBody).length > 2500) {
+      throw AdminException(
+        'Announcement is too long. Please shorten the title or message.',
+      );
+    }
 
     String? normalizedTargetPhone;
     if (target != 'all') {
-      normalizedTargetPhone = FirebaseUserService.normalizePhone(targetPhone ?? target);
+      normalizedTargetPhone = FirebaseUserService.normalizePhone(
+        targetPhone ?? target,
+      );
       if (normalizedTargetPhone.isEmpty) {
         throw AdminException('Target phone number is invalid');
       }
@@ -343,6 +362,10 @@ class AdminService {
       'target': target == 'all' ? 'all' : normalizedTargetPhone,
       'targetPhone': target == 'all' ? null : normalizedTargetPhone,
       'sentBy': _adminPhone,
+      'delivery': AppConfig.instance.boolean('admin_push_enabled')
+          ? 'push'
+          : 'firestore',
+      'kind': 'admin_announcement',
       'createdAt': FieldValue.serverTimestamp(),
     });
   }

@@ -6,6 +6,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import 'app_config.dart';
 import 'booking_activity.dart';
+import 'booking_service.dart';
 import 'app_update_service.dart';
 import 'firebase_user_service.dart';
 import 'monitor_service.dart';
@@ -22,6 +23,7 @@ void monitoringEntryPoint(ServiceInstance service) async {
   final pro = ProService();
   final monitor = MonitorService(proService: pro, backgroundWorker: true);
   Timer? timer;
+  Timer? sessionTimer;
   bool stopped = false;
   bool busy = false;
   void reportActivity() {
@@ -44,8 +46,10 @@ void monitoringEntryPoint(ServiceInstance service) async {
     return result.$1;
   };
   service.on('stop').listen((_) async {
+    if (stopped) return;
     stopped = true;
     timer?.cancel();
+    sessionTimer?.cancel();
     BookingActivity.instance.removeListener(reportActivity);
     service.invoke('booking-activity', {'stage': null});
     SmsService().stopListening();
@@ -53,19 +57,22 @@ void monitoringEntryPoint(ServiceInstance service) async {
     pro.dispose();
     await service.stopSelf();
   });
-  // User-visible sessions are bounded below Android's data-sync quota.
-  Timer(const Duration(hours: 5), () async {
+  await FirebaseUserService().initialize();
+  await AppConfig.instance.initialize();
+  await NotificationService().initialize(background: true);
+  // Android limits data-sync service runtime. This limits only fast polling;
+  // durable WorkManager checks continue until departure without reopening UI.
+  sessionTimer = Timer(const Duration(hours: 5), () async {
     stopped = true;
     timer?.cancel();
     BookingActivity.instance.removeListener(reportActivity);
     service.invoke('booking-activity', {'stage': null});
     SmsService().stopListening();
-    monitor.stopMonitoring();
+    await NotificationService().showBackgroundSearchContinues();
+    monitor.dispose();
+    pro.dispose();
     await service.stopSelf();
   });
-  await FirebaseUserService().initialize();
-  await AppConfig.instance.initialize();
-  await NotificationService().initialize(background: true);
   Future<void> tick() async {
     if (busy || stopped) return;
     busy = true;
@@ -88,15 +95,28 @@ void monitoringEntryPoint(ServiceInstance service) async {
         await visibilitySub.cancel();
       }
       await monitor.restore(startTimers: false);
-      if (!monitor.isMonitoring) {
+      if (!monitor.isMonitoring || monitor.isScheduled) {
         stopped = true;
         timer?.cancel();
+        sessionTimer?.cancel();
         BookingActivity.instance.removeListener(reportActivity);
         service.invoke('booking-activity', {'stage': null});
+        monitor.dispose();
+        pro.dispose();
         await service.stopSelf();
         return;
       }
       await monitor.checkNow();
+      if (!monitor.isMonitoring && await BookingService.pending() == null) {
+        stopped = true;
+        sessionTimer?.cancel();
+        BookingActivity.instance.removeListener(reportActivity);
+        SmsService().stopListening();
+        monitor.dispose();
+        pro.dispose();
+        await service.stopSelf();
+        return;
+      }
       await OtpVerifier.listen();
       if (stopped) return;
       if (service is AndroidServiceInstance) {
@@ -114,7 +134,7 @@ void monitoringEntryPoint(ServiceInstance service) async {
     } finally {
       busy = false;
       if (!stopped) {
-        timer = Timer(Duration(seconds: AppConfig.instance.pollSeconds), tick);
+        timer = Timer(monitor.nextCheckDelay(), tick);
       }
     }
   }
@@ -334,6 +354,10 @@ class ForegroundMonitor {
     );
     initialized = true;
   }
+
+  // WorkManager has its own isolate, where initialized is false even when the
+  // native foreground service is running. Query Android rather than that flag.
+  static Future<bool> get isRunning => FlutterBackgroundService().isRunning();
 
   static Future<void> start() async {
     if (!initialized) {

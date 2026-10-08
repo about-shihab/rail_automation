@@ -6,7 +6,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 
 import '../views/booking_screen.dart';
-import '../views/webview_login_screen.dart';
+import '../views/announcement_screen.dart';
+import 'login_flow.dart';
 import 'booking_service.dart';
 import 'booking_activity.dart';
 import 'turnstile_gate.dart';
@@ -103,7 +104,10 @@ class NotificationService {
 
   void openBooking(String? payload) {
     if (payload == null) return;
-    if (payload == 'rail://login') {
+    final announcement = Uri.tryParse(payload);
+    if (announcement?.scheme == 'rail' &&
+        announcement?.host == 'announcement' &&
+        announcement!.pathSegments.length == 1) {
       final navigator = navigatorKey.currentState;
       if (navigator == null || !navigator.mounted) {
         _pendingBooking = payload;
@@ -112,9 +116,21 @@ class NotificationService {
       _pendingBooking = null;
       navigator.push(
         MaterialPageRoute(
-          builder: (_) => const WebviewLoginScreen(clearSession: true),
+          builder: (_) => AnnouncementScreen(
+            notificationId: announcement.pathSegments.single,
+          ),
         ),
       );
+      return;
+    }
+    if (payload == 'rail://login') {
+      final navigator = navigatorKey.currentState;
+      if (navigator == null || !navigator.mounted) {
+        _pendingBooking = payload;
+        return;
+      }
+      _pendingBooking = null;
+      unawaited(LoginFlow.recoverNow());
       return;
     }
     if (payload == 'rail://booking-progress') {
@@ -339,6 +355,38 @@ class NotificationService {
   Future<void> clearLoginAlert() async {
     try {
       await _notificationsPlugin.cancel(id: 804);
+    } catch (_) {}
+  }
+
+  /// Explain the transition from fast foreground polling to durable jobs.
+  Future<void> showBackgroundSearchContinues() async {
+    final bn = await prefersBangla();
+    final title = bn ? 'আসন খোঁজা চলবে' : 'Seat search continues';
+    final body = bn
+        ? 'ট্রেন ছাড়ার সময় পর্যন্ত পর্যায়ক্রমে আসন খোঁজা চলবে। আরও ঘন ঘন খুঁজতে Rail Pro খুলুন।'
+        : 'Scheduled checks continue until train departure. Open Rail Pro for more frequent seat checks.';
+    try {
+      await _notificationsPlugin.show(
+        id: 805,
+        title: title,
+        body: body,
+        payload: 'rail://trips',
+        notificationDetails: NotificationDetails(
+          android: _alertDetails(
+            channel: 'br_search_paused',
+            channelName: 'Search paused',
+            title: title,
+            body: body,
+            stage: bn ? 'অনুসন্ধান' : 'Monitoring',
+            color: const Color(0xFFD39A26),
+            onlyAlertOnce: true,
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+          ),
+        ),
+      );
     } catch (_) {}
   }
 
@@ -800,6 +848,9 @@ class NotificationService {
 
                   final data = change.doc.data();
                   if (data == null) continue;
+                  // Push announcements are displayed by FCM (including while
+                  // closed). Replaying them here would create duplicate alerts.
+                  if (data['delivery'] == 'push') continue;
                   final target = data['target']?.toString() ?? 'all';
                   final targetPhone = data['targetPhone']?.toString();
                   final ts = data['createdAt'];
@@ -849,6 +900,7 @@ class NotificationService {
   Future<void> showBroadcastNotification({
     required String title,
     required String body,
+    String? documentId,
   }) async {
     final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
@@ -871,12 +923,20 @@ class NotificationService {
     );
 
     try {
-      final notifId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final notifId = documentId == null
+          ? DateTime.now().millisecondsSinceEpoch ~/ 1000
+          : announcementNotificationId(documentId);
       await _notificationsPlugin.show(
         id: notifId,
         title: title,
         body: body,
-        payload: 'rail://trips',
+        payload: documentId == null
+            ? 'rail://trips'
+            : Uri(
+                scheme: 'rail',
+                host: 'announcement',
+                pathSegments: [documentId],
+              ).toString(),
         notificationDetails: notificationDetails,
       );
       debugPrint(
@@ -890,7 +950,9 @@ class NotificationService {
 
     // Also trigger in-app banner for instant visual response
     final nav = navigatorKey.currentState;
-    if (nav != null && nav.mounted) {
+    if (nav != null &&
+        nav.mounted &&
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
       ScaffoldMessenger.maybeOf(nav.context)?.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
@@ -929,6 +991,33 @@ class NotificationService {
             ],
           ),
         ),
+      );
+    }
+  }
+
+  /// Stable across isolates/restarts and separate from fixed booking alert IDs.
+  static int announcementNotificationId(String documentId) {
+    var hash = 0x811c9dc5;
+    for (final char in documentId.codeUnits) {
+      hash = ((hash ^ char) * 0x01000193) & 0x3fffffff;
+    }
+    return 100000 + hash;
+  }
+
+  Future<void> deliverAdminAnnouncement({
+    required String documentId,
+    required String title,
+    required String body,
+    bool alreadyDisplayed = false,
+  }) async {
+    await _loadSeenIds();
+    if (_seenNotificationDocIds.contains(documentId)) return;
+    await _saveSeenId(documentId);
+    if (!alreadyDisplayed) {
+      await showBroadcastNotification(
+        title: title,
+        body: body,
+        documentId: documentId,
       );
     }
   }

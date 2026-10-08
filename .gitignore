@@ -56,3 +56,4 @@ app.*.map.json
 /service-account*.json
 .firebase/
 __pycache__/
+node_modules/

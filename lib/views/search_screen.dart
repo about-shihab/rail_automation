@@ -1,4 +1,5 @@
 import '../services/railway_credentials_rejected.dart';
+import '../services/login_flow.dart';
 import '../services/login_recovery_required.dart';
 
 import 'dart:async';
@@ -14,6 +15,7 @@ import 'package:provider/provider.dart';
 import '../models/auth_session.dart';
 import '../services/api_service.dart';
 import '../services/monitor_service.dart';
+import '../services/journey_schedule.dart';
 import '../services/app_config.dart';
 import '../services/theme_service.dart';
 import '../services/language_service.dart';
@@ -33,6 +35,7 @@ import '../utils/railway_stations.dart';
 import 'recharge_credit_dialog.dart';
 import 'webview_login_screen.dart';
 import 'train_selection_screen.dart';
+import 'watch_options_dialog.dart';
 
 class SearchScreen extends StatefulWidget {
   const SearchScreen({super.key});
@@ -201,6 +204,61 @@ class _SearchScreenState extends State<SearchScreen>
     setState(() => _loading = true);
     final date = DateFormat('dd-MMM-yyyy').format(_date);
     try {
+      if (JourneySchedule.isOutsideWindow(date)) {
+        setState(() => _loading = false);
+        if (await BookingService.pending() != null) {
+          if (mounted) AppShell.goTo(context, AppShell.tabMonitor);
+          return;
+        }
+        if (!mounted) return;
+        final monitor = context.read<MonitorService>();
+        final startsAt = JourneySchedule.salesOpenAt(date)!;
+        final intent = await showWatchOptions(
+          context,
+          seatClass: _selectedClass,
+          scheduledStart: JourneySchedule.formatStart(startsAt),
+        );
+        if (intent == null || !mounted) return;
+        if (monitor.isMonitoring) {
+          final replace = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text(
+                lang.tr(
+                  'Replace current search?',
+                  'বর্তমান অনুসন্ধান বদলাবেন?',
+                ),
+              ),
+              content: Text(
+                lang.tr(
+                  'This schedule will replace your current monitored journey.',
+                  'এই সময়সূচি বর্তমান যাত্রার অনুসন্ধানের পরিবর্তে চালু হবে।',
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: Text(lang.tr('Cancel', 'বাতিল')),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: Text(lang.tr('Schedule', 'সময়সূচি করুন')),
+                ),
+              ],
+            ),
+          );
+          if (replace != true || !mounted) return;
+        }
+        monitor.startMonitoring(
+          fromCity: _fromCity,
+          toCity: _toCity,
+          dateOfJourney: date,
+          targetSeatClass: _selectedClass,
+          intent: intent,
+        );
+        AppShell.goTo(context, AppShell.tabMonitor);
+        return;
+      }
       final result = await ApiService.searchTrips(
         fromCity: _fromCity,
         toCity: _toCity,
@@ -226,8 +284,14 @@ class _SearchScreenState extends State<SearchScreen>
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        if (RailwayCredentialsRejected.isError(e)) {
-          _logout();
+        if (LoginFlow.needsLogin(e)) {
+          final ok = await LoginFlow.openManualLogin(
+            credentialsRejected: RailwayCredentialsRejected.isError(e),
+          );
+          if (ok && mounted) {
+            final fresh = await AuthSession.load();
+            if (fresh != null && mounted) setState(() => _auth = fresh);
+          }
           return;
         }
         ScaffoldMessenger.of(context).showSnackBar(
@@ -466,8 +530,12 @@ class _SearchScreenState extends State<SearchScreen>
                                     children: [
                                       Text(
                                         lang.tr(
-                                          'Watching seats',
-                                          'আসন খোঁজা হচ্ছে',
+                                          monitor.isScheduled
+                                              ? 'Search scheduled'
+                                              : 'Watching seats',
+                                          monitor.isScheduled
+                                              ? 'অনুসন্ধান নির্ধারিত'
+                                              : 'আসন খোঁজা হচ্ছে',
                                         ),
                                         style: TextStyle(
                                           color: AppColors.textPrimary(isDark),
@@ -549,7 +617,7 @@ class _SearchScreenState extends State<SearchScreen>
                                           initialDate: _date,
                                           firstDate: DateTime.now(),
                                           lastDate: DateTime.now().add(
-                                            const Duration(days: 30),
+                                            const Duration(days: 365),
                                           ),
                                           builder: (ctx, child) => Theme(
                                             data: Theme.of(ctx).copyWith(
@@ -597,12 +665,23 @@ class _SearchScreenState extends State<SearchScreen>
                               JourneySearchButton(
                                 label: credit.credits <= 0
                                     ? lang.tr('Add credits', 'ক্রেডিট যোগ করুন')
+                                    : JourneySchedule.isOutsideWindow(
+                                        DateFormat('dd-MMM-yyyy').format(_date),
+                                      )
+                                    ? lang.tr(
+                                        'Schedule Search',
+                                        'অনুসন্ধানের সময়সূচি',
+                                      )
                                     : lang.tr(
                                         'Search Trains',
                                         'ট্রেন অনুসন্ধান',
                                       ),
                                 icon: credit.credits <= 0
                                     ? Icons.bolt_rounded
+                                    : JourneySchedule.isOutsideWindow(
+                                        DateFormat('dd-MMM-yyyy').format(_date),
+                                      )
+                                    ? Icons.event_available_rounded
                                     : Icons.search_rounded,
                                 loading: _loading,
                                 onPressed: _loading

@@ -9,12 +9,13 @@ import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/auth_session.dart';
+import '../services/web_login_support.dart';
 import '../services/web_session_service.dart';
 import '../services/secure_store.dart';
 import '../services/theme_service.dart';
 import '../services/language_service.dart';
 import '../services/monitor_service.dart';
-import '../services/firebase_user_service.dart';
+import '../services/railway_credentials_rejected.dart';
 import '../widgets/fancy_train_loader.dart';
 import '../utils/app_theme.dart';
 
@@ -25,12 +26,26 @@ class WebviewLoginScreen extends StatefulWidget {
   final String? initialPhone;
   final String? initialPassword;
 
+  /// When true the screen pops with `true` after a successful login instead of
+  /// replacing the whole stack (used when re-logging in mid-session).
+  final bool popOnSuccess;
+
+  /// Explanation shown above the page (e.g. "password not accepted").
+  final String? notice;
+
   const WebviewLoginScreen({
     super.key,
     this.clearSession = false,
     this.initialPhone,
     this.initialPassword,
+    this.popOnSuccess = false,
+    this.notice,
   });
+
+  static int _open = 0;
+
+  /// True while a login screen is on screen (prevents stacking a second one).
+  static bool get isShowing => _open > 0;
 
   @override
   State<WebviewLoginScreen> createState() => _WebviewLoginScreenState();
@@ -46,6 +61,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
 
   @override
   void dispose() {
+    WebviewLoginScreen._open--;
     _sessionRetry?.cancel();
     _loadingTimeoutTimer?.cancel();
     super.dispose();
@@ -54,6 +70,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   @override
   void initState() {
     super.initState();
+    WebviewLoginScreen._open++;
     _prepareWebView();
   }
 
@@ -71,18 +88,14 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
   }
 
+  /// Saved values only pre-fill the form. They are never submitted from here:
+  /// the visible login is where the user types (or corrects) their login.
   Future<void> _loadSavedCredentials() async {
     final creds = await AuthSession.getSavedUserCredentials();
     if (mounted) {
       setState(() {
-        _savedPhone = widget.initialPhone ??
-            (creds['phone']?.isNotEmpty == true
-                ? creds['phone']!
-                : '01813570430');
-        _savedPassword = widget.initialPassword ??
-            (creds['password']?.isNotEmpty == true
-                ? creds['password']!
-                : '7nL*2!fk@sNCfxC');
+        _savedPhone = widget.initialPhone ?? creds['phone'] ?? '';
+        _savedPassword = widget.initialPassword ?? creds['password'] ?? '';
       });
     }
   }
@@ -121,7 +134,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                 return;
               }
               await _installInterceptors();
-              await _insertSavedCredentials(silent: true);
+              await _prefillSavedCredentials();
               await _checkLiveSession();
               if (mounted && !_hasNavigated) {
                 _sessionRetry?.cancel();
@@ -129,10 +142,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                   if (mounted && !_hasNavigated) _checkLiveSession();
                 });
               }
-              // Keep loading overlay active while auto-login proceeds in the webview.
-              // Reveal the page if manual interaction is needed after timeout.
+              // Show the form as soon as it has been pre-filled.
               _loadingTimeoutTimer?.cancel();
-              _loadingTimeoutTimer = Timer(const Duration(seconds: 8), () {
+              _loadingTimeoutTimer = Timer(const Duration(milliseconds: 700), () {
                 if (mounted && !_hasNavigated && _isLoading) {
                   setState(() => _isLoading = false);
                 }
@@ -144,9 +156,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           ),
         );
 
-      _controller!.loadRequest(
-        Uri.parse('https://eticket.railway.gov.bd/login'),
-      );
+      _controller!.loadRequest(Uri.parse(RailLoginScript.loginUrl));
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -155,162 +165,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   Future<void> _installInterceptors() async {
     if (_controller == null) return;
     try {
-      const script = '''
-        (function() {
-          if (window.__railInterceptorActive) return;
-          window.__railInterceptorActive = true;
-          try {
-            var handshake = JSON.parse(localStorage.getItem('handshake_data') || '{}');
-            var cfg = handshake.data || handshake;
-            var hold = cfg.release_time_interval_in_minutes;
-            if (hold > 0) window.RailBridge.postMessage(JSON.stringify({type: 'HOLD_CONFIG', seconds: Math.ceil(hold / 60) * 60}));
-          } catch (_) {}
-
-          function captureCredentials() {
-            var phone = document.querySelector('input[name="mobile_number"], input[type="tel"], #mobile_number');
-            var pass = document.querySelector('input[type="password"]');
-            if (phone && pass && phone.value && pass.value) {
-              window.RailBridge.postMessage(JSON.stringify({type: 'CREDENTIALS', phone: phone.value, password: pass.value}));
-            }
-          }
-          document.addEventListener('input', captureCredentials, true);
-          document.addEventListener('submit', captureCredentials, true);
-
-          function getDeviceId() {
-            return localStorage.getItem('x-device-id') ||
-                   localStorage.getItem('x_device_id') ||
-                   localStorage.getItem('uudid') ||
-                   localStorage.getItem('uuid') ||
-                   localStorage.getItem('device_id') ||
-                   localStorage.getItem('deviceId') || '';
-          }
-
-          function getDeviceKey() {
-            return localStorage.getItem('x-device-key') ||
-                   localStorage.getItem('x_device_key') ||
-                   localStorage.getItem('ss') ||
-                   localStorage.getItem('ssdk') ||
-                   localStorage.getItem('device_key') ||
-                   localStorage.getItem('deviceKey') || '';
-          }
-
-          function getToken() {
-            return localStorage.getItem('token') ||
-                   localStorage.getItem('user_token') ||
-                   localStorage.getItem('access_token') || '';
-          }
-
-          // XHR Interception
-          var origOpen = XMLHttpRequest.prototype.open;
-          var origSend = XMLHttpRequest.prototype.send;
-          var origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-
-          XMLHttpRequest.prototype.open = function(method, url) {
-            this._reqUrl = url;
-            this._reqHeaders = {};
-            return origOpen.apply(this, arguments);
-          };
-
-          XMLHttpRequest.prototype.setRequestHeader = function(h, v) {
-            if (this._reqHeaders) this._reqHeaders[h] = v;
-            return origSetHeader.apply(this, arguments);
-          };
-
-          XMLHttpRequest.prototype.send = function(body) {
-            var self = this;
-            this.addEventListener('load', function() {
-              try {
-                var url = self._reqUrl || '';
-                if (url.indexOf('sign-in') !== -1 || url.indexOf('auth') !== -1 || url.indexOf('login') !== -1) {
-                  var res = JSON.parse(self.responseText);
-                  var t = (res && res.data && res.data.token) || (res && res.token) || getToken();
-                  var h = self._reqHeaders || {};
-                  var devId = h['x-device-id'] || h['X-Device-Id'] || getDeviceId();
-                  var devKey = h['x-device-key'] || h['X-Device-Key'] || getDeviceKey();
-                  var usr = (res && res.data && res.data.user) || (res && res.user) || localStorage.getItem('user') || '{}';
-                  if (t && window.RailBridge) {
-                    window.RailBridge.postMessage(JSON.stringify({
-                      type: 'AUTH_SUCCESS',
-                      token: t,
-                      deviceId: devId,
-                      deviceKey: devKey,
-                      user: usr,
-                      cookie: document.cookie || '',
-                    }));
-                  }
-                }
-              } catch(e) {}
-            });
-            return origSend.apply(this, arguments);
-          };
-
-          // Fetch Interception
-          var origFetch = window.fetch;
-          window.fetch = async function() {
-            var url = arguments[0];
-            var opts = arguments[1] || {};
-            var resp = await origFetch.apply(this, arguments);
-            try {
-              var strUrl = typeof url === 'string' ? url : (url.url || '');
-              if (strUrl.indexOf('sign-in') !== -1 || strUrl.indexOf('auth') !== -1 || strUrl.indexOf('login') !== -1) {
-                var clone = resp.clone();
-                var json = await clone.json();
-                var t = (json && json.data && json.data.token) || (json && json.token) || getToken();
-                var h = new Headers(opts.headers || (typeof url !== 'string' && url.headers) || {});
-                var devId = h.get('x-device-id') || getDeviceId();
-                var devKey = h.get('x-device-key') || getDeviceKey();
-                var usr = (json && json.data && json.data.user) || (json && json.user) || localStorage.getItem('user') || '{}';
-                if (t && window.RailBridge) {
-                  window.RailBridge.postMessage(JSON.stringify({
-                    type: 'AUTH_SUCCESS',
-                    token: t,
-                    deviceId: devId,
-                    deviceKey: devKey,
-                    user: usr,
-                    cookie: document.cookie || '',
-                  }));
-                }
-              }
-            } catch(e) {}
-            return resp;
-          };
-
-          // Active token watcher — polls every 1.5 s and reports the
-          // token as soon as it appears in localStorage (e.g. right after
-          // the user accepts the disclaimer on the post-login page).
-          function reportSession() {
-            try {
-              var t = getToken();
-              var pathname = window.location.pathname || '';
-              if (t) {
-                var devId = getDeviceId();
-                var devKey = getDeviceKey();
-                var usr = localStorage.getItem('user') || '{}';
-                if (window.RailBridge) {
-                  window.RailBridge.postMessage(JSON.stringify({
-                    type: 'STORAGE_TOKEN',
-                    token: t,
-                    deviceId: devId,
-                    deviceKey: devKey,
-                    user: usr,
-                    cookie: document.cookie || '',
-                    currentPath: pathname,
-                  }));
-                }
-              }
-            } catch(e) {}
-          }
-          var originalSetItem = Storage.prototype.setItem;
-          Storage.prototype.setItem = function(key, value) {
-            originalSetItem.apply(this, arguments);
-            if (this === localStorage) setTimeout(reportSession, 0);
-          };
-          setInterval(reportSession, 500);
-          reportSession();
-
-        })(); // ← close the IIFE so all of the above actually executes
-      ''';
-      await _controller!.runJavaScript(script);
+      await _controller!.runJavaScript(RailLoginScript.interceptors);
     } catch (_) {}
   }
 
@@ -324,53 +179,25 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
-      final type = map['type']?.toString();
-      if (type == 'HOLD_CONFIG') {
-        final seconds = map['seconds'];
-        if (seconds is int && seconds > 0 && seconds <= 3600) {
-          await SecureStore.write('rail_hold_seconds', '$seconds');
-        }
-        return;
-      }
-      if (type == 'CREDENTIALS') {
-        _savedPhone = map['phone']?.toString() ?? '';
-        _savedPassword = map['password']?.toString() ?? '';
-        return;
-      }
-
-      if (type == 'AUTH_SUCCESS' || type == 'STORAGE_TOKEN') {
-        final token = map['token']?.toString() ?? '';
-        final deviceId = map['deviceId']?.toString() ?? '';
-        final deviceKey = map['deviceKey']?.toString() ?? '';
-        final cookie = map['cookie']?.toString() ?? '';
-        final userRaw = map['user'];
-        Map<String, dynamic> user = {};
-        if (userRaw is String && userRaw.isNotEmpty) {
-          try {
-            user = jsonDecode(userRaw) as Map<String, dynamic>;
-          } catch (_) {}
-        } else if (userRaw is Map<String, dynamic>) {
-          user = userRaw;
-        }
-
-        if (user.isNotEmpty) {
-          await SecureStore.write('rail_user', jsonEncode(user));
-        }
-        if (token.isNotEmpty && !AuthSession.isDummyToken(token)) {
-          _saveAndNavigate(
-            token: token,
-            deviceId: deviceId,
-            deviceKey: deviceKey,
-            cookie: cookie,
-            phoneNumber:
-                user['mobile_number']?.toString() ??
-                user['phone_number']?.toString() ??
-                user['username']?.toString(),
-            displayName:
-                user['display_name']?.toString() ?? user['name']?.toString(),
-            email: user['email']?.toString(),
-          );
-        }
+      switch (map['type']) {
+        case 'HOLD_CONFIG':
+          final seconds = map['seconds'];
+          if (seconds is int && seconds > 0 && seconds <= 3600) {
+            await SecureStore.write('rail_hold_seconds', '$seconds');
+          }
+        case 'CREDENTIALS':
+          // What the user typed; stored only after Railway accepts it.
+          _savedPhone = map['phone']?.toString() ?? '';
+          _savedPassword = map['password']?.toString() ?? '';
+        case 'AUTH_ERROR':
+          // Railway refused this login: never keep a password it rejected.
+          if (RailwayCredentialsRejected.isResponse(
+            map['body']?.toString() ?? '',
+          )) {
+            await AuthSession.clearSavedPassword();
+          }
+        case 'AUTH_SUCCESS' || 'STORAGE_TOKEN':
+          await _saveAndNavigate(WebLoginPayload.fromMap(map));
       }
     } catch (_) {}
   }
@@ -384,131 +211,33 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       if (!WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
         return;
       }
-      // Check localStorage on ANY page – including the login page itself –
-      // so that a token stored right after a successful login causes an
-      // immediate redirect without requiring the user to interact with any
-      // disclaimer popup.
-
-      final res = await _controller!.runJavaScriptReturningResult('''
-        (function() {
-          var t = localStorage.getItem('token') || localStorage.getItem('access_token') || localStorage.getItem('user_token') || '';
-          var devId = localStorage.getItem('x-device-id') || localStorage.getItem('uudid') || '';
-          var devKey = localStorage.getItem('x-device-key') || localStorage.getItem('ss') || localStorage.getItem('ssdk') || '';
-          var usr = localStorage.getItem('user') || '{}';
-          var cookie = document.cookie || '';
-          return JSON.stringify({
-            token: t,
-            deviceId: devId,
-            deviceKey: devKey,
-            user: usr,
-            cookie: cookie,
-          });
-        })()
-      ''');
-
-      final rawStr = res.toString();
-      final cleanJson = rawStr.startsWith('"') && rawStr.endsWith('"')
-          ? jsonDecode(rawStr)
-          : rawStr;
-      final map = jsonDecode(cleanJson.toString()) as Map<String, dynamic>;
-      final rawToken = map['token']?.toString() ?? '';
-
-      if (rawToken.isNotEmpty && !AuthSession.isDummyToken(rawToken)) {
-        final userRaw = map['user'];
-        Map<String, dynamic> user = {};
-        if (userRaw is String && userRaw.isNotEmpty) {
-          try {
-            user = jsonDecode(userRaw) as Map<String, dynamic>;
-          } catch (_) {}
-        } else if (userRaw is Map<String, dynamic>) {
-          user = userRaw;
-        }
-
-        if (user.isNotEmpty) {
-          await SecureStore.write('rail_user', jsonEncode(user));
-        }
-        await _saveAndNavigate(
-          token: rawToken,
-          deviceId: map['deviceId']?.toString() ?? '',
-          deviceKey: map['deviceKey']?.toString() ?? '',
-          cookie: map['cookie']?.toString() ?? '',
-          phoneNumber:
-              user['mobile_number']?.toString() ??
-              user['phone_number']?.toString() ??
-              user['mobile']?.toString() ??
-              user['phone']?.toString() ??
-              user['username']?.toString(),
-          displayName:
-              user['display_name']?.toString() ??
-              user['name']?.toString() ??
-              user['passenger_name']?.toString(),
-          email: user['email']?.toString(),
-        );
-      }
+      // Checked on ANY Railway page, including the login page itself, so a
+      // token stored right after sign-in redirects immediately.
+      final res = await _controller!.runJavaScriptReturningResult(
+        RailLoginScript.readSession,
+      );
+      final payload = WebLoginPayload.fromJsResult(res);
+      if (payload != null) await _saveAndNavigate(payload);
     } catch (_) {
     } finally {
       _checkingSession = false;
     }
   }
 
-  Future<void> _saveAndNavigate({
-    required String token,
-    required String deviceId,
-    required String deviceKey,
-    String? cookie,
-    String? phoneNumber,
-    String? displayName,
-    String? email,
-  }) async {
-    if (_hasNavigated ||
-        !mounted ||
-        !AuthSession(token: token, deviceKey: deviceKey).isValid) {
-      return;
-    }
+  /// Stores the new session AND the credentials that just worked, so the next
+  /// token expiry can be handled silently with the up-to-date login.
+  Future<void> _saveAndNavigate(WebLoginPayload payload) async {
+    if (_hasNavigated || !mounted || !payload.hasUsableToken) return;
     _hasNavigated = true;
     _sessionRetry?.cancel();
     _loadingTimeoutTimer?.cancel();
     setState(() => _isLoading = true);
     try {
-      final payload = AuthSession.decodeJwtPayload(token);
-      final phone = (phoneNumber != null && phoneNumber.isNotEmpty)
-          ? phoneNumber
-          : (payload?['mobile_number']?.toString() ??
-                payload?['phone_number']?.toString() ??
-                payload?['mobile']?.toString() ??
-                payload?['phone']?.toString() ??
-                payload?['username']?.toString() ??
-                _savedPhone);
-      final name = (displayName != null && displayName.isNotEmpty)
-          ? displayName
-          : (payload?['display_name']?.toString() ??
-                payload?['name']?.toString() ??
-                payload?['passenger_name']?.toString());
-      final mail = (email != null && email.isNotEmpty)
-          ? email
-          : payload?['email']?.toString();
-
-      // Persist user's own phone for future autofill
-      if (phone.isNotEmpty) {
-        await AuthSession.saveUserCredentials(
-          phone,
-          _savedPassword.isNotEmpty ? _savedPassword : null,
-        );
-      }
-
-      final session = AuthSession(
-        token: token,
-        deviceId: deviceId,
-        deviceKey: deviceKey,
-        cookie: cookie,
-        phoneNumber: phone,
-        displayName: name,
-        email: mail,
-        isLoggedIn: true,
+      await WebLoginPersistence.save(
+        payload,
+        fallbackPhone: _savedPhone,
+        fallbackPassword: _savedPassword,
       );
-      await AuthSession.save(session);
-      await SecureStore.delete('rail_login_attempt_at');
-      unawaited(FirebaseUserService().syncUserOnLogin(session));
       _navigateToSearch();
     } catch (_) {
       _hasNavigated = false;
@@ -516,185 +245,19 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
   }
 
-  Future<void> _showSaveCredentialsDialog() async {
-    final phoneController = TextEditingController(text: _savedPhone);
-    final passController = TextEditingController(text: _savedPassword);
-    final lang = Provider.of<LanguageService>(context, listen: false);
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(lang.t('save_credentials')),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              lang.t('saved_credentials_msg'),
-              style: const TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: phoneController,
-              keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
-                labelText: lang.t('mobile_number'),
-                prefixIcon: const Icon(Icons.phone),
-                hintText: '01XXXXXXXXX',
-              ),
-            ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: passController,
-              obscureText: true,
-              decoration: InputDecoration(
-                labelText: lang.t('password'),
-                prefixIcon: const Icon(Icons.lock),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text(lang.isBangla ? 'বাতিল' : 'Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF059669),
-            ),
-            onPressed: () async {
-              final p = phoneController.text.trim();
-              final pwd = passController.text;
-              if (p.isNotEmpty) {
-                await AuthSession.saveUserCredentials(p, pwd);
-                setState(() {
-                  _savedPhone = p;
-                  _savedPassword = pwd;
-                });
-                if (ctx.mounted) Navigator.pop(ctx);
-                _insertSavedCredentials(silent: false);
-              }
-            },
-            child: Text(
-              lang.isBangla ? 'সংরক্ষণ ও পূরণ' : 'Save & Fill',
-              style: const TextStyle(color: Colors.white),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _insertSavedCredentials({bool silent = false}) async {
-    if (_controller == null ||
-        !WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
+  /// Pre-fills (never submits) whatever login is saved. The user taps the
+  /// site's own button, so a wrong password can never loop.
+  Future<void> _prefillSavedCredentials() async {
+    if (_controller == null || (_savedPhone.isEmpty && _savedPassword.isEmpty)) {
       return;
     }
-    if (_savedPhone.trim().isEmpty) {
-      if (!silent && mounted) {
-        _showSaveCredentialsDialog();
-      }
+    if (!WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
       return;
     }
-
     try {
-      final jsCode =
-          '''
-        (function() {
-          var phoneVal = ${jsonEncode(_savedPhone)};
-          var passVal = ${jsonEncode(_savedPassword)};
-          if (!phoneVal || !passVal) return;
-
-          function triggerInput(el, val) {
-            if (!el) return;
-            el.focus();
-            el.value = val;
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.blur();
-          }
-
-          var filled = false;
-          var submitted = false;
-
-          function tryFillAndSubmit() {
-            if (submitted) return;
-
-            var pSelectors = [
-              '#mobile_number',
-              'input[name="mobile_number"]',
-              'input[formcontrolname="mobile_number"]',
-              'input[type="tel"]',
-              'input[placeholder*="Mobile"]'
-            ];
-            var passSelectors = [
-              '#password',
-              'input[name="password"]',
-              'input[formcontrolname="password"]',
-              'input[type="password"]'
-            ];
-
-            var phoneEl = null;
-            for (var i = 0; i < pSelectors.length; i++) {
-              phoneEl = document.querySelector(pSelectors[i]);
-              if (phoneEl) break;
-            }
-
-            var passEl = null;
-            for (var j = 0; j < passSelectors.length; j++) {
-              passEl = document.querySelector(passSelectors[j]);
-              if (passEl) break;
-            }
-
-            if (phoneEl && passEl) {
-              if (phoneEl.value !== phoneVal) {
-                triggerInput(phoneEl, phoneVal);
-              }
-              if (passEl.value !== passVal) {
-                triggerInput(passEl, passVal);
-              }
-              filled = true;
-            }
-
-            if (filled) {
-              var submitBtn = document.querySelector('button.login-form-submit-btn, button[type="submit"]');
-              if (submitBtn && !submitBtn.disabled) {
-                submitted = true;
-                submitBtn.click();
-              }
-            }
-          }
-
-          // Initial fill attempt
-          tryFillAndSubmit();
-
-          // Poll every 250ms for 30s to catch Angular rendering & Turnstile solving
-          var interval = setInterval(function() {
-            if (submitted) {
-              clearInterval(interval);
-              return;
-            }
-            tryFillAndSubmit();
-          }, 250);
-
-          setTimeout(function() {
-            clearInterval(interval);
-          }, 30000);
-        })();
-      ''';
-
-      await _controller!.runJavaScript(jsCode);
-
-      if (!silent && mounted) {
-        final lang = Provider.of<LanguageService>(context, listen: false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFF059669),
-            content: Text('${lang.t('autofill_done')}: $_savedPhone'),
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+      await _controller!.runJavaScript(
+        RailLoginScript.autofill(_savedPhone, _savedPassword, submit: false),
+      );
     } catch (_) {}
   }
 
@@ -702,6 +265,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     if (!mounted) return;
     final monitorService = context.read<MonitorService>();
     monitorService.clearErrors();
+    if (widget.popOnSuccess && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop(true);
+      return;
+    }
     Navigator.of(context).pushAndRemoveUntil(
       PageRouteBuilder<void>(
         transitionDuration: Duration.zero,
@@ -797,28 +364,61 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           ),
         ],
       ),
-      body: Stack(
+      body: Column(
         children: [
-          if (_controller != null)
-            WebViewWidget(controller: _controller!)
-          else
-            const Center(
-              child: CircularProgressIndicator(color: AppColors.primary),
-            ),
-          if (_isLoading)
-            Positioned.fill(
-              child: Container(
-                color: (isDark ? AppColors.darkBg : Colors.white).withValues(
-                  alpha: 0.88,
-                ),
-                child: FancyTrainLoader(
-                  message: langService.tr('Signing in…', 'সাইন ইন হচ্ছে…'),
-                  subMessage: '',
-                  stage: JourneyAnimationStage.verifying,
-                  showCard: true,
-                ),
+          if (widget.notice != null)
+            Container(
+              width: double.infinity,
+              color: const Color(0xFFFFF4E5),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.info_outline_rounded,
+                    size: 18,
+                    color: Color(0xFFB45309),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      widget.notice!,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF7C2D12),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+          Expanded(
+            child: Stack(
+              children: [
+                if (_controller != null)
+                  WebViewWidget(controller: _controller!)
+                else
+                  const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  ),
+                if (_isLoading)
+                  Positioned.fill(
+                    child: Container(
+                      color: (isDark ? AppColors.darkBg : Colors.white)
+                          .withValues(alpha: 0.88),
+                      child: FancyTrainLoader(
+                        message: langService.tr(
+                          'Signing in…',
+                          'সাইন ইন হচ্ছে…',
+                        ),
+                        subMessage: '',
+                        stage: JourneyAnimationStage.verifying,
+                        showCard: true,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
         ],
       ),
     );

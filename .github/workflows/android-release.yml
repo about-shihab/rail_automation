@@ -83,6 +83,7 @@ jobs:
           flutter test --no-pub
           python -m unittest discover -s scripts/tests
           node test/turnstile_bootstrap_test.cjs
+          node --test functions/test/*.test.js
 
       - name: Restore production signing
         env:

@@ -139,6 +139,17 @@ class AuthSession {
     await SecureStore.delete(_prefPasswordKey);
   }
 
+  /// Called when Railway rejects the saved password. The phone number stays so
+  /// the login form can be pre-filled, but we never retry a known-bad password.
+  static Future<void> clearSavedPassword() async {
+    await SecureStore.delete(_prefPasswordKey);
+  }
+
+  static Future<bool> hasSavedCredentials() async {
+    final c = await getSavedUserCredentials();
+    return (c['phone'] ?? '').isNotEmpty && (c['password'] ?? '').isNotEmpty;
+  }
+
   static Future<AuthSession?> load() async {
     final raw = await SecureStore.read(_prefKey);
     if (raw == null) return null;

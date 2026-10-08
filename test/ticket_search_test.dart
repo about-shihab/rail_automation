@@ -3,6 +3,8 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:intl/intl.dart';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -48,7 +50,8 @@ void main() {
         'id': 'search-1',
         'from': 'Dhaka',
         'to': 'Chattogram',
-        'date': '23-Sep-2026',
+        'date': DateFormat('dd-MMM-yyyy')
+            .format(DateTime.now().add(const Duration(days: 1))),
         'seat': seat,
         'train': train,
         'active': true,
@@ -79,7 +82,15 @@ void main() {
             jsonEncode({
               'data': {
                 'trains': ApiService.getMockResponse().trains
-                    .map((t) => t.toJson())
+                    .map(
+                      (t) => {
+                        ...t.toJson(),
+                        'departure_date_time_jd': DateTime.now()
+                            .add(const Duration(hours: 24))
+                            .toUtc()
+                            .toIso8601String(),
+                      },
+                    )
                     .toList(),
               },
             }),
@@ -109,7 +120,15 @@ void main() {
           jsonEncode({
             'data': {
               'trains': ApiService.getMockResponse().trains
-                  .map((t) => t.toJson())
+                  .map(
+                    (t) => {
+                      ...t.toJson(),
+                      'departure_date_time_jd': DateTime.now()
+                          .add(const Duration(hours: 24))
+                          .toUtc()
+                          .toIso8601String(),
+                    },
+                  )
                   .toList(),
             },
           }),
@@ -126,7 +145,15 @@ void main() {
           jsonEncode({
             'data': {
               'trains': ApiService.getMockResponse().trains
-                  .map((t) => t.toJson())
+                  .map(
+                    (t) => {
+                      ...t.toJson(),
+                      'departure_date_time_jd': DateTime.now()
+                          .add(const Duration(hours: 24))
+                          .toUtc()
+                          .toIso8601String(),
+                    },
+                  )
                   .toList(),
             },
           }),

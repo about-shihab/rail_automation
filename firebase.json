@@ -1,4 +1,9 @@
 {
+  "functions": [{
+    "source": "functions",
+    "codebase": "admin-announcements",
+    "ignore": ["node_modules", ".git", "*.log", "test"]
+  }],
   "hosting": {
     "public": "build/public-site",
     "ignore": ["firebase.json", "**/.*", "**/*.apk"],

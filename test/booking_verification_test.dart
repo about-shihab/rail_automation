@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:intl/intl.dart';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -211,7 +213,8 @@ void main() {
         'id': 'pending-booking',
         'from': 'Dhaka',
         'to': 'Chattogram',
-        'date': '30-Oct-2026',
+        'date': DateFormat('dd-MMM-yyyy')
+            .format(DateTime.now().add(const Duration(days: 1))),
         'active': true,
         'expires': DateTime.now()
             .add(const Duration(hours: 8))
