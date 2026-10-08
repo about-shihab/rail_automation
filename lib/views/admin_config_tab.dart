@@ -585,24 +585,27 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
               fields: _reservationGroup,
               extraWidget: Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    'Resume searching after reservation expires',
-                    style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                child: Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Resume searching after reservation expires',
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Automatically restarts seat search if the user does not pay in time.',
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey),
+                    ),
+                    value: _resume,
+                    activeThumbColor: AppColors.primary,
+                    onChanged: widget.busy
+                        ? null
+                        : (value) => setState(() {
+                              _resume = value;
+                              _dirty = true;
+                            }),
                   ),
-                  subtitle: const Text(
-                    'Automatically restarts seat search if the user does not pay in time.',
-                    style: TextStyle(fontSize: 11.5, color: Colors.grey),
-                  ),
-                  value: _resume,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: widget.busy
-                      ? null
-                      : (value) => setState(() {
-                            _resume = value;
-                            _dirty = true;
-                          }),
                 ),
               ),
             ),
@@ -629,24 +632,27 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
               fields: _bookingLimitsGroup,
               extraWidget: Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text(
-                    'Push admin announcements',
-                    style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                child: Material(
+                  color: Colors.transparent,
+                  child: SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text(
+                      'Push admin announcements',
+                      style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: const Text(
+                      'Enable after the push delivery server is deployed. Announcements arrive while the app is closed.',
+                      style: TextStyle(fontSize: 11.5, color: Colors.grey),
+                    ),
+                    value: _pushAnnouncements,
+                    activeThumbColor: AppColors.primary,
+                    onChanged: widget.busy
+                        ? null
+                        : (value) => setState(() {
+                              _pushAnnouncements = value;
+                              _dirty = true;
+                            }),
                   ),
-                  subtitle: const Text(
-                    'Enable after the push delivery server is deployed. Announcements arrive while the app is closed.',
-                    style: TextStyle(fontSize: 11.5, color: Colors.grey),
-                  ),
-                  value: _pushAnnouncements,
-                  activeThumbColor: AppColors.primary,
-                  onChanged: widget.busy
-                      ? null
-                      : (value) => setState(() {
-                            _pushAnnouncements = value;
-                            _dirty = true;
-                          }),
                 ),
               ),
             ),
@@ -693,56 +699,59 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                   for (final entry in _maps.entries)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
-                      child: ExpansionTile(
-                        tilePadding: EdgeInsets.zero,
-                        title: Text(
-                          entry.value,
-                          style: const TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: ExpansionTile(
+                          tilePadding: EdgeInsets.zero,
+                          title: Text(
+                            entry.value,
+                            style: const TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                        maintainState: true,
-                        children: [
-                          if (entry.key == 'api_operations')
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: Text(
-                                'Supported operations: ${RailApiConfig.paths.keys.join(', ')}. Payload secrets must use {{placeholders}}.',
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.grey,
+                          maintainState: true,
+                          children: [
+                            if (entry.key == 'api_operations')
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: Text(
+                                  'Supported operations: ${RailApiConfig.paths.keys.join(', ')}. Payload secrets must use {{placeholders}}.',
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.grey,
+                                  ),
                                 ),
                               ),
-                            ),
-                          TextFormField(
-                            key: ValueKey(entry.key),
-                            controller: _controllers[entry.key],
-                            enabled: !widget.busy,
-                            minLines: 4,
-                            maxLines: 14,
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                            ),
-                            decoration: const InputDecoration(
-                              labelText: 'JSON object',
-                              border: OutlineInputBorder(),
-                            ),
-                            onChanged: _changed,
-                            validator: (text) {
-                              try {
-                                if (jsonDecode(text ?? '') is Map<String, dynamic>) {
-                                  return null;
+                            TextFormField(
+                              key: ValueKey(entry.key),
+                              controller: _controllers[entry.key],
+                              enabled: !widget.busy,
+                              minLines: 4,
+                              maxLines: 14,
+                              style: const TextStyle(
+                                fontFamily: 'monospace',
+                                fontSize: 12,
+                              ),
+                              decoration: const InputDecoration(
+                                labelText: 'JSON object',
+                                border: OutlineInputBorder(),
+                              ),
+                              onChanged: _changed,
+                              validator: (text) {
+                                try {
+                                  if (jsonDecode(text ?? '') is Map<String, dynamic>) {
+                                    return null;
+                                  }
+                                } on FormatException {
+                                  /* Show a field error below. */
                                 }
-                              } on FormatException {
-                                /* Show a field error below. */
-                              }
-                              return 'Enter a valid JSON object';
-                            },
-                          ),
-                          const SizedBox(height: 8),
-                        ],
+                                return 'Enter a valid JSON object';
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                          ],
+                        ),
                       ),
                     ),
                 ],
@@ -775,9 +784,9 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
               ),
               onPressed: widget.busy ? null : _save,
               icon: const Icon(Icons.save_outlined),
-              label: Text(
-                _dirty ? 'Save configuration (Modified)' : 'Save configuration',
-                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              label: const Text(
+                'Save configuration',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
               ),
             ),
             const SizedBox(height: 8),
