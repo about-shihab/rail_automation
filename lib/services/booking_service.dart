@@ -18,6 +18,7 @@ import 'notification_service.dart';
 import 'secure_store.dart';
 import 'trip_history_service.dart';
 import 'turnstile_gate.dart';
+import 'voice_service.dart';
 import '../utils/friendly_error.dart';
 
 /// The layout already loaded for this booking; choosing seats must not fetch
@@ -472,6 +473,9 @@ class BookingService {
             seatInfo: '$coachName (${seatsList.join(", ")})',
           );
           await save(state);
+          try {
+            await VoiceService.instance.speakBookingConfirmed();
+          } catch (_) {}
 
           try {
             await TripHistoryService().recordTrip(

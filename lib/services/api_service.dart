@@ -35,8 +35,9 @@ class ApiService {
     required String dateOfJourney,
     String? seatClass,
     required AuthSession authSession,
+    bool silent = false,
   }) async {
-    return BookingActivity.instance.run(BookingActivityStage.searching, () async {
+    Future<TripSearchResponse> perform() async {
       final queryParams = <String, String>{
         'from_city': fromCity.trim(),
         'to_city': toCity.trim(),
@@ -74,7 +75,12 @@ class ApiService {
           'Server returned code ${response.statusCode}: ${response.body.isNotEmpty ? response.body : "Unknown error"}',
         );
       }
-    });
+    }
+
+    if (silent) {
+      return perform();
+    }
+    return BookingActivity.instance.run(BookingActivityStage.searching, perform);
   }
 
   /// Provides realistic Bangladesh Railway train trips matching the official Shohoz search-trips-v2 schema.
@@ -1074,8 +1080,9 @@ class ApiService {
   /// Fetches official purchase history from Bangladesh Railway / Shohoz.
   static Future<List<PurchasedTicket>> getPurchaseHistory({
     required AuthSession authSession,
+    bool silent = false,
   }) async {
-    return BookingActivity.instance.run(BookingActivityStage.tickets, () async {
+    Future<List<PurchasedTicket>> perform() async {
       final headers = <String, String>{
         'Accept': 'application/json',
         'Content-Type': 'application/json',
@@ -1121,7 +1128,12 @@ class ApiService {
           'Failed to fetch purchase history (${response.statusCode}): ${response.body}',
         );
       }
-    });
+    }
+
+    if (silent) {
+      return perform();
+    }
+    return BookingActivity.instance.run(BookingActivityStage.tickets, perform);
   }
 
   /// Downloads the official PDF ticket for a given order ID.

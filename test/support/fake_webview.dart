@@ -68,6 +68,8 @@ class FakeWebViewController extends PlatformWebViewController {
   @override
   Future<void> setJavaScriptMode(JavaScriptMode mode) async {}
   @override
+  Future<void> setUserAgent(String? userAgent) async {}
+  @override
   Future<void> setBackgroundColor(Color color) async {}
   @override
   Future<void> addJavaScriptChannel(JavaScriptChannelParams params) async {

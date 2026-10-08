@@ -104,6 +104,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     try {
       _controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setUserAgent(
+          'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
+        )
         ..addJavaScriptChannel(
           'RailBridge',
           onMessageReceived: (JavaScriptMessage msg) {
@@ -142,9 +145,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                   if (mounted && !_hasNavigated) _checkLiveSession();
                 });
               }
-              // Show the form as soon as it has been pre-filled.
+              // Show the form as soon as it has been pre-filled (or wait for auto-login).
+              final hasCreds = _savedPhone.isNotEmpty && _savedPassword.isNotEmpty;
+              final timeoutMs = (widget.clearSession && hasCreds) ? 8000 : 700;
               _loadingTimeoutTimer?.cancel();
-              _loadingTimeoutTimer = Timer(const Duration(milliseconds: 700), () {
+              _loadingTimeoutTimer = Timer(Duration(milliseconds: timeoutMs), () {
                 if (mounted && !_hasNavigated && _isLoading) {
                   setState(() => _isLoading = false);
                 }
@@ -245,8 +250,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
   }
 
-  /// Pre-fills (never submits) whatever login is saved. The user taps the
-  /// site's own button, so a wrong password can never loop.
+  /// Pre-fills whatever login is saved. When recovering an expired session
+  /// ([clearSession] is true), it automatically submits and solves Turnstile;
+  /// otherwise it pre-fills and lets the user tap sign-in.
   Future<void> _prefillSavedCredentials() async {
     if (_controller == null || (_savedPhone.isEmpty && _savedPassword.isEmpty)) {
       return;
@@ -255,8 +261,15 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
       return;
     }
     try {
+      final shouldSubmit = widget.clearSession &&
+          _savedPhone.isNotEmpty &&
+          _savedPassword.isNotEmpty;
       await _controller!.runJavaScript(
-        RailLoginScript.autofill(_savedPhone, _savedPassword, submit: false),
+        RailLoginScript.autofill(
+          _savedPhone,
+          _savedPassword,
+          submit: shouldSubmit,
+        ),
       );
     } catch (_) {}
   }

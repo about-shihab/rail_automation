@@ -13,6 +13,8 @@ import '../services/ticket_download_service.dart';
 import '../services/trip_history_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
+import '../services/booking_service.dart';
+import '../services/notification_service.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
 
@@ -60,7 +62,42 @@ class _TripsScreenState extends State<TripsScreen> {
         return;
       }
 
-      final tickets = await ApiService.getPurchaseHistory(authSession: session);
+      final tickets = await ApiService.getPurchaseHistory(
+        authSession: session,
+        silent: true,
+      );
+
+      // Check if any pending reservation was paid and confirmed by ticket
+      final pending = await BookingService.pending();
+      if (pending != null && pending['status'] == 'readyForPayment') {
+        final tripId = int.tryParse('${pending['seatClass']?['trip_id']}');
+        final trainName = pending['train']?['trip_number']?.toString() ??
+            pending['train']?['train_name']?.toString() ?? '';
+        final doj = pending['date']?.toString() ?? '';
+
+        final confirmed = tickets.where((t) => t.isConfirmed && !t.isRefunded && t.pnr.isNotEmpty).firstWhere(
+          (t) =>
+              (tripId != null && t.tripId == tripId) ||
+              (trainName.isNotEmpty &&
+                  t.trainName.toLowerCase().contains(trainName.toLowerCase())) ||
+              (doj.isNotEmpty && t.dateOfJourney.contains(doj)),
+          orElse: () => tickets.firstWhere(
+            (t) => t.isConfirmed && !t.isRefunded && t.pnr.isNotEmpty && tripId != null && t.tripId == tripId,
+            orElse: () => tickets.first,
+          ),
+        );
+
+        if (confirmed.isConfirmed && !confirmed.isRefunded && confirmed.pnr.isNotEmpty) {
+          final done = await BookingService.completeSuccessfulBooking(reservation: pending);
+          if (done) {
+            await NotificationService().showPurchaseSuccessAlert(
+              trainName: trainName.isNotEmpty ? trainName : confirmed.trainName,
+              pnr: confirmed.pnr,
+            );
+          }
+        }
+      }
+
       if (mounted) {
         setState(() {
           _purchasedTickets = tickets;

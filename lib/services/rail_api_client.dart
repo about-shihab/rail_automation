@@ -7,10 +7,12 @@ import 'package:http/http.dart' as http;
 import '../models/auth_session.dart';
 import 'app_config.dart';
 import 'notification_service.dart';
-import 'rail_api_config.dart';
 import 'login_recovery_required.dart';
+import 'rail_api_config.dart';
+import 'railway_credentials_rejected.dart';
 import 'secure_store.dart';
 import 'session_recovery.dart';
+import 'turnstile_gate.dart';
 
 /// One bounded recovery for explicit auth rejections. Unknown mutation outcomes
 /// and generic Cloudflare 403 responses are never replayed.
@@ -88,10 +90,112 @@ class RailApiClient {
         if (latest.isValid && latest.token != (rejectedToken ?? auth.token)) {
           return latest;
         }
-        return await SessionRecovery.instance.recover(
-          previous: auth,
-          rejectedToken: rejectedToken ?? auth.token,
+        if (SessionRecovery.instance.canRunWebView) {
+          return await SessionRecovery.instance.recover(
+            previous: auth,
+            rejectedToken: rejectedToken ?? auth.token,
+          );
+        }
+
+        final last = int.tryParse(
+          await SecureStore.read('rail_login_attempt_at') ?? '',
         );
+        if (last != null &&
+            DateTime.now().millisecondsSinceEpoch - last <
+                AppConfig.instance.number('login_retry_interval_seconds') *
+                    1000) {
+          final seconds =
+              ((AppConfig.instance.number('login_retry_interval_seconds') *
+                              1000 -
+                          (DateTime.now().millisecondsSinceEpoch - last)) /
+                      1000)
+                  .ceil();
+          throw LoginRecoveryRequired(
+            'Automatic login can retry in $seconds seconds. Tap Log in to continue now.',
+          );
+        }
+        final credentials = await AuthSession.getSavedUserCredentials();
+        final phone = credentials['phone'] ?? '';
+        final password = credentials['password'] ?? '';
+        if (phone.isEmpty ||
+            password.isEmpty ||
+            (auth.phoneNumber?.isNotEmpty == true &&
+                phone != auth.phoneNumber)) {
+          throw const LoginRecoveryRequired(
+            'Save your Railway credentials in Login to enable session recovery.',
+          );
+        }
+        // Acquire fresh Cloudflare token for the sign-in endpoint.
+        final cft = await TurnstileGate.instance.acquire(
+          label: 'Railway login',
+          forceFresh: true,
+          siteKey: '0x4AAAAAAB5VTjZ90pUxRuXR',
+        );
+        if (cft == null || cft.isEmpty) {
+          throw const LoginRecoveryRequired(
+            'Tap Log in to verify Railway login.',
+          );
+        }
+        await TurnstileGate.instance.invalidate();
+        // A cancelled or unavailable human check is not a login API attempt.
+        await SecureStore.write(
+          'rail_login_attempt_at',
+          '${DateTime.now().millisecondsSinceEpoch}',
+        );
+        final response = await _send(
+          'sign_in',
+          'POST',
+          {'mobile_number': phone, 'password': password, 'cft_response': cft},
+          auth,
+          {},
+          authenticated: false,
+        );
+        if (RailwayCredentialsRejected.isResponse(response.body)) {
+          throw const RailwayCredentialsRejected();
+        }
+        if (response.statusCode != 200) {
+          throw const LoginRecoveryRequired(
+            'Railway login recovery failed. Please sign in again.',
+          );
+        }
+        final decoded = jsonDecode(response.body);
+        final data = decoded is Map ? decoded['data'] : null;
+        final token =
+            data is Map ? (data['token'] ?? data['access_token']) : null;
+        if (token is! String ||
+            token.isEmpty ||
+            (data is Map && data['success'] == false)) {
+          throw const LoginRecoveryRequired(
+            'Railway login did not return a valid token. Tap Log in to continue.',
+          );
+        }
+        final user = (data is Map && data['user'] is Map)
+            ? Map<String, dynamic>.from(data['user'] as Map)
+            : null;
+        if (user != null && user.isNotEmpty) {
+          await SecureStore.write('rail_user', jsonEncode(user));
+        }
+        final updated = AuthSession(
+          token: token,
+          deviceId: auth.deviceId,
+          deviceKey: auth.deviceKey,
+          phoneNumber: phone,
+          displayName: user?['display_name']?.toString() ??
+              user?['name']?.toString() ??
+              auth.displayName,
+          email: user?['email']?.toString() ?? auth.email,
+          cookie: auth.cookie,
+          isPro: auth.isPro,
+        );
+        if (!updated.isValid) {
+          throw const LoginRecoveryRequired(
+            'Railway returned an expired token. Tap Log in to continue.',
+          );
+        }
+        await AuthSession.save(updated);
+        await SecureStore.delete('rail_action_token');
+        await NotificationService().clearLoginAlert();
+        return updated;
       } catch (_) {
         // In the foreground the app opens the login screen itself; the
         // notification is only for the background search service.

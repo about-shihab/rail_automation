@@ -325,7 +325,10 @@ class _WatchSheetState extends State<_WatchSheet> {
                         ),
                       ),
                       subtitle: Text(
-                        lang.tr('Google SMS consent', 'Google এসএমএস অনুমতি'),
+                        lang.tr(
+                          'Google OTP Verifier permission',
+                          'Google SMS Consent দ্বারা স্বয়ংক্রিয় ওটিপি যাচাই',
+                        ),
                         style: TextStyle(
                           fontSize: 12,
                           color: AppColors.textSecondary(dark),
@@ -334,7 +337,14 @@ class _WatchSheetState extends State<_WatchSheet> {
                       value: _autoVerify,
                       onChanged: _busy
                           ? null
-                          : (v) => setState(() => _autoVerify = v),
+                          : (v) async {
+                              if (v) {
+                                final ok = await SmsService().requestSmsPermission();
+                                if (mounted) setState(() => _autoVerify = ok);
+                              } else {
+                                setState(() => _autoVerify = false);
+                              }
+                            },
                     ),
                   ],
                 ),

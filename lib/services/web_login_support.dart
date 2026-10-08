@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import '../models/auth_session.dart';
@@ -179,38 +180,87 @@ class RailLoginScript {
   var passVal = ${jsonEncode(password)};
   if (window.__railAutofillRunning) return;
   window.__railAutofillRunning = true;
+
   function setVal(el, val) {
+    if (!el) return;
     el.focus();
     var proto = Object.getPrototypeOf(el);
     var desc = Object.getOwnPropertyDescriptor(proto, 'value');
     if (desc && desc.set) desc.set.call(el, val); else el.value = val;
+    el.dispatchEvent(new Event('keydown', { bubbles: true }));
     el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('keyup', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    el.blur();
+    el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
+
   function pick(sels) {
-    for (var i = 0; i < sels.length; i++) { var e = document.querySelector(sels[i]); if (e) return e; }
+    for (var i = 0; i < sels.length; i++) {
+      var e = document.querySelector(sels[i]);
+      if (e) return e;
+    }
     return null;
   }
+
+  function checkTurnstileResponse() {
+    try {
+      var input = document.querySelector('input[name="cf-turnstile-response"], input[name="cft_response"], input[id*="cf-chl"]');
+      if (input && input.value && input.value.trim().length > 10) return true;
+      if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+        var resp = window.turnstile.getResponse();
+        if (resp && resp.length > 10) return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  function tryTriggerTurnstile() {
+    try {
+      var ts = document.querySelector('.cf-turnstile, [data-sitekey], ngx-turnstile, #challenge, div[id*="turnstile"]');
+      if (ts && !checkTurnstileResponse()) {
+        ts.click();
+      }
+    } catch (_) {}
+  }
+
   var filled = false, submitted = false;
   function tick() {
     if (submitted) return true;
     var phoneEl = pick(['#mobile_number','input[name="mobile_number"]','input[formcontrolname="mobile_number"]','input[type="tel"]','input[placeholder*="Mobile"]']);
     var passEl = pick(['#password','input[name="password"]','input[formcontrolname="password"]','input[type="password"]']);
-    if (!filled && phoneEl && (passEl || !passVal)) {
-      if (phoneVal && !phoneEl.value) setVal(phoneEl, phoneVal);
-      if (passEl && passVal && !passEl.value) setVal(passEl, passVal);
+
+    if (phoneEl && phoneVal && (!phoneEl.value || phoneEl.value !== phoneVal)) {
+      setVal(phoneEl, phoneVal);
       filled = true;
     }
+    if (passEl && passVal && (!passEl.value || passEl.value !== passVal)) {
+      setVal(passEl, passVal);
+      filled = true;
+    }
+    if (phoneEl && (phoneEl.value === phoneVal) && (!passVal || (passEl && passEl.value === passVal))) {
+      filled = true;
+    }
+
+    tryTriggerTurnstile();
+
     if (filled && ${submit ? 'true' : 'false'}) {
       var btn = document.querySelector('button.login-form-submit-btn, button[type="submit"]');
-      if (btn && !btn.disabled) { submitted = true; btn.click(); return true; }
+      var cfVerified = checkTurnstileResponse();
+      if (btn) {
+        if (!btn.disabled || cfVerified) {
+          if (btn.disabled) btn.disabled = false;
+          submitted = true;
+          btn.click();
+          return true;
+        }
+      }
     }
     return filled && ${submit ? 'false' : 'true'};
   }
+
   if (tick()) return;
   var iv = setInterval(function() { if (tick()) clearInterval(iv); }, 250);
-  setTimeout(function() { clearInterval(iv); window.__railAutofillRunning = false; }, 30000);
+  setTimeout(function() { clearInterval(iv); window.__railAutofillRunning = false; }, 35000);
 })();
 ''';
 }
@@ -359,7 +409,7 @@ class WebLoginPersistence {
       await NotificationService().clearLoginAlert();
     } catch (_) {}
     try {
-      await FirebaseUserService().syncUserOnLogin(session);
+      unawaited(FirebaseUserService().syncUserOnLogin(session));
     } catch (_) {}
     return session;
   }

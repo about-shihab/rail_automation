@@ -7,13 +7,14 @@ import 'package:provider/provider.dart';
 
 import '../views/booking_screen.dart';
 import '../views/announcement_screen.dart';
-import 'login_flow.dart';
+import '../views/webview_login_screen.dart';
 import 'booking_service.dart';
 import 'booking_activity.dart';
 import 'turnstile_gate.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
 import 'monitor_service.dart';
+import 'voice_service.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -130,7 +131,11 @@ class NotificationService {
         return;
       }
       _pendingBooking = null;
-      unawaited(LoginFlow.recoverNow());
+      navigator.push(
+        MaterialPageRoute(
+          builder: (_) => const WebviewLoginScreen(clearSession: true),
+        ),
+      );
       return;
     }
     if (payload == 'rail://booking-progress') {
@@ -265,21 +270,24 @@ class NotificationService {
     final ready = state['status'] == 'readyForPayment';
     final bn = await prefersBangla();
     final title = ready
-        ? (bn ? 'আসন সংরক্ষিত · পেমেন্ট করুন' : 'Seats held · Pay now')
+        ? (bn ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · মূল্য পরিশোধ করুন' : 'Seats held · Pay now')
         : (bn
-              ? 'আপনার টিকেট বুকিং কনফার্ম হয়েছে'
+              ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং কনফার্ম'
               : 'Your seat reservation is confirmed');
     final description = ready
         ? (bn
-              ? 'ওটিপি যাচাই হয়েছে। বুকিং সম্পূর্ণ করতে সময় শেষ হওয়ার আগে টিকেট কিনুন।'
+              ? 'আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন। ওটিপি যাচাই হয়েছে।'
               : 'OTP verified. Purchase your ticket before the hold expires to complete booking.')
         : (bn
               ? (state['autoVerify'] == true
-                    ? 'স্বয়ংক্রিয় ওটিপি যাচাইয়ের অপেক্ষায়। প্রয়োজনে অ্যাপ খুলে ওটিপি দিন। পেমেন্ট এখনও বাকি।'
-                    : 'অ্যাপ খুলে ফোনে পাঠানো ওটিপি যাচাই করুন, তারপর টিকেট কিনুন।')
+                    ? 'আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন। স্বয়ংক্রিয় ওটিপি যাচাইয়ের অপেক্ষায়।'
+                    : 'আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন। অ্যাপ খুলে ওটিপি দিন।')
               : (state['autoVerify'] == true
                     ? 'Waiting for automatic OTP verification. Open the app to enter it manually if needed. Payment is still required.'
                     : 'Open the app to verify your OTP, then purchase your ticket.'));
+    if (!ready && state['status'] == 'awaitingOtp') {
+      unawaited(VoiceService.instance.speakBookingConfirmed());
+    }
     final body =
         "${[trainName, if (seatType.isNotEmpty) seatType].join(' · ')}\n$description";
     final androidDetails = _alertDetails(
@@ -403,7 +411,9 @@ class NotificationService {
     } catch (_) {}
 
     final bn = await prefersBangla();
-    final title = bn ? 'আপনার টিকেট বুকিং কনফার্ম হয়েছে' : 'Ticket confirmed';
+    final title = bn
+        ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং সম্পন্ন'
+        : 'Ticket confirmed';
     final body =
         "$trainName${(pnr != null && pnr.isNotEmpty) ? '\nPNR · $pnr' : ''}";
     final androidDetails = _alertDetails(
@@ -591,14 +601,14 @@ class NotificationService {
     final bn = await prefersBangla();
     final title = reservationHeld
         ? (bn
-              ? 'আসন সংরক্ষিত · বুকিং চলছে'
+              ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · আসন সংরক্ষিত'
               : 'Seats held · Booking in progress')
         : automaticBooking
         ? (bn
-              ? 'আসন পাওয়া গেছে · বুকিং চলছে'
+              ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং চলছে'
               : 'Seat found · Booking in progress')
         : bn
-        ? 'আসন পাওয়া গেছে · বুক করতে চাপুন'
+        ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুক করতে চাপুন'
         : 'Seat found · Tap to book';
     final number = bn
         ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()

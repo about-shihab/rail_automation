@@ -118,7 +118,7 @@ void main() {
       seatType: 'SNIGDHA',
     );
     var notification = latest();
-    expect(notification['title'], 'আসন পাওয়া গেছে · বুক করতে চাপুন');
+    expect(notification['title'], 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুক করতে চাপুন');
     expect(notification['payload'], 'rail://turnstile');
     expect(notification['id'], NotificationService.idSeatFound);
     final seatDetails = notification['platformSpecifics'] as Map;
@@ -136,14 +136,37 @@ void main() {
       travelDate: '08-Oct-2026',
     );
     notification = latest();
-    expect(notification['title'], 'আসন পাওয়া গেছে · বুক করতে চাপুন');
+    expect(notification['title'], 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুক করতে চাপুন');
     expect(notification['body'], contains('২ আসন'));
+
+    // Sequence Step: Reservation awaiting OTP
+    await NotificationService().showReservation({
+      'status': 'awaitingOtp',
+      'train': {'trip_number': 'SONAR BANGLA EXPRESS (788)'},
+      'seatClass': {'type': 'SNIGDHA'},
+      'autoVerify': true,
+    });
+    notification = latest();
+    expect(notification['title'], 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং কনফার্ম');
+    expect(notification['body'], contains('আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন'));
+
+    // Sequence Step: Ready for payment
+    await NotificationService().showReservation({
+      'status': 'readyForPayment',
+      'train': {'trip_number': 'SONAR BANGLA EXPRESS (788)'},
+      'seatClass': {'type': 'SNIGDHA'},
+      'autoVerify': true,
+    });
+    notification = latest();
+    expect(notification['title'], 'আপনার ট্রেনের টিকেট পাওয়া গেছে · মূল্য পরিশোধ করুন');
+    expect(notification['body'], contains('আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন'));
+
     await NotificationService().showPurchaseSuccessAlert(
       trainName: 'SONAR BANGLA EXPRESS (788)',
       pnr: 'DEMO-PNR',
     );
     notification = latest();
-    expect(notification['title'], 'আপনার টিকেট বুকিং কনফার্ম হয়েছে');
+    expect(notification['title'], 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং সম্পন্ন');
     expect(notification['payload'], 'rail://trips');
     expect(notification['body'], contains('DEMO-PNR'));
     expect(

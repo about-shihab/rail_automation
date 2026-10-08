@@ -1116,6 +1116,7 @@ class MonitorService extends ChangeNotifier {
             dateOfJourney: _dateOfJourney,
             seatClass: _targetSeatClass,
             authSession: session,
+            silent: true,
           );
         } catch (apiErr) {
           final errStr = apiErr.toString().replaceAll("Exception: ", "");
