@@ -3,10 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:workmanager/workmanager.dart';
+// ignore: depend_on_referenced_packages
+import 'package:workmanager_android/workmanager_android.dart';
 import 'package:rail_automation/services/background_monitor.dart';
 import 'package:rail_automation/services/foreground_monitor.dart';
 
-class RecordingWorkmanager extends WorkmanagerPlatform {
+class RecordingWorkmanager extends WorkmanagerAndroid {
   final cancelled = <String>[];
   final oneOffDelays = <Duration?>[];
   final periodicDelays = <Duration?>[];
@@ -71,13 +73,16 @@ void main() {
   late RecordingWorkmanager platform;
   late WorkmanagerPlatform original;
   setUp(() {
+    Workmanager();
     original = WorkmanagerPlatform.instance;
     platform = RecordingWorkmanager();
     WorkmanagerPlatform.instance = platform;
+    ForegroundMonitor.initialized = false;
   });
   tearDown(() {
     WorkmanagerPlatform.instance = original;
     debugDefaultTargetPlatformOverride = null;
+    ForegroundMonitor.initialized = false;
   });
 
   test('future Android search uses a single delayed recurring job', () async {
