@@ -46,6 +46,10 @@ class AppConfig extends ChangeNotifier {
     'reservation_timeout_minutes': 5,
     'resume_search_after_expiry': true,
     'admin_push_enabled': false,
+    // Credits and recharge configuration (can be adjusted by admin on the fly)
+    'default_credits': 2,
+    'direct_recharge_enabled': false,
+    'recharge_contact_email': 'connect.abdulla@gmail.com',
     // Non-secret request headers / Turnstile keys, overridable from the DB.
     'api_headers': <String, dynamic>{},
     'turnstile_site_keys': <String, dynamic>{},
@@ -60,6 +64,9 @@ class AppConfig extends ChangeNotifier {
   bool boolean(String key) => _values[key] == true;
   double decimal(String key) => (_values[key] as num).toDouble();
   int get pollSeconds => number('poll_interval_seconds');
+  int get defaultCredits => number('default_credits');
+  bool get directRechargeEnabled => boolean('direct_recharge_enabled');
+  String get rechargeContactEmail => string('recharge_contact_email');
 
   /// Seconds between seat searches. A value on the `search_trips` operation
   /// wins over the global `poll_interval_seconds`.
@@ -94,6 +101,7 @@ class AppConfig extends ChangeNotifier {
       'search_near_departure_minutes': (0, 1440),
       'search_near_departure_interval_seconds': (0, 3600),
       'reservation_timeout_minutes': (1, 15),
+      'default_credits': (0, 100),
     };
 
     // Check for minutes-based time limit aliases from DB (e.g. time_limit_minutes: 60 or time_limit: 60)
@@ -160,6 +168,13 @@ class AppConfig extends ChangeNotifier {
     }
     if (input['admin_push_enabled'] is bool) {
       result['admin_push_enabled'] = input['admin_push_enabled'];
+    }
+    if (input['direct_recharge_enabled'] is bool) {
+      result['direct_recharge_enabled'] = input['direct_recharge_enabled'];
+    }
+    final rechargeEmail = input['recharge_contact_email'];
+    if (rechargeEmail is String && rechargeEmail.trim().contains('@')) {
+      result['recharge_contact_email'] = rechargeEmail.trim();
     }
     result['api_headers'] = RailApiConfig.validateHeaders(input['api_headers']);
     result['turnstile_site_keys'] = RailApiConfig.validateSiteKeys(

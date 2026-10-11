@@ -7,12 +7,15 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/credit_transaction.dart';
 import '../models/credit_package.dart';
 import '../models/auth_session.dart';
+import 'app_config.dart';
 import 'firebase_user_service.dart';
 
 class CreditService extends ChangeNotifier {
   static final CreditService _instance = CreditService._internal();
   factory CreditService() => _instance;
-  CreditService._internal();
+  CreditService._internal() {
+    _credits = defaultInitialCredits;
+  }
 
   static const String _prefCreditsKey = 'rps_user_credits';
   static const String _prefTransactionsKey = 'rps_credit_transactions';
@@ -20,13 +23,21 @@ class CreditService extends ChangeNotifier {
   static const String _prefBkashNumberKey = 'rps_bkash_number_cache';
   static const String defaultBkashNumber = '01813570430';
 
+  static int get defaultInitialCredits {
+    try {
+      return AppConfig.instance.defaultCredits;
+    } catch (_) {
+      return 2;
+    }
+  }
+
   static const List<CreditPackage> defaultPackages = [
     CreditPackage(id: 'pkg_10', amount: 50.0, credits: 10, label: '১০ ক্রেডিট (৳৫০)'),
     CreditPackage(id: 'pkg_25', amount: 100.0, credits: 25, label: '২৫ ক্রেডিট (৳১০০)', popular: true),
     CreditPackage(id: 'pkg_60', amount: 200.0, credits: 60, label: '৬০ ক্রেডিট (৳২০০)'),
   ];
 
-  int _credits = 2; // Default 2 credits given to each user
+  int _credits = 2; // Default credits configured by admin or fallback 2
   List<CreditTransaction> _transactions = [];
   List<CreditPackage> _packages = defaultPackages;
   String _bkashNumber = defaultBkashNumber;
@@ -52,14 +63,15 @@ class CreditService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       final isTest =
           WidgetsBinding.instance.runtimeType.toString().contains('Test');
+      final configuredDefault = defaultInitialCredits;
       if (prefs.containsKey(_prefCreditsKey)) {
-        _credits = prefs.getInt(_prefCreditsKey) ?? 2;
+        _credits = prefs.getInt(_prefCreditsKey) ?? configuredDefault;
       } else if (isTest) {
         _credits = 10;
       } else {
-        _credits = 2;
-        await prefs.setInt(_prefCreditsKey, 2);
-        await prefs.setBool('rps_default_2_credits_granted', true);
+        _credits = configuredDefault;
+        await prefs.setInt(_prefCreditsKey, configuredDefault);
+        await prefs.setBool('rps_default_credits_granted', true);
       }
 
       // Load cached packages from DB if present

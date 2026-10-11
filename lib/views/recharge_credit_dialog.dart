@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../services/app_config.dart';
 import '../services/credit_service.dart';
 import '../services/language_service.dart';
 import '../utils/app_theme.dart';
@@ -142,88 +144,428 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
     }
   }
 
+  Future<void> _launchEmail(BuildContext context, String email) async {
+    final uri = Uri(
+      scheme: 'mailto',
+      path: email,
+      queryParameters: {
+        'subject': 'Rail Pro Credit Recharge Request',
+        'body':
+            'Hello Admin,\n\nI would like to recharge credits for Rail Pro.\nMy Registered Phone Number: \nDesired Credits: \n\nThank you.',
+      },
+    );
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        await Clipboard.setData(ClipboardData(text: email));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF0284C7),
+              content: Text(
+                LanguageService.of(context, listen: false).isBangla
+                    ? 'ইমেইল অ্যাপ খুলতে পারেনি। ইমেইল অ্যাড্রেস কপি করা হয়েছে: $email'
+                    : 'Could not open mail app. Email copied to clipboard: $email',
+              ),
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      if (context.mounted) {
+        await Clipboard.setData(ClipboardData(text: email));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF0284C7),
+              content: Text(
+                LanguageService.of(context, listen: false).isBangla
+                    ? 'ইমেইল অ্যাড্রেস কপি করা হয়েছে: $email'
+                    : 'Email copied to clipboard: $email',
+              ),
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Widget _buildEmailRechargeCard(
+    bool isDark,
+    LanguageService lang,
+    String contactEmail,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF0284C7).withValues(alpha: 0.12),
+            const Color(0xFF0369A1).withValues(alpha: 0.04),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFF0284C7).withValues(alpha: 0.28),
+          width: 1.2,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: const Color(0xFF0284C7).withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.mark_email_read_rounded,
+                      size: 14,
+                      color: Color(0xFF0284C7),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      lang.isBangla
+                          ? 'ইমেইল রিচার্জ রিকুয়েস্ট'
+                          : 'Email Recharge Request',
+                      style: const TextStyle(
+                        color: Color(0xFF0284C7),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Spacer(),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF059669).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  lang.isBangla ? 'অ্যাডমিন অ্যাসাইন' : 'Admin Managed',
+                  style: const TextStyle(
+                    color: Color(0xFF059669),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            lang.isBangla
+                ? 'ক্রেডিট রিচার্জ করতে ইমেইলে যোগাযোগ করুন'
+                : 'Contact via Email to Recharge Credits',
+            style: TextStyle(
+              color: AppColors.textPrimary(isDark),
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            lang.isBangla
+                ? 'সরাসরি অনলাইন পেমেন্ট উইন্ডো আপাতত বন্ধ রয়েছে। ক্রেডিট যুক্ত করতে নিচের ইমেইলে যোগাযোগ করুন। আপনার নিবন্ধিত ফোন নম্বর ও ক্রেডিটের পরিমাণ জানালে অ্যাডমিন দ্রুত ক্রেডিট যুক্ত করে দেবে।'
+                : 'Direct online recharge form is currently disabled. Please contact via email to top up your balance. Send your registered phone number and desired credit amount to have admin assign your credits.',
+            style: TextStyle(
+              color: AppColors.textSecondary(isDark),
+              fontSize: 12.5,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: AppColors.inputFill(isDark),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+              ),
+            ),
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.email_outlined,
+                  size: 20,
+                  color: Color(0xFF0284C7),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: SelectableText(
+                    contactEmail,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0284C7),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    elevation: 0,
+                  ),
+                  icon: const Icon(Icons.copy, size: 14, color: Colors.white),
+                  label: Text(
+                    lang.isBangla ? 'কপি' : 'Copy',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: contactEmail));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: const Color(0xFF0284C7),
+                        content: Text(
+                          lang.isBangla
+                              ? 'ইমেইল অ্যাড্রেস কপি করা হয়েছে'
+                              : 'Email address copied to clipboard',
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0284C7),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 1,
+              ),
+              icon: const Icon(Icons.send_rounded, size: 18, color: Colors.white),
+              label: Text(
+                lang.isBangla
+                    ? 'সরাসরি ইমেইল অ্যাপ খুলুন'
+                    : 'Open Email App Directly',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              onPressed: () => _launchEmail(context, contactEmail),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  lang.isBangla
+                      ? '📌 ইমেইল পাঠানোর নিয়মাবলী:'
+                      : '📌 Email Guidelines:',
+                  style: TextStyle(
+                    color: AppColors.textPrimary(isDark),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _buildGuideBullet(
+                  lang.isBangla
+                      ? 'বিষয় (Subject): "Rail Pro Credit Recharge"'
+                      : 'Subject: "Rail Pro Credit Recharge"',
+                  isDark,
+                ),
+                _buildGuideBullet(
+                  lang.isBangla
+                      ? 'আপনার রেল সেবা অ্যাকাউন্টের ফোন নম্বর উল্লেখ করুন'
+                      : 'Specify your registered mobile number',
+                  isDark,
+                ),
+                _buildGuideBullet(
+                  lang.isBangla
+                      ? 'প্রয়োজনীয় ক্রেডিটের পরিমাণ উল্লেখ করুন'
+                      : 'Specify desired credit amount',
+                  isDark,
+                ),
+                _buildGuideBullet(
+                  lang.isBangla
+                      ? 'অ্যাডমিন যাচাই শেষে সরাসরি অ্যাকাউন্টে ক্রেডিট রিচার্জ করে দেবেন'
+                      : 'Admin will promptly credit your balance upon request',
+                  isDark,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuideBullet(String text, bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '• ',
+            style: TextStyle(
+              color: Color(0xFF0284C7),
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+          Expanded(
+            child: Text(
+              text,
+              style: TextStyle(
+                color: AppColors.textSecondary(isDark),
+                fontSize: 11.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final lang = LanguageService.of(context);
     final creditService = Provider.of<CreditService>(context);
 
-    return DraggableScrollableSheet(
-      initialChildSize: 0.88,
-      minChildSize: 0.5,
-      maxChildSize: 0.95,
-      builder: (_, scrollController) {
-        return Container(
-          decoration: BoxDecoration(
-            color: AppColors.cardBg(isDark),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-          ),
-          child: Column(
-            children: [
-              // Sheet handle
-              Center(
-                child: Container(
-                  margin: const EdgeInsets.only(top: 12, bottom: 8),
-                  width: 40,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.grey.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
+    return ListenableBuilder(
+      listenable: AppConfig.instance,
+      builder: (context, _) {
+        final directRecharge = AppConfig.instance.directRechargeEnabled;
+        final contactEmail = AppConfig.instance.rechargeContactEmail;
 
-              // Title and balance
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFFE2136E), // bKash Pink
-                        shape: BoxShape.circle,
+        return DraggableScrollableSheet(
+          initialChildSize: 0.88,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (_, scrollController) {
+            return Container(
+              decoration: BoxDecoration(
+                color: AppColors.cardBg(isDark),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Sheet handle
+                  Center(
+                    child: Container(
+                      margin: const EdgeInsets.only(top: 12, bottom: 8),
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withValues(alpha: 0.4),
+                        borderRadius: BorderRadius.circular(2),
                       ),
-                      child: const Icon(Icons.account_balance_wallet, color: Colors.white, size: 20),
                     ),
-                    const SizedBox(width: 12),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  ),
+
+                  // Title and balance
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    child: Row(
                       children: [
-                        Text(
-                          lang.isBangla ? 'ক্রেডিট রিচার্জ (bKash)' : 'Credit Recharge (bKash)',
-                          style: TextStyle(
-                            color: AppColors.textPrimary(isDark),
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: directRecharge
+                                ? const Color(0xFFE2136E) // bKash Pink
+                                : const Color(0xFF0284C7), // Sky Blue
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            directRecharge
+                                ? Icons.account_balance_wallet
+                                : Icons.mark_email_read_outlined,
+                            color: Colors.white,
+                            size: 20,
                           ),
                         ),
-                        Text(
-                          '${lang.isBangla ? "বর্তমান ব্যালেন্স:" : "Current Balance:"} ${creditService.credits} ${lang.isBangla ? "ক্রেডিট" : "Credits"}',
-                          style: const TextStyle(
-                            color: Color(0xFF059669),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 12,
-                          ),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              lang.isBangla
+                                  ? (directRecharge
+                                      ? 'ক্রেডিট রিচার্জ (bKash)'
+                                      : 'ক্রেডিট রিচার্জ (ইমেইল)')
+                                  : (directRecharge
+                                      ? 'Credit Recharge (bKash)'
+                                      : 'Credit Recharge (Email)'),
+                              style: TextStyle(
+                                color: AppColors.textPrimary(isDark),
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            Text(
+                              '${lang.isBangla ? "বর্তমান ব্যালেন্স:" : "Current Balance:"} ${creditService.credits} ${lang.isBangla ? "ক্রেডিট" : "Credits"}',
+                              style: const TextStyle(
+                                color: Color(0xFF059669),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
                         ),
                       ],
                     ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1),
+                  ),
+                  const Divider(height: 1),
 
-              // Content
-              Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(20),
-                  children: [
+                  // Content
+                  Expanded(
+                    child: ListView(
+                      controller: scrollController,
+                      padding: const EdgeInsets.all(20),
+                      children: [
+                        if (!directRecharge) ...[
+                          _buildEmailRechargeCard(isDark, lang, contactEmail),
+                        ] else ...[
                     // ── 1. bKash Payment Instruction Card ───────────────────
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -451,6 +793,7 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
                               ),
                       ),
                     ),
+                  ],
 
                     // Notice with quick refresh button when user has pending recharge
                     if (creditService.transactions.any((tx) => tx.status.toLowerCase() == 'pending')) ...[
@@ -671,6 +1014,8 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
             ],
           ),
         );
+      },
+    );
       },
     );
   }

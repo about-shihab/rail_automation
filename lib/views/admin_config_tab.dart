@@ -315,6 +315,19 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
     ),
   ];
 
+  static const _creditsGroup = [
+    _ConfigFieldMeta(
+      key: 'default_credits',
+      label: 'Default user credits',
+      description: 'Initial free credit balance granted to new users upon registration.',
+      unit: 'credits',
+      min: 0,
+      max: 100,
+      icon: Icons.monetization_on_outlined,
+      presets: [0, 2, 5, 10],
+    ),
+  ];
+
   static const _maps = {
     'api_headers': 'Request headers',
     'turnstile_site_keys': 'Turnstile site keys',
@@ -325,6 +338,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
   final _controllers = <String, TextEditingController>{};
   late bool _resume;
   late bool _pushAnnouncements;
+  late bool _directRecharge;
   String? _error;
   bool _dirty = false;
 
@@ -334,6 +348,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
         ..._reservationGroup,
         ..._securityGroup,
         ..._bookingLimitsGroup,
+        ..._creditsGroup,
       ];
 
   @override
@@ -350,6 +365,11 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
     }
     _resume = widget.values['resume_search_after_expiry'] == true;
     _pushAnnouncements = widget.values['admin_push_enabled'] == true;
+    _directRecharge = widget.values['direct_recharge_enabled'] == true;
+    _controllers['recharge_contact_email'] = TextEditingController(
+      text: widget.values['recharge_contact_email'] as String? ??
+          'connect.abdulla@gmail.com',
+    );
   }
 
   @override
@@ -373,6 +393,9 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
               : int.parse(_controllers[field.key]!.text.trim()),
         'resume_search_after_expiry': _resume,
         'admin_push_enabled': _pushAnnouncements,
+        'direct_recharge_enabled': _directRecharge,
+        'recharge_contact_email':
+            _controllers['recharge_contact_email']!.text.trim(),
         for (final key in _maps.keys) key: jsonDecode(_controllers[key]!.text),
       };
       final patch = {
@@ -658,7 +681,85 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
             ),
             const SizedBox(height: 16),
 
-            // ── SECTION 6: Advanced API & Cloudflare Maps ──────────────
+            // ── SECTION 6: Credits & Recharge Policy ───────────────────
+            _buildSection(
+              title: 'Credits & Recharge Policy',
+              icon: Icons.monetization_on_rounded,
+              badge: 'Credits',
+              color: const Color(0xFF059669),
+              isDark: isDark,
+              fields: _creditsGroup,
+              extraWidget: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 10),
+                  Material(
+                    color: Colors.transparent,
+                    child: SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text(
+                        'Enable direct recharge window',
+                        style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: const Text(
+                        'When disabled, users see an email contact card to recharge credits. When enabled, users can submit TrxID directly.',
+                        style: TextStyle(fontSize: 11.5, color: Colors.grey),
+                      ),
+                      value: _directRecharge,
+                      activeThumbColor: AppColors.primary,
+                      onChanged: widget.busy
+                          ? null
+                          : (value) => setState(() {
+                                _directRecharge = value;
+                                _dirty = true;
+                              }),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Recharge contact email',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Support or admin email address shown to users for manual credit recharge requests.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    key: const ValueKey('recharge_contact_email'),
+                    controller: _controllers['recharge_contact_email'],
+                    enabled: !widget.busy,
+                    keyboardType: TextInputType.emailAddress,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.email_outlined, size: 20),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                    onChanged: _changed,
+                    validator: (text) {
+                      final email = text?.trim() ?? '';
+                      if (!email.contains('@') || !email.contains('.')) {
+                        return 'Enter a valid email address';
+                      }
+                      return null;
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── SECTION 7: Advanced API & Cloudflare Maps ──────────────
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
