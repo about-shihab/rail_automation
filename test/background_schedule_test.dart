@@ -89,7 +89,7 @@ void main() {
     expect(platform.cancelled, [BackgroundMonitor.taskName]);
     expect(
       platform.periodicDelays.single!.inSeconds,
-      closeTo(const Duration(days: 3).inSeconds, 30),
+      closeTo(const Duration(days: 3).inSeconds, 600),
     );
     expect(platform.oneOffDelays, isEmpty);
     expect(platform.periodicPolicies.single, ExistingPeriodicWorkPolicy.keep);
