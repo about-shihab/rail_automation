@@ -23,6 +23,23 @@ class BookingActivity extends ChangeNotifier {
     });
   }
 
+  bool _reservationActive = false;
+
+  bool get isReservationActive => _reservationActive;
+  set isReservationActive(bool value) {
+    if (_reservationActive != value) {
+      _reservationActive = value;
+      if (value) {
+        _workerStage = null;
+        _operations.removeWhere((_, stage) =>
+            stage == BookingActivityStage.reserving ||
+            stage == BookingActivityStage.verifying);
+      }
+      _changed();
+    }
+  }
+
+  bool get hasForegroundOperations => _operations.isNotEmpty;
   bool get busy => _operations.isNotEmpty || _workerStage != null;
   BookingActivityStage get stage =>
       _operations.isNotEmpty ? _operations.values.last : _workerStage!;
@@ -30,6 +47,19 @@ class BookingActivity extends ChangeNotifier {
   void setWorkerStage(BookingActivityStage? stage) {
     if (_workerStage == stage) return;
     _workerStage = stage;
+    _changed();
+  }
+
+  void clearWorkerStage() {
+    if (_workerStage != null) {
+      _workerStage = null;
+      _changed();
+    }
+  }
+
+  void reset() {
+    _operations.clear();
+    _workerStage = null;
     _changed();
   }
 

@@ -34,7 +34,6 @@ import 'package:flutter/material.dart';
 import 'turnstile_gate.dart';
 import 'seat_layout_challenge.dart';
 import '../views/reservation_screen.dart';
-import '../utils/friendly_error.dart';
 
 class MonitorLog {
   final DateTime time;
@@ -109,9 +108,10 @@ class MonitorService extends ChangeNotifier {
       await _resumeAfterExpiry();
       return;
     }
-    await clearSearch();
+    await BookingService.clear();
+    markReservationExpired();
     _addLog(
-      '⏱️ Reservation window closed. Search cleared automatically.',
+      '⏱️ Reservation window closed. OTP was not verified or payment timed out.',
       isAlert: true,
     );
   }
@@ -159,6 +159,7 @@ class MonitorService extends ChangeNotifier {
     _lastBookingError = null;
     _bookingNeedsVerification = false;
     _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
     _elapsedMonitoringSeconds = 0;
     _totalChecksCount = 0;
     _seatsFoundCount = 0;
@@ -439,6 +440,14 @@ class MonitorService extends ChangeNotifier {
   void addTrainToMonitoring(String trainName) {
     final clean = trainName.trim();
     if (clean.isEmpty) return;
+    _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
+    _lastReservationId = null;
+    _lastError = null;
+    _lastBookingError = null;
+    _bookingNeedsVerification = false;
+    unawaited(BookingService.clear());
+
     if (!_targetTrains.any((t) => t.toLowerCase() == clean.toLowerCase())) {
       _targetTrains.add(clean);
       _targetTrain = _targetTrains.join(', ');
@@ -447,9 +456,15 @@ class MonitorService extends ChangeNotifier {
       _addLog(
         '➕ Added $clean to active auto-booking (Total: ${_targetTrains.length} trains)',
       );
-      unawaited(_saveAndSchedule());
-      notifyListeners();
     }
+    if (!_isMonitoring) {
+      _isMonitoring = true;
+      _restartTimer();
+      _startSecondTicker();
+      unawaited(checkNow());
+    }
+    unawaited(_saveAndSchedule());
+    notifyListeners();
   }
 
   void removeTrainFromMonitoring(String trainName) {
@@ -488,6 +503,24 @@ class MonitorService extends ChangeNotifier {
   );
   bool _lastReservationExpired = false;
   bool get lastReservationExpired => _lastReservationExpired;
+  String? _lastBookingFailureReason;
+  String? get bookingFailureReason => _lastBookingFailureReason;
+
+  void markReservationExpired({String? reason}) {
+    _lastReservationExpired = true;
+    _lastBookingFailureReason = reason ??
+        'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.';
+    bookingIntent = bookingIntent.copyWith(autoReserve: false);
+    stopMonitoring();
+    notifyListeners();
+  }
+
+  void dismissBookingFailure() {
+    _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
+    unawaited(BookingService.clear());
+    notifyListeners();
+  }
 
   void clearBookingError() {
     _lastBookingError = null;
@@ -582,6 +615,7 @@ class MonitorService extends ChangeNotifier {
     }
     await BookingService.clear();
     _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
     _lastBookingError = null;
     _bookingNeedsVerification = false;
     _turnstileRequestedForBooking = false;
@@ -589,6 +623,11 @@ class MonitorService extends ChangeNotifier {
     await prefs.remove(_verificationKey);
     await TurnstileGate.instance.invalidate();
     bookingIntent = bookingIntent.copyWith(autoReserve: true);
+    if (!_isMonitoring) {
+      _isMonitoring = true;
+      _restartTimer();
+      _startSecondTicker();
+    }
     await _saveAndSchedule();
     notifyListeners();
     await checkNow();
@@ -598,6 +637,9 @@ class MonitorService extends ChangeNotifier {
     _lastError = null;
     _lastBookingError = null;
     _bookingNeedsVerification = false;
+    _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
+    unawaited(BookingService.clear());
     notifyListeners();
   }
 
@@ -867,7 +909,11 @@ class MonitorService extends ChangeNotifier {
     _lastError = null;
     _lastBookingError = null;
     _bookingNeedsVerification = false;
+    _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
+    _lastReservationId = null;
     _isLimitReached = false;
+    unawaited(BookingService.clear());
 
     _addLog(
       '${isScheduled ? "Scheduled search from $scheduledStartLabel (Bangladesh time)" : "Started monitoring"}: $fromCity ➔ $toCity ($dateOfJourney) '
@@ -978,15 +1024,13 @@ class MonitorService extends ChangeNotifier {
         );
         await BookingService.clear();
         await _notificationService.clearAlerts();
-        _lastReservationExpired = true;
         _turnstileRequestedForBooking = false;
-        bookingIntent = bookingIntent.copyWith(autoReserve: false);
-        await clearSearch();
+        markReservationExpired();
         _addLog(
-          '⏱️ Reservation hold expired. Search cleared automatically.',
+          '⏱️ Reservation hold expired. OTP was not verified or payment timed out.',
           isAlert: true,
         );
-        notifyListeners();
+        return;
       }
     } catch (_) {}
   }
@@ -1077,14 +1121,11 @@ class MonitorService extends ChangeNotifier {
         final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
         if (isExpired) {
           await BookingService.clear();
-          _lastReservationExpired = true;
-          bookingIntent = bookingIntent.copyWith(autoReserve: false);
-          await clearSearch();
+          markReservationExpired();
           _addLog(
-            '⏱️ Reservation hold expired. Search cleared automatically.',
+            '⏱️ Reservation hold expired. OTP was not verified or payment timed out.',
             isAlert: true,
           );
-          notifyListeners();
           return;
         } else {
           stopMonitoring();
@@ -1164,7 +1205,7 @@ class MonitorService extends ChangeNotifier {
           stopMonitoring();
           return;
         }
-        final upcomingTrains = response.trains.where((t) {
+        var upcomingTrains = response.trains.where((t) {
           final departure = _departureForTrain(t);
           return departure == null || departure.isAfter(_now());
         }).toList();
@@ -1267,17 +1308,32 @@ class MonitorService extends ChangeNotifier {
         }
         if (bookingIntent.autoReserve &&
             await BookingService.pending() == null) {
-          final chosen = bookingIntent.choose(
-            upcomingTrains,
-            train: _targetTrain,
-            targetTrains: _targetTrains,
-            seatClass: _targetSeatClass,
-          );
-          if (chosen != null) {
+          int autoBookRetries = 0;
+          const maxAutoBookRetries = 4;
+          bool autoBookSuccess = false;
+
+          while (autoBookRetries < maxAutoBookRetries &&
+              !autoBookSuccess &&
+              _isMonitoring &&
+              !_disposed &&
+              generation == _generation &&
+              await _savedSearchIsActive()) {
+            final chosen = bookingIntent.choose(
+              upcomingTrains,
+              train: _targetTrain,
+              targetTrains: _targetTrains,
+              seatClass: _targetSeatClass,
+            );
+            if (chosen == null) {
+              // No matching available seats in current train list
+              break;
+            }
+
             if (_turnstileRequestedForBooking &&
                 await TurnstileGate.instance.cachedToken() == null) {
               return;
             }
+
             try {
               final reservation = await BookingService.reserve(
                 train: chosen.$1,
@@ -1298,8 +1354,13 @@ class MonitorService extends ChangeNotifier {
                     await _savedSearchIsActive(),
                 allowVerificationPrompt: !backgroundWorker,
               );
+
+              // ── SUCCESS: OTP sent, seats held ─────────────────────
+              autoBookSuccess = true;
               _turnstileRequestedForBooking = false;
               _lastReservationExpired = false;
+              _lastError = null;
+              _lastBookingError = null;
               // Each auto-book books only ONE time. Disable autoReserve so it never re-books without explicit user re-autobook
               _resumeAutoReserve = bookingIntent.autoReserve;
               _lastReservationId = reservation['id']?.toString();
@@ -1319,18 +1380,15 @@ class MonitorService extends ChangeNotifier {
               notifyListeners();
               return;
             } catch (error) {
+              await BookingService.clear();
               if (_disposed ||
                   !_isMonitoring ||
                   generation != _generation ||
                   !await _savedSearchIsActive()) {
                 return;
               }
-              final clean = friendlyErrorMessage(error);
-              _lastError = clean;
-              _lastBookingError = clean;
 
               final isTurnstile = error is SeatLayoutChallenge;
-
               if (isTurnstile) {
                 _bookingNeedsVerification = true;
                 if (error.verificationAttempted) {
@@ -1361,49 +1419,42 @@ class MonitorService extends ChangeNotifier {
                 return;
               }
 
+              // Server error / seat already booked / rate limit / 8-9am peak hour rush:
+              // Per requirement: Ignore error, don't annoy user with error banner,
+              // automatically search for new seat and retry booking.
+              autoBookRetries++;
+              _lastBookingError = null; // Suppress error banner so user isn't annoyed
               _addLog(
-                'Automatic reservation needs attention: $clean',
-                isError: true,
+                'Auto-booking retry #$autoBookRetries: Seat unavailable or server busy. Retrying automatically...',
+                isAlert: false,
               );
-              try {
-                await TripHistoryService().recordTrip(
-                  TripRecord(
-                    id: DateTime.now().millisecondsSinceEpoch.toString(),
-                    trainName: chosen.$1.tripNumber,
-                    fromCity: _fromCity,
-                    toCity: _toCity,
-                    dateOfJourney: _dateOfJourney,
-                    seatClass: chosen.$2.type,
-                    seatNumbers: [],
-                    coachName: '',
-                    totalFare: double.tryParse(chosen.$2.fare) ?? 0.0,
-                    status: TripBookingStatus.failed,
-                    failureReason: clean,
-                    createdAt: DateTime.now(),
-                    isAutoBook: true,
-                  ),
-                );
-              } catch (_) {}
-              notifyListeners();
 
-              final prefs = await SharedPreferences.getInstance();
-              final alertKey = 'ticket_attention_$_searchId';
-              if (prefs.getBool(alertKey) != true) {
-                await _notificationService.triggerSeatAvailableAlert(
-                  trainName: chosen.$1.tripNumber,
-                  seatType: chosen.$2.type,
-                  seatCount: chosen.$2.seatCounts.online,
-                  travelDate: _dateOfJourney,
-                  bookingLink: NotificationService.bookingUrl(
-                    _fromCity,
-                    _toCity,
-                    _dateOfJourney,
-                    chosen.$2.type,
-                  ),
+              // Brief pause before re-fetching fresh layout/trips
+              await Future.delayed(const Duration(milliseconds: 500));
+
+              try {
+                final refreshed = await ApiService.searchTrips(
+                  fromCity: _fromCity,
+                  toCity: _toCity,
+                  dateOfJourney: _dateOfJourney,
+                  seatClass: _targetSeatClass,
+                  authSession: session,
+                  silent: true,
                 );
-                await prefs.setBool(alertKey, true);
+                upcomingTrains = refreshed.trains.where((t) {
+                  final departure = _departureForTrain(t);
+                  return departure == null || departure.isAfter(_now());
+                }).toList();
+                _lastTrains = refreshed.trains;
+              } catch (_) {
+                // If search trips temporarily glitches during peak hour, continue next attempt
               }
             }
+          }
+
+          if (!autoBookSuccess) {
+            // "if no seat available then do normal procedure. keep searching if found do as before."
+            _lastBookingError = null;
           }
         }
       } catch (e) {

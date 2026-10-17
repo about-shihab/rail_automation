@@ -226,6 +226,18 @@ void main() {
       SmsService.extractOtp('railway', 'OTP: 012345', ['RAILWAY'], 6),
       '012345',
     );
+    expect(
+      SmsService.extractOtp('', 'বাংলাদেশ রেলওয়ে ওটিপি হলো ১২৩৪৫৬', ['RAILWAY'], 6),
+      '123456',
+    );
+    expect(
+      SmsService.extractOtp('', 'Trip 701234: Your Bangladesh Railway OTP is 582194', ['RAILWAY'], 6),
+      '582194',
+    );
+    expect(
+      SmsService.extractOtp('', 'Shohoz verification code: 654321', ['RAILWAY'], 6),
+      '654321',
+    );
   });
   test('credential injection only allows the exact HTTPS railway origin', () {
     expect(

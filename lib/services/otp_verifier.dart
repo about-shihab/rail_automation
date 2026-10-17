@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 
 import '../views/reservation_screen.dart';
 import '../views/booking_screen.dart';
@@ -11,22 +11,31 @@ class OtpVerifier {
   static bool _verifying = false;
   static Future<void> _manualFallback(String id) async {
     final current = await BookingService.pending();
-    if (current?['id'] != id ||
-        current?['status'] != 'awaitingOtp' ||
-        current?['autoVerify'] != true) {
+    if (current?['id'] != id || current?['status'] != 'awaitingOtp') {
       return;
     }
     current!['autoVerify'] = false;
     await BookingService.save(current);
     await NotificationService().showReservation(current);
+
+    // Sequence Rule: If auto OTP verification fails or is unavailable, show OTP enter screen immediately!
+    if (!ReservationScreen.isActive) {
+      final nav = NotificationService.navigatorKey.currentState;
+      if (nav != null) {
+        nav.push(
+          MaterialPageRoute(builder: (_) => const ReservationScreen()),
+        );
+      }
+    }
   }
 
-  static Future<void> listen() async {
+  static Future<void> listen({bool force = false}) async {
     final state = await BookingService.pending();
     if (state?['status'] != 'awaitingOtp' || state?['autoVerify'] != true) {
       return;
     }
     await SmsService().startListening(
+      forceRestart: force,
       onUnavailable: () async => _manualFallback('${state!['id']}'),
       onOtpReceived: (otp) async {
         if (_verifying) return;

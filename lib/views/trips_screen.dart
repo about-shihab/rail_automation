@@ -13,6 +13,7 @@ import '../services/ticket_download_service.dart';
 import '../services/trip_history_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
+import '../widgets/scenic_rail_header.dart';
 import '../services/booking_service.dart';
 import '../services/notification_service.dart';
 import 'reservation_screen.dart';
@@ -265,29 +266,24 @@ class _TripsScreenState extends State<TripsScreen> {
         return Scaffold(
           backgroundColor: AppColors.scaffoldBg(isDark),
           appBar: PreferredSize(
-            preferredSize: const Size.fromHeight(60),
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    AppColors.appBarGradientStart,
-                    AppColors.appBarGradientEnd,
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
+            preferredSize: const Size.fromHeight(66),
+            child: ScenicRailHeader(
+              compact: true,
+              sceneOpacity: 0.70,
               child: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(
                     children: [
                       Container(
-                        width: 36,
-                        height: 36,
+                        width: 38,
+                        height: 38,
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(10),
+                          color: Colors.black.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.2),
+                          ),
                         ),
                         child: const Icon(
                           Icons.confirmation_number_rounded,
@@ -305,18 +301,38 @@ class _TripsScreenState extends State<TripsScreen> {
                               lang.tr('Trips & Tickets', 'ট্রিপস ও টিকেট'),
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 17,
-                                fontWeight: FontWeight.bold,
+                                fontSize: 17.5,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.2,
+                                shadows: [
+                                  Shadow(
+                                    color: Colors.black87,
+                                    blurRadius: 6,
+                                    offset: Offset(0, 1.2),
+                                  ),
+                                ],
                               ),
                             ),
+                            const SizedBox(height: 2),
                             Text(
                               lang.tr(
                                 'Official railway purchases & booking history',
-                                'অফিসিয়াল টিকেট ও বুকিং ইতিহাস',
+                                'অফিসিয়াল টিকেট ও বুকিং ইতিহাস',
                               ),
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 11,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.95),
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.1,
+                                shadows: const [
+                                  Shadow(
+                                    color: Colors.black87,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 1),
+                                  ),
+                                ],
                               ),
                             ),
                           ],

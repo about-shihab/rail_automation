@@ -55,6 +55,58 @@ class CreditService extends ChangeNotifier {
     notifyListeners();
   }
 
+  static String _prefCreditsKeyFor(String? phone) {
+    if (phone == null || phone.isEmpty) return _prefCreditsKey;
+    final normalized = FirebaseUserService.normalizePhone(phone);
+    return 'rps_credits_$normalized';
+  }
+
+  /// Reset in-memory credits and listeners when user logs out
+  Future<void> onLogout() async {
+    await _userDocSubscription?.cancel();
+    _userDocSubscription = null;
+    await _txSubscription?.cancel();
+    _txSubscription = null;
+    _transactions = [];
+    _credits = defaultInitialCredits;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefCreditsKey, _credits);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  /// Switch user credits on login
+  Future<void> onLogin(String phone) async {
+    final userKey = _prefCreditsKeyFor(phone);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.containsKey(userKey)) {
+        _credits = prefs.getInt(userKey) ?? defaultInitialCredits;
+      } else {
+        _credits = defaultInitialCredits;
+      }
+      await prefs.setInt(_prefCreditsKey, _credits);
+    } catch (_) {
+      _credits = defaultInitialCredits;
+    }
+    notifyListeners();
+    await syncFromFirestore();
+  }
+
+  /// Update local credits for memory and storage
+  Future<void> updateLocalCredits(int newCredits, {String? phone}) async {
+    _credits = newCredits;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefCreditsKey, _credits);
+      if (phone != null && phone.isNotEmpty) {
+        await prefs.setInt(_prefCreditsKeyFor(phone), _credits);
+      }
+    } catch (_) {}
+    notifyListeners();
+  }
+
   Future<void> initialize() async {
     if (_isInitialized) return;
     _isInitialized = true;
@@ -64,7 +116,13 @@ class CreditService extends ChangeNotifier {
       final isTest =
           WidgetsBinding.instance.runtimeType.toString().contains('Test');
       final configuredDefault = defaultInitialCredits;
-      if (prefs.containsKey(_prefCreditsKey)) {
+      final session = await AuthSession.load();
+      final phone = session?.phoneNumber;
+      final userKey = _prefCreditsKeyFor(phone);
+
+      if (phone != null && phone.isNotEmpty && prefs.containsKey(userKey)) {
+        _credits = prefs.getInt(userKey) ?? configuredDefault;
+      } else if (prefs.containsKey(_prefCreditsKey) && prefs.getBool('rps_user_has_recharged') == true) {
         _credits = prefs.getInt(_prefCreditsKey) ?? configuredDefault;
       } else if (isTest) {
         _credits = 10;
@@ -139,6 +197,7 @@ class CreditService extends ChangeNotifier {
           // Firestore is the source of truth (admin can change the balance).
           _credits = serverCredits;
           await prefs.setInt(_prefCreditsKey, _credits);
+          await prefs.setInt(_prefCreditsKeyFor(phone), _credits);
           notifyListeners();
         }
       }
@@ -156,6 +215,7 @@ class CreditService extends ChangeNotifier {
               _credits = serverCredits;
               final prefs = await SharedPreferences.getInstance();
               await prefs.setInt(_prefCreditsKey, _credits);
+              await prefs.setInt(_prefCreditsKeyFor(phone), _credits);
               notifyListeners();
             }
           }

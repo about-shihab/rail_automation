@@ -200,13 +200,32 @@ class TrainSelectionScreen extends StatelessWidget {
       return;
     }
     final effectiveClass = seatClass;
+    final selectedTrain = searchResponse.trains.where((t) => t.tripNumber == train).firstOrNull;
+    final isLowProbability = _isTrainLowProbability(selectedTrain, effectiveClass);
+
+    if (isLowProbability && selectedTrain != null) {
+      final depTime = MonitorService.parseDepartureDateTime(
+        departureDateTimeJd: selectedTrain.departureDateTimeJd,
+        departureDateTime: selectedTrain.departureDateTime,
+        dateOfJourney: dateOfJourney,
+        departureFullDate: selectedTrain.departureFullDate,
+      );
+      final hoursLeft = depTime != null ? depTime.difference(DateTime.now()).inMinutes / 60.0 : 5.0;
+      final proceed = await _showLowProbabilityWarning(
+        context,
+        trainName: train,
+        hoursLeft: hoursLeft,
+      );
+      if (proceed != true || !context.mounted) return;
+    }
+
     final intent = await showWatchOptions(
       context,
       seatClass: effectiveClass,
       trainName: train,
+      isLowProbability: isLowProbability,
     );
     if (intent == null || !context.mounted) return;
-    final selectedTrain = searchResponse.trains.where((t) => t.tripNumber == train).firstOrNull;
     AppShell.goTo(context, AppShell.tabMonitor);
     monitor.startMonitoring(
       intent: intent,
@@ -218,6 +237,116 @@ class TrainSelectionScreen extends StatelessWidget {
       departureDateTimeJd: selectedTrain?.departureDateTimeJd,
       departureDateTime: selectedTrain?.departureDateTime,
     );
+  }
+
+  bool _isTrainLowProbability(TrainTrip? train, String? seatClass) =>
+      isTrainLowProbability(
+        train: train,
+        seatClass: seatClass,
+        dateOfJourney: dateOfJourney,
+      );
+
+  static bool isTrainLowProbability({
+    required TrainTrip? train,
+    String? seatClass,
+    required String dateOfJourney,
+    DateTime? now,
+  }) {
+    if (train == null) return false;
+    final bool hasSeats = seatClass != null
+        ? train.seatTypes.any((s) => s.type == seatClass && s.seatCounts.online > 0)
+        : train.totalOnlineSeats > 0;
+    if (hasSeats) return false;
+
+    final depTime = MonitorService.parseDepartureDateTime(
+      departureDateTimeJd: train.departureDateTimeJd,
+      departureDateTime: train.departureDateTime,
+      dateOfJourney: dateOfJourney,
+      departureFullDate: train.departureFullDate,
+    );
+    if (depTime == null) return false;
+
+    final currentTime = now ?? DateTime.now();
+    final diff = depTime.difference(currentTime);
+    return diff.inMinutes > 0 && diff.inMinutes < 360;
+  }
+
+  Future<bool> _showLowProbabilityWarning(
+    BuildContext context, {
+    required String trainName,
+    required double hoursLeft,
+  }) async {
+    final lang = LanguageService.of(context, listen: false);
+    final hoursStr = hoursLeft.toStringAsFixed(1);
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.warning_amber_rounded,
+                color: Color(0xFFF59E0B),
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                lang.tr('Low Ticket Probability', 'টিকিট পাওয়ার সম্ভাবনা অত্যন্ত কম'),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          lang.tr(
+            'This train ($trainName) departs in less than 6 hours ($hoursStr hrs left) and currently has 0 available seats. At this last hour, ticket cancellation or release probability is very low.\n\nDo you still want to proceed with auto-booking?',
+            '$trainName ট্রেনের প্রস্থান হতে ৬ ঘণ্টারও কম সময় বাকি (আর মাত্র $hoursStr ঘণ্টা) এবং বর্তমানে কোনো আসন খালি নেই। শেষ মুহূর্তে আসন খালি হওয়ার বা টিকিট পাওয়ার সম্ভাবনা অত্যন্ত কম।\n\nআপনি কি তবুও অটো-বুক চালু করতে চান?',
+          ),
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 13.5,
+            height: 1.45,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              lang.tr('Cancel', 'বাতিল'),
+              style: const TextStyle(color: Colors.white60),
+            ),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              foregroundColor: Colors.black,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              lang.tr('Auto-Book Anyway', 'তবুও অটো-বুক চালু করুন'),
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
+    return result == true;
   }
 
   Future<void> _openMultiTrainAutoBook(BuildContext context) async {
@@ -267,10 +396,24 @@ class TrainSelectionScreen extends StatelessWidget {
       return;
     }
 
+    final lowProbTrains = searchResponse.trains.where(
+      (t) => selectedTrains.contains(t.tripNumber) && _isTrainLowProbability(t, initialClass),
+    ).toList();
+    final hasLowProb = lowProbTrains.isNotEmpty;
+    if (hasLowProb) {
+      final proceed = await _showLowProbabilityWarning(
+        context,
+        trainName: lowProbTrains.map((t) => t.tripNumber).join(', '),
+        hoursLeft: 6.0,
+      );
+      if (proceed != true || !context.mounted) return;
+    }
+
     final intent = await showWatchOptions(
       context,
       seatClass: initialClass,
       targetTrains: selectedTrains,
+      isLowProbability: hasLowProb,
     );
     if (intent == null || !context.mounted) return;
 
@@ -320,12 +463,30 @@ class TrainSelectionScreen extends StatelessWidget {
             builder: (_) => _ClassSheet(seatTypes: available),
           );
     if (seatType == null || !context.mounted) return;
+
+    // If random seat class was selected, resolve to SNIGDHA (or available class with valid tripId)
+    // because Railway response provides layouts across all classes.
+    final effectiveSeatType = (seatType.type.toUpperCase() == 'ALL' ||
+            seatType.type.toUpperCase() == 'RANDOM' ||
+            seatType.tripId == null)
+        ? train.seatTypes.firstWhere(
+            (s) => s.type.toUpperCase() == 'SNIGDHA' && s.tripId != null,
+            orElse: () => train.seatTypes.firstWhere(
+              (s) => s.isAvailable && s.tripId != null,
+              orElse: () => train.seatTypes.firstWhere(
+                (s) => s.tripId != null,
+                orElse: () => train.seatTypes.first,
+              ),
+            ),
+          )
+        : seatType;
+
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => SeatBookingScreen(
           train: train,
-          seatType: seatType,
+          seatType: effectiveSeatType,
           fromCity: fromCity,
           toCity: toCity,
           dateOfJourney: dateOfJourney,

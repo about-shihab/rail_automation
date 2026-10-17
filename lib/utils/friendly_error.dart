@@ -1,21 +1,21 @@
 import 'dart:convert';
 
+import '../services/language_service.dart';
+
 /// Transforms raw API/network/runtime exceptions and Railway server responses
 /// into clean, user-friendly messages.
-///
-/// Prevents raw JSON errors like:
-///   "Bad state: Railway request /bookings/verify-otp failed (422): {code: 422, messages: {errorKey: OtpNotVerified, message: Otp does not match}}"
-/// from reaching the UI, replacing them with clear, meaningful feedback:
-///   "The OTP code you entered does not match. Please check your SMS and try again."
-String friendlyErrorMessage(dynamic raw) {
+String friendlyErrorMessage(dynamic raw, {bool? isBangla}) {
   if (raw == null) return '';
   final str = raw.toString().trim();
   if (str.isEmpty) return '';
+  final bn = isBangla ?? LanguageService.instance.isBangla;
+
+  String pick(String en, String bangla) => bn ? bangla : en;
 
   // 1. Try to extract specific message from embedded JSON or map representations
   final extracted = _extractServerMessage(str);
   if (extracted != null && extracted.isNotEmpty) {
-    final translated = _translateKnownMessage(extracted);
+    final translated = _translateKnownMessage(extracted, bn);
     if (translated != null) return translated;
     return _cleanSentence(extracted);
   }
@@ -27,13 +27,19 @@ String friendlyErrorMessage(dynamic raw) {
       lower.contains('otpnotverified') ||
       lower.contains('invalid otp') ||
       lower.contains('wrong otp')) {
-    return 'The OTP code you entered does not match. Please check your SMS and try again.';
+    return pick(
+      'The OTP code you entered does not match. Please check your SMS and try again.',
+      'আপনার দেওয়া ওটিপি কোডটি মেলেনি। অনুগ্রহ করে এসএমএস দেখে আবার চেষ্টা করুন।',
+    );
   }
 
   if (lower.contains('otpexpired') ||
       lower.contains('otp expired') ||
       lower.contains('otp has expired')) {
-    return 'The OTP code has expired. Please tap "Resend OTP" for a new code.';
+    return pick(
+      'The OTP code has expired. Please tap "Resend OTP" for a new code.',
+      'ওটিপি কোডের মেয়াদ শেষ হয়ে গেছে। নতুন কোড পেতে "পুনরায় পাঠান" চাপুন।',
+    );
   }
 
   if (lower.contains('turnstile') ||
@@ -41,7 +47,10 @@ String friendlyErrorMessage(dynamic raw) {
       lower.contains('human check') ||
       lower.contains('human verification') ||
       lower.contains('security verification')) {
-    return 'Human verification required • Tap to verify and proceed';
+    return pick(
+      'Human verification required • Tap to verify and proceed',
+      'নিরাপত্তা যাচাই প্রয়োজন • এগিয়ে যেতে যাচাই সম্পন্ন করুন',
+    );
   }
 
   if (lower.contains('token_not_given') ||
@@ -51,19 +60,28 @@ String friendlyErrorMessage(dynamic raw) {
       lower.contains('unauthorized') ||
       lower.contains('401') ||
       lower.contains('sign in again')) {
-    return 'Railway session expired • Please sign in again';
+    return pick(
+      'Railway session expired • Please sign in again',
+      'রেলওয়ে লগইন সেশনের মেয়াদ শেষ • অনুগ্রহ করে পুনরায় সাইন ইন করুন',
+    );
   }
 
   if (lower.contains('429') ||
       lower.contains('rate limit') ||
       lower.contains('too many requests')) {
-    return 'Railway server is busy • Please wait a moment and try again';
+    return pick(
+      'Railway server is busy • Please wait a moment and try again',
+      'রেলওয়ে সার্ভার ব্যস্ত আছে • কিছুক্ষণ অপেক্ষা করে আবার চেষ্টা করুন',
+    );
   }
 
   if (lower.contains('quota') ||
       lower.contains('maximum seat') ||
       lower.contains('exceeded')) {
-    return 'Maximum seat quota limit reached for this journey.';
+    return pick(
+      'Maximum seat quota limit reached for this journey.',
+      'এই যাত্রার জন্য সর্বোচ্চ আসন কোটার সীমা পূর্ণ হয়েছে।',
+    );
   }
 
   if (lower.contains('seat layout rejected') ||
@@ -71,14 +89,28 @@ String friendlyErrorMessage(dynamic raw) {
       lower.contains('seat taken') ||
       lower.contains('already booked') ||
       lower.contains('no longer available')) {
-    return 'Selected seats are no longer available • Please select other seats';
+    return pick(
+      'Selected seats are no longer available • Please select other seats',
+      'নির্বাচিত আসনটি আর খালি নেই • অনুগ্রহ করে অন্য আসন নির্বাচন করুন',
+    );
+  }
+
+  if (lower.contains('seats were reserved') ||
+      lower.contains('held seats were released')) {
+    return pick(
+      'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.',
+      'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট না হওয়ায় আসনটি ছেড়ে দেওয়া হয়েছে।',
+    );
   }
 
   if (lower.contains('timeout') ||
       lower.contains('timed out') ||
       lower.contains('reservation window expired') ||
       lower.contains('5 minutes')) {
-    return 'Reservation window expired (5 minutes)';
+    return pick(
+      'Reservation window expired (5 minutes)',
+      'আসন সংরক্ষণের ৫ মিনিটের সময়সীমা শেষ হয়েছে',
+    );
   }
 
   if (lower.contains('500') ||
@@ -86,14 +118,20 @@ String friendlyErrorMessage(dynamic raw) {
       lower.contains('503') ||
       lower.contains('bad gateway') ||
       lower.contains('server error')) {
-    return 'Railway server is temporarily unavailable • Retrying shortly';
+    return pick(
+      'Railway server is temporarily unavailable • Retrying shortly',
+      'রেলওয়ে সার্ভার সাময়িকভাবে অনুপলব্ধ • কিছুক্ষণ পর পুনরায় চেষ্টা করা হচ্ছে',
+    );
   }
 
   if (lower.contains('socket') ||
       lower.contains('network') ||
       lower.contains('connection') ||
       lower.contains('failed host lookup')) {
-    return 'Network connection issue • Please check your internet';
+    return pick(
+      'Network connection issue • Please check your internet',
+      'ইন্টারনেট সংযোগ সমস্যা • আপনার নেটওয়ার্ক চেক করুন',
+    );
   }
 
   // 3. Fallback: Strip technical artifacts, codes, and JSON blocks
@@ -109,7 +147,10 @@ String friendlyErrorMessage(dynamic raw) {
       .trim();
 
   if (clean.isEmpty || clean.length < 4 || clean.contains('{') || clean.contains('}')) {
-    return 'Action could not be completed • Please try again';
+    return pick(
+      'Action could not be completed • Please try again',
+      'অনুরোধটি সম্পন্ন করা সম্ভব হয়নি • অনুগ্রহ করে আবার চেষ্টা করুন',
+    );
   }
   return _cleanSentence(clean);
 }
@@ -190,25 +231,63 @@ String? _extractFromDartMapString(String text) {
   return null;
 }
 
-String? _translateKnownMessage(String msg) {
+String? _translateKnownMessage(String msg, bool bn) {
+  String pick(String en, String bangla) => bn ? bangla : en;
   final lower = msg.toLowerCase();
-  if (lower.contains('otp does not match') || lower.contains('otpnotverified')) {
-    return 'The OTP code you entered does not match. Please check your SMS and try again.';
+  if (lower.contains('otp does not match') ||
+      lower.contains('otpnotverified') ||
+      lower.contains('invalid otp') ||
+      lower.contains('wrong otp')) {
+    return pick(
+      'The OTP code you entered does not match. Please check your SMS and try again.',
+      'আপনার দেওয়া ওটিপি কোডটি মেলেনি। অনুগ্রহ করে এসএমএস দেখে আবার চেষ্টা করুন।',
+    );
   }
-  if (lower.contains('otpexpired') || lower.contains('otp expired')) {
-    return 'The OTP code has expired. Please tap "Resend OTP" to request a new code.';
+  if (lower.contains('otpexpired') || lower.contains('otp expired') || lower.contains('otp has expired')) {
+    return pick(
+      'The OTP code has expired. Please tap "Resend OTP" to request a new code.',
+      'ওটিপি কোডের মেয়াদ শেষ হয়ে গেছে। নতুন কোড পেতে "পুনরায় পাঠান" চাপুন।',
+    );
   }
-  if (lower.contains('token_not_given') || lower.contains('invalid access token')) {
-    return 'Railway session expired. Please log in again.';
+  if (lower.contains('token_not_given') ||
+      lower.contains('invalid access token') ||
+      lower.contains('invalid user access token') ||
+      lower.contains('session expired') ||
+      lower.contains('unauthorized') ||
+      lower.contains('401')) {
+    return pick(
+      'Railway session expired • Please sign in again',
+      'রেলওয়ে লগইন সেশনের মেয়াদ শেষ • অনুগ্রহ করে পুনরায় সাইন ইন করুন',
+    );
   }
   if (lower.contains('turnstile') || lower.contains('human')) {
-    return 'Security verification required. Tap to verify and proceed.';
+    return pick(
+      'Human verification required • Tap to verify and proceed',
+      'নিরাপত্তা যাচাই প্রয়োজন • এগিয়ে যেতে যাচাই সম্পন্ন করুন',
+    );
   }
-  if (lower.contains('quota') || lower.contains('limit')) {
-    return 'Maximum seat quota exceeded for this journey.';
+  if (lower.contains('quota') || lower.contains('maximum seat') || lower.contains('limit')) {
+    return pick(
+      'Maximum seat quota limit reached for this journey.',
+      'এই যাত্রার জন্য সর্বোচ্চ আসন কোটার সীমা পূর্ণ হয়েছে।',
+    );
   }
-  if (lower.contains('taken') || lower.contains('not available') || lower.contains('already booked')) {
-    return 'Selected seats are no longer available. Please select other seats.';
+  if (lower.contains('taken') ||
+      lower.contains('not available') ||
+      lower.contains('already booked') ||
+      lower.contains('seat layout rejected')) {
+    return pick(
+      'Selected seats are no longer available • Please select other seats',
+      'নির্বাচিত আসনটি আর খালি নেই • অনুগ্রহ করে অন্য আসন নির্বাচন করুন',
+    );
+  }
+  if (lower.contains('seats were reserved') ||
+      lower.contains('held seats were released') ||
+      lower.contains('5 minutes')) {
+    return pick(
+      'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.',
+      'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট সম্পন্ন না হওয়ায় বাংলাদেশ রেলওয়ে আসনটি ছেড়ে দিয়েছে।',
+    );
   }
   return null;
 }

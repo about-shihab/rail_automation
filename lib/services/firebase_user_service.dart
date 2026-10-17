@@ -10,6 +10,7 @@ import 'pro_service.dart';
 import 'credit_service.dart';
 import 'notification_service.dart';
 import 'admin_push_service.dart';
+import 'app_config.dart';
 
 /// Service responsible for managing user data in Firebase Firestore:
 /// - Stores and syncs user profiles in the 'users' collection (keyed by phone number).
@@ -92,6 +93,7 @@ class FirebaseUserService extends ChangeNotifier {
     }
 
     _currentPhone = phone;
+    unawaited(CreditService().onLogin(phone));
     unawaited(AdminPushService.instance.bindPhone(phone));
     _startListeningToUserDoc(phone);
 
@@ -124,13 +126,13 @@ class FirebaseUserService extends ChangeNotifier {
       };
 
       if (!snapshot.exists) {
-        // Create new user profile in Firestore
+        // Create new user profile in Firestore with admin-configured default credits
+        final initialCredits = AppConfig.instance.defaultCredits;
         await docRef.set({
           'phone': phone,
           'displayName': session.displayName ?? '',
           'email': session.email ?? '',
-          'credits': CreditService()
-              .credits, // Preserve current credits (default 2 or deducted)
+          'credits': initialCredits,
           'isPro': false, // Admin can toggle this in Firebase console
           'is_admin': false,
           'is_blocked': false,
@@ -140,8 +142,9 @@ class FirebaseUserService extends ChangeNotifier {
           'lastLoginAt': now,
           'recentActivity': [loginLog],
         }, SetOptions(merge: true));
+        await CreditService().updateLocalCredits(initialCredits, phone: phone);
         debugPrint(
-          '✅ [FirebaseUserService] Successfully created user "$phone" in Firestore!',
+          '✅ [FirebaseUserService] Successfully created user "$phone" in Firestore with $initialCredits default credits!',
         );
       } else {
         // Update existing user profile
@@ -384,6 +387,7 @@ class FirebaseUserService extends ChangeNotifier {
     _currentPhone = null;
     _isAdmin = false;
     _proService?.updateProStatus(false);
+    await CreditService().onLogout();
     notifyListeners();
   }
 

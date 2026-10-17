@@ -1,18 +1,26 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+
+import '../services/app_config.dart';
 
 import '../models/auth_session.dart';
 import '../services/api_service.dart';
+import '../services/booking_activity.dart';
 import '../services/booking_service.dart';
 import '../services/credit_service.dart';
 import '../services/otp_verifier.dart';
 import '../services/sms_service.dart';
 import '../services/language_service.dart';
+import '../models/trip_record.dart';
+import '../services/trip_history_service.dart';
 import '../services/notification_service.dart';
+import '../services/monitor_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
+import 'app_shell.dart';
 import 'booking_screen.dart';
 
 class ReservationScreen extends StatefulWidget {
@@ -37,6 +45,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
   void initState() {
     super.initState();
     ReservationScreen._openScreens++;
+    BookingActivity.instance.isReservationActive = true;
+    BookingActivity.instance.clearWorkerStage();
     _load();
     OtpVerifier.listen();
     _promptGoogleOtpPermissionIfNeeded();
@@ -47,9 +57,36 @@ class _ReservationScreenState extends State<ReservationScreen> {
     final state = await BookingService.pending();
     if (state != null && state['status'] == 'awaitingOtp') {
       if (state['autoVerify'] == true) {
-        await SmsService().requestSmsPermission();
+        final hasPermission = await SmsService().requestSmsPermission();
+        final hasConsent = await SmsService().promptPendingConsent();
+        if (!hasPermission && !hasConsent) {
+          state['autoVerify'] = false;
+          await BookingService.save(state);
+          if (mounted) setState(() => _state = state);
+        }
       }
+      unawaited(_checkClipboardForOtp());
     }
+  }
+
+  Future<void> _checkClipboardForOtp() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      if (text.isEmpty || _otpCtrl.text.isNotEmpty || !mounted || _busy) return;
+      final digits = AppConfig.instance.number('otp_length');
+      final extracted = SmsService.extractOtp(
+        '',
+        text,
+        AppConfig.instance.strings('sms_senders'),
+        digits,
+      ) ?? (RegExp('^\\d{$digits}\$').hasMatch(text) ? text : null);
+
+      if (extracted != null && extracted.isNotEmpty && mounted && !_busy) {
+        _otpCtrl.text = extracted;
+        _verify();
+      }
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -81,6 +118,14 @@ class _ReservationScreenState extends State<ReservationScreen> {
           trainName: trainName,
           seatInfo: seatInfo,
         );
+      }
+      if (state?['status'] == 'awaitingOtp' && state?['autoVerify'] == true) {
+        final startedAtStr = state?['startedAt'] as String? ?? state?['updatedAt'] as String?;
+        final startedAt = startedAtStr != null ? DateTime.tryParse(startedAtStr) : null;
+        if (startedAt != null && DateTime.now().difference(startedAt).inSeconds >= 20) {
+          state?['autoVerify'] = false;
+          await BookingService.save(state!);
+        }
       }
       if (mounted) setState(() => _state = state);
       if (state?['status'] == 'readyForPayment') {
@@ -205,8 +250,13 @@ class _ReservationScreenState extends State<ReservationScreen> {
       final auth = await AuthSession.load();
       if (auth == null) throw StateError('Please log in again.');
       if (resend) {
-        SmsService().stopListening();
-        await OtpVerifier.listen();
+        final current = await BookingService.pending();
+        if (current != null) {
+          current['autoVerify'] = true;
+          await BookingService.save(current);
+          if (mounted) setState(() => _state = current);
+        }
+        await OtpVerifier.listen(force: true);
         await BookingService.resendOtp(auth);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -277,6 +327,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
   @override
   void dispose() {
     ReservationScreen._openScreens--;
+    BookingActivity.instance.isReservationActive = ReservationScreen.isActive;
     _timer?.cancel();
     _otpCtrl.dispose();
     super.dispose();
@@ -371,8 +422,111 @@ class _ReservationScreenState extends State<ReservationScreen> {
                   const SizedBox(height: 16),
                 ],
 
-                // ── Action Button ────────────────────────────────────────
-                if (awaitingOtp && !expired) ...[
+                // ── Hold Expired Alert Banner ────────────────────────────
+                if (expired) ...[
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF260D12) : const Color(0xFFFFF0F2),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.timer_off_rounded,
+                          color: Color(0xFFEF4444),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            awaitingOtp
+                                ? lang.tr(
+                                    'The 5-minute hold timed out before OTP was verified. Held seats have been released by Bangladesh Railway.',
+                                    '৫ মিনিটের সময়সীমা পার হওয়ায় ওটিপি যাচাই করা সম্ভব হয়নি। আসনটি রেলওয়ে সিস্টেম মুক্ত করে দিয়েছে।',
+                                  )
+                                : lang.tr(
+                                    'The 5-minute payment hold timed out. Held seats were released back to public availability.',
+                                    '৫ মিনিটের পেমেন্ট সময় শেষ হয়ে গেছে। আসনটি পুনরায় সাধারণের জন্য উন্মুক্ত করা হয়েছে।',
+                                  ),
+                            style: TextStyle(
+                              color: isDark ? const Color(0xFFFFB4AB) : const Color(0xFFB91C1C),
+                              fontSize: 12.5,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+
+                // ── Action Buttons ───────────────────────────────────────
+                if (expired) ...[
+                  PrimaryButton(
+                    label: lang.tr('Retry New Search', 'নতুন অনুসন্ধান করুন'),
+                    icon: Icons.search_rounded,
+                    loading: _busy,
+                    onPressed: () {
+                      AppShell.goTo(context, AppShell.tabSearch);
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFF59E0B),
+                            side: const BorderSide(color: Color(0xFFF59E0B)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          icon: const Icon(Icons.refresh_rounded, size: 18),
+                          label: Text(
+                            lang.tr('Re-Auto Book', 'পুনরায় অটো-বুক'),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: () async {
+                            final monitor = context.read<MonitorService>();
+                            final nav = Navigator.of(context);
+                            await monitor.reAutoBook();
+                            if (!mounted) return;
+                            nav.pop();
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: AppColors.error,
+                            side: BorderSide(
+                              color: AppColors.error.withValues(alpha: 0.4),
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                          ),
+                          icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                          label: Text(
+                            lang.tr('Clear record', 'রেকর্ড মুছুন'),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          onPressed: _clearBooking,
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else if (awaitingOtp) ...[
                   PrimaryButton(
                     label: lang.tr(
                       'Verify OTP & Proceed to Payment',
@@ -404,12 +558,31 @@ class _ReservationScreenState extends State<ReservationScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                            color: AppColors.error.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: Text(lang.tr('Clear record', 'রেকর্ড মুছুন')),
+                      onPressed: _clearBooking,
+                    ),
+                  ),
                 ] else ...[
                   PrimaryButton(
-                    label: ready && !expired
+                    label: ready
                         ? lang.tr('Pay Now', 'পেমেন্ট করুন')
                         : lang.tr('Open Booking', 'বুকিং খুলুন'),
-                    icon: ready && !expired
+                    icon: ready
                         ? Icons.payment_rounded
                         : Icons.open_in_new_rounded,
                     loading: _busy,
@@ -421,7 +594,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
                       ),
                     ),
                   ),
-                  if (ready && !expired) ...[
+                  if (ready) ...[
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
@@ -454,34 +627,120 @@ class _ReservationScreenState extends State<ReservationScreen> {
                           : () => _checkPaymentStatus(userInitiated: true),
                     ),
                   ],
-                ],
-                const SizedBox(height: 12),
-
-                // ── Clear Button ─────────────────────────────────────────
-                SizedBox(
-                  width: double.infinity,
-                  child: TextButton.icon(
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.error,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: BorderSide(
-                          color: AppColors.error.withValues(alpha: 0.3),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          side: BorderSide(
+                            color: AppColors.error.withValues(alpha: 0.3),
+                          ),
                         ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                      label: Text(lang.tr('Clear record', 'রেকর্ড মুছুন')),
+                      onPressed: _clearBooking,
                     ),
-                    icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                    label: Text(lang.tr('Clear record', 'রেকর্ড মুছুন')),
-                    onPressed: _clearBooking,
                   ),
-                ),
+                ],
               ],
             ),
     );
   }
 
   Widget _buildEmptyState(bool isDark, LanguageService lang) {
+    final recentExpired = TripHistoryService().trips.cast<TripRecord?>().firstWhere(
+      (t) =>
+          t != null &&
+          t.status == TripBookingStatus.expired &&
+          DateTime.now().difference(t.createdAt).inMinutes < 15,
+      orElse: () => null,
+    );
+
+    if (recentExpired != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.timer_off_rounded,
+                  size: 48,
+                  color: Color(0xFFEF4444),
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                lang.tr(
+                  'Seat Hold Expired — Seats Released',
+                  'সময় শেষ — আসন মুক্ত করা হয়েছে',
+                ),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textPrimary(isDark),
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                lang.tr(
+                  'Seats on ${recentExpired.trainName} were reserved, but OTP verification or payment timed out in 5 minutes. Bangladesh Railway has released the held seats.',
+                  '${recentExpired.trainName} ট্রেনের আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট সম্পন্ন না হওয়ায় আসনটি ছেড়ে দেওয়া হয়েছে।',
+                ),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: AppColors.textSecondary(isDark),
+                  fontSize: 13,
+                  height: 1.45,
+                ),
+              ),
+              const SizedBox(height: 24),
+              PrimaryButton(
+                label: lang.tr('Retry New Search', 'নতুন অনুসন্ধান করুন'),
+                icon: Icons.search_rounded,
+                onPressed: () => AppShell.goTo(context, AppShell.tabSearch),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFFF59E0B),
+                  side: const BorderSide(color: Color(0xFFF59E0B)),
+                  minimumSize: const Size.fromHeight(48),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: Text(
+                  lang.tr('Re-Auto Book Seats', 'পুনরায় অটো-বুক করুন'),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                onPressed: () async {
+                  final monitor = context.read<MonitorService>();
+                  final nav = Navigator.of(context);
+                  await monitor.reAutoBook();
+                  if (!mounted) return;
+                  nav.pop();
+                },
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -529,7 +788,11 @@ class _ReservationScreenState extends State<ReservationScreen> {
     IconData icon;
 
     if (expired) {
-      label = lang.tr('Reservation Expired', 'সংরক্ষণের মেয়াদ শেষ');
+      label = awaitingOtp
+          ? lang.tr('Hold Expired — OTP Not Verified', 'সময় শেষ — ওটিপি যাচাই হয়নি')
+          : (ready
+              ? lang.tr('Hold Expired — Payment Timed Out', 'সময় শেষ — পেমেন্টের সময় শেষ')
+              : lang.tr('Seat Hold Expired — Seats Released', 'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত'));
       color = AppColors.error;
       icon = Icons.timer_off_rounded;
     } else if (ready) {
@@ -753,27 +1016,60 @@ class _ReservationScreenState extends State<ReservationScreen> {
               ),
               const Spacer(),
               if (isAutoVerify)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF009B78).withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.check_circle_rounded, color: Color(0xFF009B78), size: 14),
-                      const SizedBox(width: 4),
-                      Text(
-                        lang.tr('Google Auto-Verify', 'গুগল অটো-যাচাই'),
-                        style: const TextStyle(
-                          color: Color(0xFF009B78),
-                          fontSize: 11,
-                          fontWeight: FontWeight.bold,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF009B78).withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.check_circle_rounded, color: Color(0xFF009B78), size: 14),
+                          const SizedBox(width: 4),
+                          Text(
+                            lang.tr('Google Auto-Verify', 'গুগল অটো-যাচাই'),
+                            style: const TextStyle(
+                              color: Color(0xFF009B78),
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    InkWell(
+                      onTap: () async {
+                        final current = await BookingService.pending();
+                        if (current != null) {
+                          current['autoVerify'] = false;
+                          await BookingService.save(current);
+                          if (mounted) setState(() => _state = current);
+                        }
+                      },
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                        ),
+                        child: Text(
+                          lang.tr('Manual', 'ম্যানুয়াল'),
+                          style: const TextStyle(
+                            color: Colors.amber,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 )
               else
                 InkWell(
@@ -806,53 +1102,103 @@ class _ReservationScreenState extends State<ReservationScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          Text(
-            lang.tr(
-              'Allow Google SMS consent or enter your OTP below.',
-              'Google-এর এসএমএস অনুমতি দিন অথবা নিচে ওটিপি লিখুন।',
+          if (!isAutoVerify)
+            Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.amber.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.info_outline_rounded, color: Colors.amber, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      lang.tr(
+                        'Auto OTP verification unavailable. Enter the 6-digit OTP from your SMS manually below.',
+                        'স্বয়ংক্রিয় ওটিপি যাচাই সম্ভব নয়। অনুগ্রহ করে এসএমএস দেখে নিচে ৬ সংখ্যার ওটিপি লিখুন।',
+                      ),
+                      style: const TextStyle(
+                        color: Colors.amber,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )
+          else
+            Text(
+              lang.tr(
+                'Waiting for Railway OTP SMS... or enter code manually below.',
+                'রেলওয়ে ওটিপি এসএমএসের অপেক্ষায়... অথবা নিচে কোড লিখুন।',
+              ),
+              style: TextStyle(
+                color: AppColors.textSecondary(isDark),
+                fontSize: 12,
+                height: 1.5,
+              ),
             ),
-            style: TextStyle(
-              color: AppColors.textSecondary(isDark),
-              fontSize: 12,
-              height: 1.5,
-            ),
-          ),
           const SizedBox(height: 14),
-          TextField(
-            controller: _otpCtrl,
-            keyboardType: TextInputType.number,
-            autofillHints: const [AutofillHints.oneTimeCode],
-            style: TextStyle(
-              color: AppColors.textPrimary(isDark),
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 8,
-            ),
-            textAlign: TextAlign.center,
-            maxLength: 8,
-            decoration: InputDecoration(
-              hintText: '------',
-              hintStyle: TextStyle(
-                color: AppColors.textMuted(isDark),
-                letterSpacing: 8,
+          AutofillGroup(
+            child: TextField(
+              autofocus: !isAutoVerify,
+              controller: _otpCtrl,
+              keyboardType: TextInputType.number,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              onChanged: (val) {
+                final digits = AppConfig.instance.number('otp_length');
+                const bnDigits = {
+                  '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+                  '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+                };
+                final normalized = val.trim().split('').map((c) => bnDigits[c] ?? c).join();
+                if (normalized != val) {
+                  _otpCtrl.text = normalized;
+                  _otpCtrl.selection = TextSelection.fromPosition(
+                    TextPosition(offset: normalized.length),
+                  );
+                }
+                if (normalized.length == digits && !_busy) {
+                  _verify();
+                }
+              },
+              style: TextStyle(
+                color: AppColors.textPrimary(isDark),
                 fontSize: 22,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 8,
               ),
-              counterText: '',
-              filled: true,
-              fillColor: AppColors.inputFill(isDark),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.inputBorder(isDark)),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide(color: AppColors.inputBorder(isDark)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: const BorderSide(
-                  color: AppColors.primary,
-                  width: 2,
+              textAlign: TextAlign.center,
+              maxLength: 8,
+              decoration: InputDecoration(
+                hintText: '------',
+                hintStyle: TextStyle(
+                  color: AppColors.textMuted(isDark),
+                  letterSpacing: 8,
+                  fontSize: 22,
+                ),
+                counterText: '',
+                filled: true,
+                fillColor: AppColors.inputFill(isDark),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.inputBorder(isDark)),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: AppColors.inputBorder(isDark)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(
+                    color: AppColors.primary,
+                    width: 2,
+                  ),
                 ),
               ),
             ),

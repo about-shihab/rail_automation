@@ -219,6 +219,7 @@ class ProfileTab extends StatelessWidget {
       await WebSessionService.clear();
     } catch (_) {}
     await FirebaseUserService().clearSession();
+    await CreditService().onLogout();
     await AuthSession.clear();
     await BookingService.clear();
     await SecureStore.delete('rail_action_token');

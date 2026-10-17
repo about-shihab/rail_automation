@@ -245,14 +245,14 @@ class RailLoginScript {
 
     if (filled && ${submit ? 'true' : 'false'}) {
       var btn = document.querySelector('button.login-form-submit-btn, button[type="submit"]');
+      var tsElement = document.querySelector('.cf-turnstile, [data-sitekey], ngx-turnstile, div[id*="turnstile"], iframe[src*="cloudflare"]');
       var cfVerified = checkTurnstileResponse();
-      if (btn) {
-        if (!btn.disabled || cfVerified) {
-          if (btn.disabled) btn.disabled = false;
-          submitted = true;
-          btn.click();
-          return true;
-        }
+      var canSubmit = !tsElement || cfVerified;
+      if (btn && canSubmit) {
+        if (btn.disabled) btn.disabled = false;
+        submitted = true;
+        btn.click();
+        return true;
       }
     }
     return filled && ${submit ? 'false' : 'true'};

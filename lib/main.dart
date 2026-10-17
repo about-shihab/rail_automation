@@ -23,6 +23,7 @@ import 'views/app_shell.dart';
 import 'views/webview_login_screen.dart';
 import 'widgets/turnstile_host.dart';
 import 'widgets/app_update_gate.dart';
+import 'services/booking_activity.dart';
 import 'widgets/booking_activity_overlay.dart';
 import 'widgets/session_recovery_host.dart';
 import 'services/login_flow.dart';
@@ -47,10 +48,14 @@ void main() async {
   final themeService = ThemeService();
   final languageService = LanguageService();
   final monitor = MonitorService(proService: proService);
-  final creditService = CreditService();
-  await creditService.initialize();
   final tripHistoryService = TripHistoryService();
   await tripHistoryService.initialize();
+
+  // Initialize AppConfig early so configured default credits are loaded
+  await AppConfig.instance.initialize();
+
+  final creditService = CreditService();
+  await creditService.initialize();
 
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
@@ -60,7 +65,6 @@ void main() async {
       phone: isLoggedIn ? session.phoneNumber : null,
     ),
   );
-  await AppConfig.instance.initialize();
   unawaited(creditService.syncPackagesFromFirestore());
   if (session != null && isLoggedIn) {
     unawaited(firebaseUserService.syncUserOnLogin(session));
@@ -151,6 +155,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      BookingActivity.instance.reset();
       unawaited(AdminPushService.instance.refresh());
       unawaited(ForegroundMonitor.syncBookingActivity());
       unawaited(AppUpdateService.instance.refresh(force: true));

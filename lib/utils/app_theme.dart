@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../widgets/scenic_rail_header.dart';
+
 // ─── Design Tokens ──────────────────────────────────────────────────────────
 
 class AppColors {
@@ -409,10 +411,18 @@ class StatusBadge extends StatelessWidget {
 /// Use as `flexibleSpace` in any AppBar / SliverAppBar.
 class NavBackdrop extends StatelessWidget {
   final double radius;
-  const NavBackdrop({super.key, this.radius = 22});
+  final bool animated;
+  const NavBackdrop({super.key, this.radius = 22, this.animated = true});
 
   @override
   Widget build(BuildContext context) {
+    if (animated) {
+      return ScenicRailHeader(
+        radius: radius,
+        compact: true,
+        sceneOpacity: 0.85,
+      );
+    }
     final r = BorderRadius.vertical(bottom: Radius.circular(radius));
     return DecoratedBox(
       decoration: BoxDecoration(

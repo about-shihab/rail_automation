@@ -107,6 +107,8 @@ void monitoringEntryPoint(ServiceInstance service) async {
         return;
       }
       await monitor.checkNow();
+      BookingActivity.instance.setWorkerStage(null);
+      service.invoke('booking-activity', {'stage': null});
       if (!monitor.isMonitoring && await BookingService.pending() == null) {
         stopped = true;
         sessionTimer?.cancel();

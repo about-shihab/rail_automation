@@ -19,6 +19,7 @@ import 'recharge_credit_dialog.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
 import '../widgets/fancy_train_loader.dart';
+import '../widgets/scenic_rail_header.dart';
 import '../services/turnstile_gate.dart';
 import '../utils/friendly_error.dart';
 
@@ -37,6 +38,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   bool _reading = false;
   bool _sessionExpired = false;
   bool _redirecting = false;
+  bool _openingReservation = false;
 
   late final AnimationController _queueCtrl;
   late final AnimationController _pulseCtrl;
@@ -86,15 +88,25 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         if (is5MinElapsed) {
           await BookingService.clear();
           if (mounted) {
-            context.read<MonitorService>().clearSearch();
+            context.read<MonitorService>().markReservationExpired();
             setState(() => _reservation = null);
           }
           return;
         }
+        if (value['status'] == 'awaitingOtp' && !ReservationScreen.isActive && !_openingReservation && mounted) {
+          final elapsedSeconds = started != null ? now.difference(started).inSeconds : 0;
+          if (value['autoVerify'] != true || elapsedSeconds >= 20) {
+            _openingReservation = true;
+            Navigator.of(context, rootNavigator: true)
+                .push(MaterialPageRoute(builder: (_) => const ReservationScreen()))
+                .then((_) => _openingReservation = false);
+          }
+        }
       } else if (_reservation != null) {
         // Reservation expired / removed externally after 5 minutes
         if (mounted) {
-          context.read<MonitorService>().clearSearch();
+          context.read<MonitorService>().markReservationExpired();
+          setState(() => _reservation = null);
         }
       }
       if (mounted) setState(() => _reservation = value);
@@ -320,6 +332,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   Widget build(BuildContext context) {
     final m = context.watch<MonitorService>();
     final credit = CreditService();
+    final lang = LanguageService.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final hasSearch = m.dateOfJourney.isNotEmpty;
     final p = _reservation;
@@ -332,6 +345,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin;
     final exactError =
         m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
+    final isReservationExpired = !m.isMonitoring &&
+        (m.lastReservationExpired || (p != null && expired) || (m.bookingFailureReason != null && m.bookingFailureReason!.isNotEmpty));
 
     if (_sessionExpired) {
       return Scaffold(
@@ -375,37 +390,55 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         if (hasSearch || credit.credits <= 0) ...[
-                          // ── 1. Master Train Cockpit HUD Card ──
-                          _CockpitHudCard(
-                            fromCity: fromCity,
-                            toCity: toCity,
-                            trainName: m.targetTrain,
-                            seatClass: m.targetSeatClass,
-                            dateOfJourney: m.dateOfJourney,
-                            step: step,
-                            isActive: isActive,
-                            scheduledStart: m.isScheduled
-                                ? m.scheduledStartLabel
-                                : null,
-                            ready: ready,
-                            otp: otp,
-                            credits: credit.credits,
-                            remainingTime:
-                                m.isMonitoring && m.remainingFreeSeconds >= 0
-                                ? m.remainingTimeFormatted
-                                : null,
-                            queueCtrl: _queueCtrl,
-                            pulseCtrl: _pulseCtrl,
-                            isDark: isDark,
-                            onClear: _handleStopAndClear,
-                          ),
+                          if (isReservationExpired)
+                            _ReservationExpiredCard(
+                              fromCity: fromCity,
+                              toCity: toCity,
+                              trainName: m.targetTrain,
+                              seatClass: m.targetSeatClass,
+                              dateOfJourney: m.dateOfJourney,
+                              reason: m.bookingFailureReason,
+                              isOtpFailure: p?['status'] == 'awaitingOtp',
+                              isPaymentFailure: p?['status'] == 'readyForPayment',
+                              isDark: isDark,
+                              pulseCtrl: _pulseCtrl,
+                              onRetrySearch: () => AppShell.goTo(context, AppShell.tabSearch),
+                              onReAutoBook: () async => await m.reAutoBook(),
+                              onClear: _handleStopAndClear,
+                              onDismiss: () => m.dismissBookingFailure(),
+                            )
+                          else ...[
+                            // ── 1. Master Train Cockpit HUD Card ──
+                            _CockpitHudCard(
+                              fromCity: fromCity,
+                              toCity: toCity,
+                              trainName: m.targetTrain,
+                              seatClass: m.targetSeatClass,
+                              dateOfJourney: m.dateOfJourney,
+                              step: step,
+                              isActive: isActive,
+                              scheduledStart: m.isScheduled
+                                  ? m.scheduledStartLabel
+                                  : null,
+                              ready: ready,
+                              otp: otp,
+                              credits: credit.credits,
+                              remainingTime:
+                                  m.isMonitoring && m.remainingFreeSeconds >= 0
+                                  ? m.remainingTimeFormatted
+                                  : null,
+                              queueCtrl: _queueCtrl,
+                              pulseCtrl: _pulseCtrl,
+                              isDark: isDark,
+                              onClear: _handleStopAndClear,
+                            ),
 
-                          const SizedBox(height: 12),
+                            const SizedBox(height: 12),
 
                           // ── Exact Error Banner (if any) ──
-                          if (exactError != null && exactError.isNotEmpty) ...[
+                          if (exactError != null && exactError.isNotEmpty && !isReservationExpired) ...[
                             _ErrorBanner(
-                              message: friendlyErrorMessage(exactError),
+                              message: friendlyErrorMessage(exactError, isBangla: lang.isBangla),
                               onVerifyTurnstile: _handleSolveTurnstile,
                               onDismiss: () => m.clearBookingError(),
                               isDark: isDark,
@@ -433,7 +466,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               onTimeout: () async {
                                 await BookingService.clear();
                                 if (context.mounted) {
-                                  context.read<MonitorService>().clearSearch();
+                                  context.read<MonitorService>().markReservationExpired();
                                 }
                               },
                             ),
@@ -478,7 +511,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                             pulseCtrl: _pulseCtrl,
                             isDark: isDark,
                           ),
-                        ] else ...[
+                        ],
+                      ] else ...[
                           // ── Cleared / Empty Monitor State ──
                           _EmptyMonitorView(
                             isDark: isDark,
@@ -518,25 +552,9 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
-    return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.appBarGradientStart,
-            AppColors.appBarGradientEnd,
-            Color(0xFF00A07A),
-          ],
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 8,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
+    return ScenicRailHeader(
+      compact: true,
+      sceneOpacity: 0.85,
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -560,6 +578,13 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                         fontSize: 16,
                         fontWeight: FontWeight.bold,
                         letterSpacing: -0.2,
+                        shadows: [
+                          Shadow(
+                            color: Colors.black87,
+                            blurRadius: 6,
+                            offset: Offset(0, 1.2),
+                          ),
+                        ],
                       ),
                     ),
                     Row(
@@ -597,10 +622,17 @@ class _TopBar extends StatelessWidget implements PreferredSizeWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.8),
+                              color: Colors.white.withValues(alpha: 0.95),
                               fontSize: 9.5,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 0.5,
+                              shadows: const [
+                                Shadow(
+                                  color: Colors.black87,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -2013,20 +2045,49 @@ class _TrainActionButtons extends StatelessWidget {
     return Column(
       children: [
         // ── Primary Action Button ──
-        if (p != null && expired)
+        if (!m.isMonitoring && ((p != null && expired) || m.lastReservationExpired)) ...[
           _MasterButton(
             label: lang.tr(
-              'Timeout • Re-Auto Book',
-              'সময় শেষ • পুনরায় অটো-বুক',
+              'Retry New Search',
+              'নতুন অনুসন্ধান করুন',
             ),
-            icon: Icons.refresh_rounded,
-            gradientColors: const [Color(0xFFF59E0B), Color(0xFFD97706)],
+            icon: Icons.search_rounded,
+            gradientColors: [AppColors.primary, AppColors.primaryDark],
             textColor: Colors.black,
-            onTap: () async {
-              await m.reAutoBook();
-            },
-          )
-        else if (p != null)
+            pulseAura: true,
+            pulseCtrl: pulseCtrl,
+            onTap: () => AppShell.goTo(context, AppShell.tabSearch),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr(
+                    'Re-Auto Book',
+                    'পুনরায় অটো-বুক',
+                  ),
+                  icon: Icons.refresh_rounded,
+                  color: const Color(0xFFF59E0B),
+                  onTap: () async {
+                    await m.reAutoBook();
+                  },
+                  isDark: isDark,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+                  icon: Icons.cancel_outlined,
+                  color: const Color(0xFFEF4444),
+                  onTap: onClear ?? () {},
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ] else if (p != null)
           _MasterButton(
             label: ready
                 ? lang.tr('Pay Now', 'পেমেন্ট করুন')
@@ -2046,7 +2107,7 @@ class _TrainActionButtons extends StatelessWidget {
             textColor: ready ? Colors.black : Colors.white,
             onTap: onReservation,
           )
-        else if (m.lastReservationExpired)
+        else if (!m.isMonitoring && m.lastReservationExpired)
           _MasterButton(
             label: lang.tr('Re-Auto Book Seats', 'পুনরায় অটো-বুক করুন'),
             icon: Icons.auto_mode_rounded,
@@ -2469,3 +2530,342 @@ class _ExpiredOverlay extends StatelessWidget {
     );
   }
 }
+
+// ─── Fancy Whole-Page Reservation Expired / Failure Alert View ───────────────
+class _ReservationExpiredCard extends StatelessWidget {
+  final String? fromCity;
+  final String? toCity;
+  final String? trainName;
+  final String? seatClass;
+  final String? dateOfJourney;
+  final String? reason;
+  final bool isOtpFailure;
+  final bool isPaymentFailure;
+  final bool isDark;
+  final AnimationController? pulseCtrl;
+  final VoidCallback? onRetrySearch;
+  final VoidCallback? onReAutoBook;
+  final VoidCallback? onClear;
+  final VoidCallback onDismiss;
+
+  const _ReservationExpiredCard({
+    this.fromCity,
+    this.toCity,
+    this.trainName,
+    this.seatClass,
+    this.dateOfJourney,
+    this.reason,
+    this.isOtpFailure = false,
+    this.isPaymentFailure = false,
+    required this.isDark,
+    this.pulseCtrl,
+    this.onRetrySearch,
+    this.onReAutoBook,
+    this.onClear,
+    required this.onDismiss,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final String headline = isOtpFailure
+        ? lang.tr('Hold Expired — OTP Not Verified', 'সময় শেষ — ওটিপি যাচাই হয়নি')
+        : (isPaymentFailure
+            ? lang.tr('Hold Expired — Payment Timed Out', 'সময় শেষ — পেমেন্টের সময় শেষ')
+            : lang.tr('Seat Hold Expired — Seats Released', 'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত'));
+
+    final bool isStandardReason = reason == null ||
+        reason!.isEmpty ||
+        reason!.contains('Seats were reserved') ||
+        reason!.contains('5 minutes') ||
+        reason!.contains('held seats') ||
+        reason!.contains('Held seats') ||
+        reason!.contains('timed out') ||
+        reason!.contains('সমাপ্ত') ||
+        reason!.contains('সময়সীমা') ||
+        reason!.contains('আসন মুক্ত') ||
+        reason!.contains('release');
+
+    final String details = isStandardReason
+        ? (isOtpFailure
+            ? lang.tr(
+                'Seats were reserved, but OTP was not verified within 5 minutes. Bangladesh Railway has released the held seats.',
+                'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই না হওয়ায় আসনটি ছেড়ে দেওয়া হয়েছে।',
+              )
+            : (isPaymentFailure
+                ? lang.tr(
+                    'Seats were reserved and verified, but payment was not completed within the 5-minute limit. The seats have been released.',
+                    'আসন সংরক্ষিত ও ওটিপি যাচাই হয়েছিল, কিন্তু ৫ মিনিটে পেমেন্ট সম্পন্ন না হওয়ায় টিকিটটি বাতিল হয়ে গেছে।',
+                  )
+                : lang.tr(
+                    'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.',
+                    'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট সম্পন্ন না হওয়ায় বাংলাদেশ রেলওয়ে আসনটি ছেড়ে দিয়েছে।',
+                  )))
+        : friendlyErrorMessage(reason, isBangla: lang.isBangla);
+
+    final origin = fromCity?.isNotEmpty == true ? fromCity! : 'Origin';
+    final destination = toCity?.isNotEmpty == true ? toCity! : 'Destination';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1E0E13) : const Color(0xFFFFF1F3),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.45 : 0.35),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.18 : 0.10),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Top Route Pill & Dismiss ──
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.train_rounded,
+                        size: 14,
+                        color: isDark ? Colors.white70 : Colors.black87,
+                      ),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          '$origin → $destination',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                      ),
+                      if (dateOfJourney?.isNotEmpty == true) ...[
+                        const SizedBox(width: 6),
+                        Text('•', style: TextStyle(color: isDark ? Colors.white38 : Colors.black38)),
+                        const SizedBox(width: 6),
+                        Text(
+                          dateOfJourney!,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w500,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: onDismiss,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: isDark ? Colors.white54 : Colors.black45,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 24),
+
+          // ── Animated Pulsing Hero Graphic ──
+          Center(
+            child: AnimatedBuilder(
+              animation: pulseCtrl ?? const AlwaysStoppedAnimation(0.0),
+              builder: (context, _) {
+                final pulse = pulseCtrl?.value ?? 0.0;
+                return Container(
+                  width: 92 + pulse * 10,
+                  height: 92 + pulse * 10,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFFEF4444).withValues(alpha: 0.08 + pulse * 0.06),
+                    border: Border.all(
+                      color: const Color(0xFFEF4444).withValues(alpha: 0.25 + pulse * 0.2),
+                      width: 1.8,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.15 + pulse * 0.1),
+                        blurRadius: 24,
+                        spreadRadius: 2,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [
+                            const Color(0xFFEF4444).withValues(alpha: 0.22),
+                            const Color(0xFFB91C1C).withValues(alpha: 0.10),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.timer_off_rounded,
+                        size: 34,
+                        color: Color(0xFFEF4444),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── 5-Minute Timeout Capsule Tag ──
+          Center(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.2 : 0.1),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.35),
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.history_toggle_off_rounded, size: 14, color: Color(0xFFEF4444)),
+                  const SizedBox(width: 5),
+                  Text(
+                    lang.tr('5-Minute Hold Expired', '৫ মিনিটের সময়সীমা সমাপ্ত'),
+                    style: const TextStyle(
+                      color: Color(0xFFEF4444),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── Headline ──
+          Text(
+            headline,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: isDark ? const Color(0xFFFFB4AB) : const Color(0xFFB91C1C),
+              fontSize: 18,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // ── Descriptive Explanation ──
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF16090D) : const Color(0xFFFFF6F7),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.25 : 0.15),
+              ),
+            ),
+            child: Text(
+              details,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isDark ? Colors.white70 : const Color(0xFF4B5563),
+                fontSize: 12.5,
+                height: 1.45,
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          // ── Action Buttons (Fancy & Prominent) ──
+          _MasterButton(
+            label: lang.tr(
+              'Retry New Search',
+              'নতুন অনুসন্ধান করুন',
+            ),
+            icon: Icons.search_rounded,
+            gradientColors: [AppColors.primary, AppColors.primaryDark],
+            textColor: Colors.black,
+            pulseAura: true,
+            pulseCtrl: pulseCtrl,
+            onTap: onRetrySearch ?? () => AppShell.goTo(context, AppShell.tabSearch),
+          ),
+
+          const SizedBox(height: 10),
+
+          Row(
+            children: [
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr(
+                    'Re-Auto Book',
+                    'পুনরায় অটো-বুক',
+                  ),
+                  icon: Icons.refresh_rounded,
+                  color: const Color(0xFFF59E0B),
+                  onTap: onReAutoBook ?? () {},
+                  isDark: isDark,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _SecondaryTrainButton(
+                  label: lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+                  icon: Icons.cancel_outlined,
+                  color: const Color(0xFFEF4444),
+                  onTap: onClear ?? () {},
+                  isDark: isDark,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+

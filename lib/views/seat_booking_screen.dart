@@ -47,14 +47,38 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   bool _smsVerify = false;
   final Set<SeatItem> _selected = {};
 
+  late SeatType _effectiveSeatType;
+
   @override
   void initState() {
     super.initState();
+    _effectiveSeatType = _resolveSeatType(widget.seatType, widget.train);
     _load();
   }
 
+  static SeatType _resolveSeatType(SeatType initial, TrainTrip train) {
+    if (initial.tripId != null &&
+        initial.tripRouteId != null &&
+        initial.type.toUpperCase() != 'ALL' &&
+        initial.type.toUpperCase() != 'RANDOM') {
+      return initial;
+    }
+    // As requested: if user selects random seat, default to SNIGDHA because
+    // the layout response returns all coaches and seats.
+    return train.seatTypes.firstWhere(
+      (s) => s.type.toUpperCase() == 'SNIGDHA' && s.tripId != null,
+      orElse: () => train.seatTypes.firstWhere(
+        (s) => s.isAvailable && s.tripId != null,
+        orElse: () => train.seatTypes.firstWhere(
+          (s) => s.tripId != null,
+          orElse: () => train.seatTypes.isNotEmpty ? train.seatTypes.first : initial,
+        ),
+      ),
+    );
+  }
+
   String get _gateLabel =>
-      '${widget.train.tripNumber} · ${widget.seatType.type}';
+      '${widget.train.tripNumber} · ${_effectiveSeatType.type}';
 
   Future<void> _load() async {
     if (_busy) return;
@@ -63,13 +87,13 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       _error = null;
     });
     try {
-      if (widget.seatType.tripId == null ||
-          widget.seatType.tripRouteId == null) {
+      if (_effectiveSeatType.tripId == null ||
+          _effectiveSeatType.tripRouteId == null) {
         throw StateError('Missing trip information');
       }
       final prepared = await BookingService.loadLayout(
         label: _gateLabel,
-        seat: widget.seatType,
+        seat: _effectiveSeatType,
         auth: widget.authSession,
       );
       if (mounted) {
@@ -113,7 +137,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
             widget.fromCity,
             widget.toCity,
             widget.dateOfJourney,
-            widget.seatType.type,
+            _effectiveSeatType.type,
           ),
         ),
       ),
@@ -130,7 +154,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       await context.read<MonitorService>().clearSearch();
       final state = await BookingService.reserve(
         train: widget.train,
-        seat: widget.seatType,
+        seat: _effectiveSeatType,
         from: widget.fromCity,
         to: widget.toCity,
         date: widget.dateOfJourney,
@@ -197,13 +221,13 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
             child: Row(
               children: [
                 StatusBadge(
-                  label: widget.seatType.displayName,
+                  label: _effectiveSeatType.displayName,
                   color: AppColors.primary,
                   icon: Icons.airline_seat_recline_extra_rounded,
                 ),
                 const SizedBox(width: 8),
                 StatusBadge(
-                  label: 'BDT ${widget.seatType.fare}',
+                  label: 'BDT ${_effectiveSeatType.fare}',
                   color: AppColors.gold,
                   icon: Icons.currency_exchange_rounded,
                 ),
@@ -598,7 +622,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                                   widget.fromCity,
                                   widget.toCity,
                                   widget.dateOfJourney,
-                                  widget.seatType.type,
+                                  _effectiveSeatType.type,
                                 ),
                               ),
                             ),

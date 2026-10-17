@@ -117,6 +117,63 @@ void main() {
       expect(find.byType(FancyTrainLoader), findsNothing);
     },
   );
+
+  testWidgets(
+    'BookingActivityOverlay never blocks with barrier or loader when isReservationActive is true',
+    (tester) async {
+      final activity = BookingActivity();
+      activity.isReservationActive = true;
+      final response = Completer<void>();
+      unawaited(
+        activity.run(BookingActivityStage.reserving, () => response.future),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BookingActivityOverlay(
+            activity: activity,
+            child: const Scaffold(
+              body: Center(child: Text('OTP Enter Screen')),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Ensure no blocking barrier or loader covers the screen
+      expect(find.byType(FancyTrainLoader), findsNothing);
+      expect(find.byKey(const ValueKey('booking-api-barrier')), findsNothing);
+      expect(find.text('OTP Enter Screen'), findsOneWidget);
+
+      response.complete();
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'BookingActivityOverlay does not block screen for background worker stage alone',
+    (tester) async {
+      final activity = BookingActivity();
+      activity.setWorkerStage(BookingActivityStage.reserving);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: BookingActivityOverlay(
+            activity: activity,
+            child: const Scaffold(
+              body: Center(child: Text('Active Screen')),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Background worker stage alone must never lock user UI with a barrier
+      expect(find.byType(FancyTrainLoader), findsNothing);
+      expect(find.byKey(const ValueKey('booking-api-barrier')), findsNothing);
+      expect(find.text('Active Screen'), findsOneWidget);
+    },
+  );
 }
 
 class _StartRequest extends StatefulWidget {

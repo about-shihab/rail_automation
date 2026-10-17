@@ -9,8 +9,6 @@ import '../views/booking_screen.dart';
 import '../views/announcement_screen.dart';
 import '../views/webview_login_screen.dart';
 import 'booking_service.dart';
-import 'booking_activity.dart';
-import 'turnstile_gate.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
 import 'monitor_service.dart';
@@ -148,7 +146,7 @@ class NotificationService {
         _pendingBooking = null;
         // Bring the app forward without starting a competing manual booking.
         // The active booking loader and normal reservation flow own navigation.
-        unawaited(_openActiveReservation());
+        unawaited(openActiveReservation());
       }
       return;
     }
@@ -211,16 +209,10 @@ class NotificationService {
     if (_isInitialized) await _notificationsPlugin.cancelAll();
   }
 
-  Future<void> _openActiveReservation() async {
-    if (BookingActivity.instance.busy || TurnstileGate.instance.isShowing) {
-      return;
-    }
+  Future<void> openActiveReservation() async {
     final pending = await BookingService.pending();
     final navigator = navigatorKey.currentState;
-    if (navigator == null ||
-        !navigator.mounted ||
-        BookingActivity.instance.busy ||
-        TurnstileGate.instance.isShowing) {
+    if (navigator == null || !navigator.mounted) {
       return;
     }
     if (pending?['status'] == 'awaitingOtp' ||
@@ -230,12 +222,6 @@ class NotificationService {
           MaterialPageRoute(builder: (_) => const ReservationScreen()),
         );
       }
-    } else {
-      navigator.push(
-        MaterialPageRoute(
-          builder: (_) => const AppShell(initialTab: AppShell.tabMonitor),
-        ),
-      );
     }
   }
 
@@ -449,7 +435,13 @@ class NotificationService {
     } catch (_) {}
   }
 
-  void openPendingBooking() => openBooking(_pendingBooking);
+  void openPendingBooking() {
+    if (_pendingBooking != null) {
+      openBooking(_pendingBooking);
+    } else {
+      unawaited(openActiveReservation());
+    }
+  }
 
   // ── Turnstile: in-app overlay ─────────────────────────────────────────────
 

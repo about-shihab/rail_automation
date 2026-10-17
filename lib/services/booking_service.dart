@@ -437,6 +437,7 @@ class BookingService {
             );
           }
           state['status'] = 'awaitingOtp';
+          BookingActivity.instance.clearWorkerStage();
           state['seniorCitizenEligible'] =
               data['senior_citizen_eligible'] == true;
           // Duration is captured from the official site's handshake, not invented locally.
@@ -499,8 +500,12 @@ class BookingService {
           } catch (_) {}
           return state;
         } catch (_) {
-          state['status'] = 'needsReview';
-          await save(state);
+          if (isAutoBook) {
+            await clear();
+          } else {
+            state['status'] = 'needsReview';
+            await save(state);
+          }
           rethrow;
         }
       },

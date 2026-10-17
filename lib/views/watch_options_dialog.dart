@@ -15,6 +15,7 @@ Future<BookingIntent?> showWatchOptions(
   String? trainName,
   List<String>? targetTrains,
   String? scheduledStart,
+  bool isLowProbability = false,
 }) => showModalBottomSheet<BookingIntent>(
   context: context,
   isScrollControlled: true,
@@ -25,6 +26,7 @@ Future<BookingIntent?> showWatchOptions(
     trainName: trainName,
     targetTrains: targetTrains,
     scheduledStart: scheduledStart,
+    isLowProbability: isLowProbability,
   ),
 );
 
@@ -33,11 +35,13 @@ class _WatchSheet extends StatefulWidget {
   final String? trainName;
   final List<String>? targetTrains;
   final String? scheduledStart;
+  final bool isLowProbability;
   const _WatchSheet({
     this.seatClass,
     this.trainName,
     this.targetTrains,
     this.scheduledStart,
+    this.isLowProbability = false,
   });
   @override
   State<_WatchSheet> createState() => _WatchSheetState();
@@ -384,6 +388,43 @@ class _WatchSheetState extends State<_WatchSheet> {
                   color: AppColors.textMuted(dark),
                 ),
               ),
+              if (widget.isLowProbability) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: Color(0xFFF59E0B),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          lang.tr(
+                            'Warning: Departure in < 6 hrs with 0 available seats. Ticket availability probability is low.',
+                            'সতর্কতা: যাত্রা শুরুর ৬ ঘণ্টার কম বাকি এবং কোনো আসন খালি নেই। টিকিট পাওয়ার সম্ভাবনা অত্যন্ত কম।',
+                          ),
+                          style: const TextStyle(
+                            color: Color(0xFFF59E0B),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.35,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 18),
               JourneySearchButton(
                 label: credit.credits <= 0

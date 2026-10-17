@@ -28,6 +28,7 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
     private EventChannel events;
     private BroadcastReceiver receiver;
     private EventChannel.EventSink currentSink;
+    private Intent pendingConsentIntent;
     private static final int SMS_CONSENT_REQUEST = 852;
 
     @Override
@@ -43,6 +44,15 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
             if (call.method.equals("startListening")) {
                 startRetriever();
                 result.success(true);
+                return;
+            }
+            if (call.method.equals("promptPendingConsent")) {
+                if (pendingConsentIntent != null) {
+                    launchConsentOrStore(pendingConsentIntent);
+                    result.success(true);
+                } else {
+                    result.success(false);
+                }
                 return;
             }
             result.notImplemented();
@@ -61,6 +71,20 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
                 stop();
             }
         });
+    }
+
+    private void launchConsentOrStore(Intent consentIntent) {
+        if (consentIntent == null) return;
+        if (activityBinding != null && activityBinding.getActivity() != null) {
+            try {
+                activityBinding.getActivity().startActivityForResult(consentIntent, SMS_CONSENT_REQUEST);
+                pendingConsentIntent = null;
+            } catch (Exception ignored) {
+                pendingConsentIntent = consentIntent;
+            }
+        } else {
+            pendingConsentIntent = consentIntent;
+        }
     }
 
     private void startRetriever() {
@@ -96,24 +120,33 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
                             consentIntent = extras.getParcelable(SmsRetriever.EXTRA_CONSENT_INTENT);
                         }
 
-                        if (consentIntent != null && activityBinding != null && activityBinding.getActivity() != null) {
-                            try {
-                                activityBinding.getActivity().startActivityForResult(consentIntent, SMS_CONSENT_REQUEST);
-                            } catch (ActivityNotFoundException ignored) {}
+                        if (consentIntent != null) {
+                            launchConsentOrStore(consentIntent);
                         }
                     }
                 }
             };
 
             IntentFilter filter = new IntentFilter(SmsRetriever.SMS_RETRIEVED_ACTION);
-            if (Build.VERSION.SDK_INT >= 33) {
-                context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null, Context.RECEIVER_EXPORTED);
-            } else {
-                context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null);
+            try {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null, Context.RECEIVER_EXPORTED);
+                } else {
+                    context.registerReceiver(receiver, filter, SmsRetriever.SEND_PERMISSION, null);
+                }
+            } catch (Exception e) {
+                if (Build.VERSION.SDK_INT >= 33) {
+                    context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED);
+                } else {
+                    context.registerReceiver(receiver, filter);
+                }
             }
             // Register first so an immediate SMS cannot race receiver setup.
             // Railway controls the SMS format, so it cannot contain our app hash.
-            SmsRetriever.getClient(context).startSmsUserConsent(null)
+            Context retrieverContext = (activityBinding != null && activityBinding.getActivity() != null)
+                ? activityBinding.getActivity()
+                : context;
+            SmsRetriever.getClient(retrieverContext).startSmsUserConsent(null)
                 .addOnFailureListener(error -> {
                     if (currentSink != null) currentSink.error("SMS_UNAVAILABLE", "Google SMS verification is unavailable. Enter the OTP manually.", null);
                     stopReceiver();
@@ -167,6 +200,9 @@ public class RailSmsPlugin implements FlutterPlugin, ActivityAware, PluginRegist
     public void onAttachedToActivity(@NonNull ActivityPluginBinding binding) {
         activityBinding = binding;
         binding.addActivityResultListener(this);
+        if (pendingConsentIntent != null) {
+            launchConsentOrStore(pendingConsentIntent);
+        }
     }
 
     @Override

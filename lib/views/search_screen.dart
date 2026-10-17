@@ -28,6 +28,7 @@ import '../services/credit_service.dart';
 import '../utils/app_theme.dart';
 import '../widgets/station_autocomplete.dart';
 import '../widgets/journey_search_button.dart';
+import '../widgets/scenic_rail_header.dart';
 
 import 'package:flutter/services.dart';
 
@@ -130,6 +131,7 @@ class _SearchScreenState extends State<SearchScreen>
       await WebSessionService.clear();
     } catch (_) {}
     await FirebaseUserService().clearSession();
+    await CreditService().onLogout();
     await AuthSession.clear();
     await BookingService.clear();
     await SecureStore.delete('rail_action_token');
@@ -397,26 +399,14 @@ class _SearchScreenState extends State<SearchScreen>
         children: [
           CustomScrollView(
             slivers: [
-              // ── Professional pinned gradient header ──────────────────
+              // ── Professional pinned animated rail/nature header ─────
               SliverAppBar(
                 pinned: true,
                 elevation: 2,
-                toolbarHeight: 64,
+                toolbarHeight: 68,
+                expandedHeight: 112,
                 backgroundColor: AppColors.appBarGradientStart,
-                flexibleSpace: Container(
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        AppColors.appBarGradientStart,
-                        AppColors.appBarGradientEnd,
-                        Color(0xFF00C896),
-                      ],
-                      stops: [0.0, 0.55, 1.0],
-                    ),
-                  ),
-                ),
+                flexibleSpace: const ScenicRailHeader(),
                 title: Row(
                   children: [
                     const AppBrandIcon(),
@@ -434,6 +424,13 @@ class _SearchScreenState extends State<SearchScreen>
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
                               letterSpacing: -0.3,
+                              shadows: [
+                                Shadow(
+                                  color: Colors.black87,
+                                  blurRadius: 6,
+                                  offset: Offset(0, 1.2),
+                                ),
+                              ],
                             ),
                           ),
                           Text(
@@ -445,10 +442,17 @@ class _SearchScreenState extends State<SearchScreen>
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontFamily: 'Roboto',
-                              color: Colors.white.withValues(alpha: 0.8),
+                              color: Colors.white.withValues(alpha: 0.95),
                               fontSize: 10.5,
-                              fontWeight: FontWeight.w500,
+                              fontWeight: FontWeight.w600,
                               letterSpacing: 0.1,
+                              shadows: const [
+                                Shadow(
+                                  color: Colors.black87,
+                                  blurRadius: 4,
+                                  offset: Offset(0, 1),
+                                ),
+                              ],
                             ),
                           ),
                         ],
