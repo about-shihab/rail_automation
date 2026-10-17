@@ -1,0 +1,136 @@
+name: iOS IPA Build and Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build Type'
+        required: true
+        default: 'unsigned'
+        type: choice
+        options:
+          - unsigned
+          - signed
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rail-pro-ios-build
+  cancel-in-progress: false
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: flutter-pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            flutter-pub-${{ runner.os }}-
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ios/Pods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Run static analysis & tests
+        run: |
+          flutter analyze --no-pub
+          flutter test --no-pub
+
+      - name: Setup CocoaPods
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Setup Apple Codesigning (if secrets provided)
+        id: codesign_setup
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -n "$BUILD_CERTIFICATE_BASE64" ] && [ -n "$BUILD_PROVISION_PROFILE_BASE64" ]; then
+            echo "codesign=true" >> $GITHUB_OUTPUT
+            CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+            PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+            KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+
+            echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
+            echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
+
+            security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+            security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+            security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+            security list-keychain -d user -s $KEYCHAIN_PATH
+
+            mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+            cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+          else
+            echo "codesign=false" >> $GITHUB_OUTPUT
+            echo "No signing secrets provided; proceeding with unsigned IPA generation."
+          fi
+
+      - name: Build iOS Archive
+        run: |
+          if [ "${{ steps.codesign_setup.outputs.codesign }}" = "true" ]; then
+            flutter build ipa --release
+          else
+            flutter build ipa --no-codesign --release
+          fi
+
+      - name: Package IPA
+        run: |
+          ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          OUTPUT_DIR="build/ios/ipa"
+          mkdir -p "$OUTPUT_DIR/Payload"
+
+          if [ -d "$ARCHIVE_APP" ]; then
+            cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
+            cd "$OUTPUT_DIR"
+            zip -r -y "RailPro.ipa" "Payload"
+            cd - > /dev/null
+            echo "Unsigned RailPro.ipa successfully packaged!"
+          elif [ -f "build/ios/ipa/rail_automation.ipa" ]; then
+            cp "build/ios/ipa/rail_automation.ipa" "$OUTPUT_DIR/RailPro.ipa"
+          else
+            echo "Error: Neither archive app nor exported ipa was found."
+            exit 1
+          fi
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RailPro-iOS-IPA
+          path: |
+            build/ios/ipa/RailPro.ipa
+            build/ios/archive/Runner.xcarchive

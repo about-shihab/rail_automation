@@ -40,7 +40,10 @@ class UpdatePolicy {
   }
 
   bool requiresUpdate(int installedBuild) =>
-      installedBuild > 0 && installedBuild < minimumBuild;
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.android &&
+      installedBuild > 0 &&
+      installedBuild < minimumBuild;
   Map<String, dynamic> toJson() => {
     'version': version,
     'build_number': build,
@@ -72,12 +75,23 @@ class AppUpdateService extends ChangeNotifier {
   bool get required => policy?.requiresUpdate(installedBuild) ?? false;
 
   Future<void> initialize() async {
-    final info = await _channel.invokeMapMethod<String, dynamic>('appVersion');
+    Map<String, dynamic>? info;
+    try {
+      info = await _channel.invokeMapMethod<String, dynamic>('appVersion');
+    } catch (_) {}
     installedBuild = (info?['build'] as num?)?.toInt() ?? 0;
     installedVersion = info?['version'] as String? ?? '';
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(installedKey, installedBuild);
-    await prefs.setString(versionKey, installedVersion);
+    if (installedBuild > 0) {
+      await prefs.setInt(installedKey, installedBuild);
+    } else {
+      installedBuild = prefs.getInt(installedKey) ?? 1;
+    }
+    if (installedVersion.isNotEmpty) {
+      await prefs.setString(versionKey, installedVersion);
+    } else {
+      installedVersion = prefs.getString(versionKey) ?? '1.0.1';
+    }
     await reloadCache();
   }
 
