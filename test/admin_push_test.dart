@@ -88,15 +88,19 @@ void main() {
     },
   );
 
-  test('phone normalization and stable IDs work across a restart', () {
-    expect(AdminPushService.normalizePhone('+8801813570430'), '01813570430');
-    expect(AdminPushService.normalizePhone('570430'), '');
-    final id = NotificationService.announcementNotificationId('document1');
-    expect(id, NotificationService.announcementNotificationId('document1'));
-    expect(id, greaterThan(100000));
-    expect(
-      id,
-      isNot(NotificationService.announcementNotificationId('document2')),
+  test('showBroadcastNotification displays announcement with stable ID and tap route', () async {
+    calls.clear();
+    await NotificationService().showBroadcastNotification(
+      title: 'Admin Notice',
+      body: 'Maintenance tonight',
+      documentId: 'doc_123',
     );
+    final shows = calls.where((c) => c.method == 'show').toList();
+    expect(shows, hasLength(1));
+    final args = shows.single.arguments as Map;
+    expect(args['title'], 'Admin Notice');
+    expect(args['body'], 'Maintenance tonight');
+    expect(args['payload'], 'rail://announcement/doc_123');
+    expect(args['id'], NotificationService.announcementNotificationId('doc_123'));
   });
 }

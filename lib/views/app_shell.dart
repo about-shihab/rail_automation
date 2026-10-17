@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../models/auth_session.dart';
 import '../services/booking_service.dart';
+import '../services/app_config.dart';
 import '../services/app_update_service.dart';
 import '../services/credit_service.dart';
 import '../services/firebase_user_service.dart';
@@ -683,146 +684,155 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
   @override
   Widget build(BuildContext context) {
     final lang = widget.lang;
-    return AppCard(
-      padding: EdgeInsets.zero,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(18),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(
-                      Icons.code_rounded,
-                      color: AppColors.primary,
-                      size: 20,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          lang.tr('Developer Information', 'ডেভেলপার তথ্য'),
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary(widget.isDark),
-                          ),
+    return ListenableBuilder(
+      listenable: AppConfig.instance,
+      builder: (context, _) {
+        final email = AppConfig.instance.rechargeContactEmail;
+        final devName = AppConfig.instance.developerName;
+        return AppCard(
+          padding: EdgeInsets.zero,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              InkWell(
+                onTap: () => setState(() => _expanded = !_expanded),
+                borderRadius: BorderRadius.circular(18),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          _expanded
-                              ? lang.tr(
-                                  'Tap to collapse',
-                                  'সংক্ষেপ করতে ট্যাপ করুন',
-                                )
-                              : lang.tr(
-                                  'Abdulla Al Mamun · Tap to expand',
-                                  'আবদুল্লাহ আল মামুন · বিস্তারিত দেখতে ট্যাপ করুন',
-                                ),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textMuted(widget.isDark),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Icon(
-                    _expanded
-                        ? Icons.keyboard_arrow_up_rounded
-                        : Icons.keyboard_arrow_down_rounded,
-                    color: AppColors.textMuted(widget.isDark),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (_expanded) ...[
-            const Divider(height: 1),
-            ListTile(
-              leading: const Icon(
-                Icons.person_outline_rounded,
-                color: AppColors.primary,
-              ),
-              title: const Text(
-                'Abdulla Al Mamun',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                lang.tr(
-                  'Lead Developer & Creator',
-                  'প্রধান ডেভেলপার এবং নির্মাতা',
-                ),
-              ),
-            ),
-            ListTile(
-              leading: const Icon(
-                Icons.email_outlined,
-                color: AppColors.primary,
-              ),
-              title: const Text(
-                'connect.abdulla@gmail.com',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              subtitle: Text(
-                lang.tr(
-                  'Tap to copy contact email',
-                  'ইমেইল কপি করতে ট্যাপ করুন',
-                ),
-              ),
-              trailing: const Icon(
-                Icons.copy_rounded,
-                size: 18,
-                color: AppColors.primary,
-              ),
-              onTap: () {
-                Clipboard.setData(
-                  const ClipboardData(text: 'connect.abdulla@gmail.com'),
-                );
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Row(
-                      children: [
-                        const Icon(
-                          Icons.check_circle_rounded,
-                          color: Colors.white,
+                        child: const Icon(
+                          Icons.code_rounded,
+                          color: AppColors.primary,
                           size: 20,
                         ),
-                        const SizedBox(width: 8),
-                        Text(
-                          lang.tr(
-                            'Email copied to clipboard',
-                            'ইমেইল ক্লিপবোর্ডে কপি করা হয়েছে',
-                          ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              lang.tr('Developer Information', 'ডেভেলপার তথ্য'),
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textPrimary(widget.isDark),
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _expanded
+                                  ? lang.tr(
+                                      'Tap to collapse',
+                                      'সংক্ষেপ করতে ট্যাপ করুন',
+                                    )
+                                  : (devName == 'Abdulla Al Mamun'
+                                      ? lang.tr(
+                                          'Abdulla Al Mamun · Tap to expand',
+                                          'আবদুল্লাহ আল মামুন · বিস্তারিত দেখতে ট্যাপ করুন',
+                                        )
+                                      : '$devName · ${lang.tr('Tap to expand', 'বিস্তারিত দেখতে ট্যাপ করুন')}'),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textMuted(widget.isDark),
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
-                    ),
-                    behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    backgroundColor: AppColors.primary,
-                    duration: const Duration(seconds: 2),
+                      ),
+                      Icon(
+                        _expanded
+                            ? Icons.keyboard_arrow_up_rounded
+                            : Icons.keyboard_arrow_down_rounded,
+                        color: AppColors.textMuted(widget.isDark),
+                      ),
+                    ],
                   ),
-                );
-              },
-            ),
-            const SizedBox(height: 6),
-          ],
-        ],
-      ),
+                ),
+              ),
+              if (_expanded) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(
+                    Icons.person_outline_rounded,
+                    color: AppColors.primary,
+                  ),
+                  title: Text(
+                    devName,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    lang.tr(
+                      'Lead Developer & Creator',
+                      'প্রধান ডেভেলপার এবং নির্মাতা',
+                    ),
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(
+                    Icons.email_outlined,
+                    color: AppColors.primary,
+                  ),
+                  title: Text(
+                    email,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    lang.tr(
+                      'Tap to copy contact email',
+                      'ইমেইল কপি করতে ট্যাপ করুন',
+                    ),
+                  ),
+                  trailing: const Icon(
+                    Icons.copy_rounded,
+                    size: 18,
+                    color: AppColors.primary,
+                  ),
+                  onTap: () {
+                    Clipboard.setData(
+                      ClipboardData(text: email),
+                    );
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Row(
+                          children: [
+                            const Icon(
+                              Icons.check_circle_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              lang.tr(
+                                'Email copied to clipboard',
+                                'ইমেইল ক্লিপবোর্ডে কপি করা হয়েছে',
+                              ),
+                            ),
+                          ],
+                        ),
+                        behavior: SnackBarBehavior.floating,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        backgroundColor: AppColors.primary,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+                const SizedBox(height: 6),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:rail_automation/views/app_shell.dart';
+import 'package:rail_automation/services/app_config.dart';
 import 'package:rail_automation/services/credit_service.dart';
 import 'package:rail_automation/services/firebase_user_service.dart';
 import 'package:rail_automation/services/language_service.dart';
@@ -82,5 +83,54 @@ void main() {
       find.textContaining('Developed by Abdulla Al Mamun'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('Profile tab dynamically updates developer email from AppConfig', (
+    tester,
+  ) async {
+    final credit = CreditService();
+    final theme = ThemeService();
+    final lang = LanguageService();
+    final pro = ProService();
+    final monitor = MonitorService(proService: pro);
+
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(() => tester.view.resetPhysicalSize());
+
+    await tester.pumpWidget(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: AppConfig.instance),
+          ChangeNotifierProvider.value(value: credit),
+          ChangeNotifierProvider.value(value: theme),
+          ChangeNotifierProvider.value(value: lang),
+          ChangeNotifierProvider.value(value: monitor),
+          ChangeNotifierProvider.value(value: FirebaseUserService()),
+          ChangeNotifierProvider.value(value: TripHistoryService()),
+        ],
+        child: const MaterialApp(home: ProfileTab()),
+      ),
+    );
+
+    await tester.pumpAndSettle();
+
+    // Tap to expand Developer Information
+    await tester.tap(find.text('Developer Information'));
+    await tester.pumpAndSettle();
+    expect(find.text('connect.abdulla@gmail.com'), findsOneWidget);
+
+    // Update configuration via AppConfig with a new developer email
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      AppConfig.cacheKey,
+      '{"recharge_contact_email": "developer@customdomain.com"}',
+    );
+    await AppConfig.instance.reloadCache();
+    await tester.pumpAndSettle();
+
+    // Verify UI immediately reflects new developer email
+    expect(find.text('developer@customdomain.com'), findsOneWidget);
+    expect(find.text('connect.abdulla@gmail.com'), findsNothing);
   });
 }

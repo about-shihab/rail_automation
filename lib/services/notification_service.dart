@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 
@@ -822,6 +823,13 @@ class NotificationService {
     if (_isListening && _listeningPhone == cleanPhone) {
       return;
     }
+    if (Firebase.apps.isEmpty) {
+      debugPrint(
+        '[NotificationService] Firebase not initialized yet. Listener deferred.',
+      );
+      _isListening = false;
+      return;
+    }
     _fbNotificationSub?.cancel();
     _listeningPhone = cleanPhone;
     _isListening = true;
@@ -841,7 +849,8 @@ class NotificationService {
           .listen(
             (snap) async {
               for (final change in snap.docChanges) {
-                if (change.type == DocumentChangeType.added) {
+                if (change.type == DocumentChangeType.added ||
+                    change.type == DocumentChangeType.modified) {
                   final docId = change.doc.id;
                   // Strict duplicate check: NEVER display the same notification ID twice
                   if (_seenNotificationDocIds.contains(docId)) {
@@ -850,9 +859,6 @@ class NotificationService {
 
                   final data = change.doc.data();
                   if (data == null) continue;
-                  // Push announcements are displayed by FCM (including while
-                  // closed). Replaying them here would create duplicate alerts.
-                  if (data['delivery'] == 'push') continue;
                   final target = data['target']?.toString() ?? 'all';
                   final targetPhone = data['targetPhone']?.toString();
                   final ts = data['createdAt'];
@@ -883,18 +889,24 @@ class NotificationService {
                     debugPrint(
                       '🔔 [NotificationService] Displaying notification: "$title" - "$body"',
                     );
-                    await showBroadcastNotification(title: title, body: body);
+                    await showBroadcastNotification(
+                      title: title,
+                      body: body,
+                      documentId: docId,
+                    );
                   }
                 }
               }
             },
             onError: (err) {
+              _isListening = false;
               debugPrint(
                 '[NotificationService] Firestore notifications error: $err',
               );
             },
           );
     } catch (e) {
+      _isListening = false;
       debugPrint('[NotificationService] startListening error: $e');
     }
   }
@@ -904,6 +916,17 @@ class NotificationService {
     required String body,
     String? documentId,
   }) async {
+    final payload = documentId == null
+        ? 'rail://trips'
+        : Uri(
+            scheme: 'rail',
+            host: 'announcement',
+            pathSegments: [documentId],
+          ).toString();
+    final notifId = documentId == null
+        ? DateTime.now().millisecondsSinceEpoch ~/ 1000
+        : announcementNotificationId(documentId);
+
     final notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
         'br_broadcast_alerts',
@@ -912,9 +935,10 @@ class NotificationService {
         icon: 'ic_stat_rail',
         largeIcon: const DrawableResourceAndroidBitmap('ic_notification_brand'),
         color: const Color(0xFF009B78),
-        visibility: NotificationVisibility.private,
-        importance: Importance.high,
-        priority: Priority.high,
+        visibility: NotificationVisibility.public,
+        importance: Importance.max,
+        priority: Priority.max,
+        enableVibration: true,
         styleInformation: BigTextStyleInformation(body, contentTitle: title),
       ),
       iOS: const DarwinNotificationDetails(
@@ -925,20 +949,11 @@ class NotificationService {
     );
 
     try {
-      final notifId = documentId == null
-          ? DateTime.now().millisecondsSinceEpoch ~/ 1000
-          : announcementNotificationId(documentId);
       await _notificationsPlugin.show(
         id: notifId,
         title: title,
         body: body,
-        payload: documentId == null
-            ? 'rail://trips'
-            : Uri(
-                scheme: 'rail',
-                host: 'announcement',
-                pathSegments: [documentId],
-              ).toString(),
+        payload: payload,
         notificationDetails: notificationDetails,
       );
       debugPrint(
@@ -946,15 +961,41 @@ class NotificationService {
       );
     } catch (e) {
       debugPrint(
-        '[NotificationService] ❌ Failed to show system notification: $e',
+        '[NotificationService] ⚠️ Standard broadcast alert failed: $e. Falling back to default alert...',
       );
+      try {
+        await _notificationsPlugin.show(
+          id: notifId,
+          title: title,
+          body: body,
+          payload: payload,
+          notificationDetails: NotificationDetails(
+            android: AndroidNotificationDetails(
+              'br_broadcast_alerts',
+              'System Announcements',
+              importance: Importance.max,
+              priority: Priority.max,
+              enableVibration: true,
+              styleInformation: BigTextStyleInformation(
+                body,
+                contentTitle: title,
+              ),
+            ),
+          ),
+        );
+      } catch (err) {
+        debugPrint(
+          '[NotificationService] ❌ Fallback system notification also failed: $err',
+        );
+      }
     }
 
     // Also trigger in-app banner for instant visual response
     final nav = navigatorKey.currentState;
     if (nav != null &&
         nav.mounted &&
-        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed ||
+            WidgetsBinding.instance.lifecycleState == null)) {
       ScaffoldMessenger.maybeOf(nav.context)?.showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,

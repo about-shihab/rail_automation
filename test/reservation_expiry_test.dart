@@ -15,6 +15,7 @@ import 'package:rail_automation/services/trip_history_service.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 import 'package:rail_automation/views/reservation_screen.dart';
 import 'package:rail_automation/views/train_selection_screen.dart';
+import 'package:rail_automation/services/journey_schedule.dart';
 import 'package:rail_automation/models/seat_type.dart';
 import 'package:rail_automation/models/train_trip.dart';
 
@@ -154,7 +155,7 @@ void main() {
   });
 
   test('TrainSelectionScreen.isTrainLowProbability warns when < 6 hours and 0 seats', () {
-    final now = DateTime(2026, 10, 20, 10, 0, 0);
+    final now = JourneySchedule.railwayTime(DateTime(2026, 10, 20, 10, 0, 0));
 
     // Case 1: Departure in 3 hours (1:00 PM), 0 seats -> Low probability!
     final trainLowProb = TrainTrip(

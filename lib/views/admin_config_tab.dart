@@ -717,7 +717,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                   ),
                   const SizedBox(height: 14),
                   const Text(
-                    'Recharge contact email',
+                    'Support & Developer contact email',
                     style: TextStyle(
                       fontWeight: FontWeight.w600,
                       fontSize: 13,
@@ -725,7 +725,7 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    'Support or admin email address shown to users for manual credit recharge requests.',
+                    'Support and developer email address shown to users on their profile and for manual credit recharge requests.',
                     style: TextStyle(
                       fontSize: 11,
                       color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,

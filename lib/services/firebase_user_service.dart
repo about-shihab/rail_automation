@@ -53,7 +53,9 @@ class FirebaseUserService extends ChangeNotifier {
       }
       _isFirebaseReady = true;
       debugPrint('[FirebaseUserService] Firebase initialized successfully.');
+      unawaited(AppConfig.instance.initialize());
       unawaited(CreditService().syncPackagesFromFirestore());
+      NotificationService().startListeningToFirebaseNotifications(_currentPhone);
     } catch (e) {
       _isFirebaseReady = false;
       debugPrint(

@@ -60,6 +60,7 @@ void main() async {
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
   await firebaseUserService.initialize(proService: proService);
+  await AppConfig.instance.initialize();
   unawaited(
     AdminPushService.instance.initialize(
       phone: isLoggedIn ? session.phoneNumber : null,
@@ -84,6 +85,7 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: AppConfig.instance),
         ChangeNotifierProvider.value(value: proService),
         ChangeNotifierProvider.value(value: themeService),
         ChangeNotifierProvider.value(value: languageService),

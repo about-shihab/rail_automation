@@ -59,6 +59,7 @@ class AppConfig extends ChangeNotifier {
     // Credits and recharge configuration (can be adjusted by admin on the fly)
     'default_credits': 2,
     'direct_recharge_enabled': false,
+    'developer_name': 'Abdulla Al Mamun',
     'recharge_contact_email': 'connect.abdulla@gmail.com',
     // Non-secret request headers / Turnstile keys, overridable from the DB.
     'api_headers': <String, dynamic>{},
@@ -77,6 +78,8 @@ class AppConfig extends ChangeNotifier {
   int get defaultCredits => number('default_credits');
   bool get directRechargeEnabled => boolean('direct_recharge_enabled');
   String get rechargeContactEmail => string('recharge_contact_email');
+  String get developerEmail => rechargeContactEmail;
+  String get developerName => string('developer_name');
 
   /// Seconds between seat searches. A value on the `search_trips` operation
   /// wins over the global `poll_interval_seconds`.
@@ -182,9 +185,16 @@ class AppConfig extends ChangeNotifier {
     if (input['direct_recharge_enabled'] is bool) {
       result['direct_recharge_enabled'] = input['direct_recharge_enabled'];
     }
-    final rechargeEmail = input['recharge_contact_email'];
+    final rechargeEmail = input['recharge_contact_email'] ??
+        input['developer_email'] ??
+        input['developer_mail'] ??
+        input['contact_email'];
     if (rechargeEmail is String && rechargeEmail.trim().contains('@')) {
       result['recharge_contact_email'] = rechargeEmail.trim();
+    }
+    final devName = input['developer_name'] ?? input['developer'];
+    if (devName is String && devName.trim().isNotEmpty) {
+      result['developer_name'] = devName.trim();
     }
     result['api_headers'] = RailApiConfig.validateHeaders(input['api_headers']);
     result['turnstile_site_keys'] = RailApiConfig.validateSiteKeys(
@@ -281,6 +291,7 @@ class AppConfig extends ChangeNotifier {
     } catch (_) {
       _values = Map.of(defaults);
     }
+    notifyListeners();
   }
 
   @override
