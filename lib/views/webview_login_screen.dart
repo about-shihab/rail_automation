@@ -82,7 +82,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         await SecureStore.delete('rail_action_token');
         await WebSessionService.clear();
       }
-      if (mounted) _initWebView();
+      if (mounted) await _initWebView();
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -100,13 +100,10 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     }
   }
 
-  void _initWebView() {
+  Future<void> _initWebView() async {
     try {
       _controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent(
-          'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-        )
         ..addJavaScriptChannel(
           'RailBridge',
           onMessageReceived: (JavaScriptMessage msg) {
@@ -160,14 +157,18 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
                 });
               }
               // Show the form as soon as it has been pre-filled (or wait for auto-login).
-              final hasCreds = _savedPhone.isNotEmpty && _savedPassword.isNotEmpty;
+              final hasCreds =
+                  _savedPhone.isNotEmpty && _savedPassword.isNotEmpty;
               final timeoutMs = (widget.clearSession && hasCreds) ? 8000 : 700;
               _loadingTimeoutTimer?.cancel();
-              _loadingTimeoutTimer = Timer(Duration(milliseconds: timeoutMs), () {
-                if (mounted && !_hasNavigated && _isLoading) {
-                  setState(() => _isLoading = false);
-                }
-              });
+              _loadingTimeoutTimer = Timer(
+                Duration(milliseconds: timeoutMs),
+                () {
+                  if (mounted && !_hasNavigated && _isLoading) {
+                    setState(() => _isLoading = false);
+                  }
+                },
+              );
             },
             onWebResourceError: (error) {
               if (mounted) setState(() => _isLoading = false);
@@ -175,7 +176,9 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           ),
         );
 
-      _controller!.loadRequest(Uri.parse(RailLoginScript.loginUrl));
+      await WebSessionService.configureLoginBrowser(_controller!);
+      if (!mounted) return;
+      await _controller!.loadRequest(Uri.parse(RailLoginScript.loginUrl));
     } catch (_) {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -268,14 +271,16 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   /// ([clearSession] is true), it automatically submits and solves Turnstile;
   /// otherwise it pre-fills and lets the user tap sign-in.
   Future<void> _prefillSavedCredentials() async {
-    if (_controller == null || (_savedPhone.isEmpty && _savedPassword.isEmpty)) {
+    if (_controller == null ||
+        (_savedPhone.isEmpty && _savedPassword.isEmpty)) {
       return;
     }
     if (!WebSessionService.isRailwayUrl(await _controller!.currentUrl())) {
       return;
     }
     try {
-      final shouldSubmit = widget.clearSession &&
+      final shouldSubmit =
+          widget.clearSession &&
           _savedPhone.isNotEmpty &&
           _savedPassword.isNotEmpty;
       await _controller!.runJavaScript(

@@ -71,7 +71,8 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         (s) => s.isAvailable && s.tripId != null,
         orElse: () => train.seatTypes.firstWhere(
           (s) => s.tripId != null,
-          orElse: () => train.seatTypes.isNotEmpty ? train.seatTypes.first : initial,
+          orElse: () =>
+              train.seatTypes.isNotEmpty ? train.seatTypes.first : initial,
         ),
       ),
     );
@@ -560,7 +561,9 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                                     ),
                                   ),
                                   Text(
-                                    'Railway SMS is read and verified automatically',
+                                    SmsService.supported
+                                        ? 'Railway SMS is read and verified automatically'
+                                        : 'Enter the OTP or use the keyboard code suggestion',
                                     style: TextStyle(
                                       color: AppColors.textSecondary(isDark),
                                       fontSize: 11,
@@ -572,12 +575,17 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
                             Switch(
                               value: _smsVerify,
                               activeThumbColor: AppColors.primary,
-                              onChanged: (v) async {
-                                final ok =
-                                    v &&
-                                    await SmsService().requestSmsPermission();
-                                if (mounted) setState(() => _smsVerify = ok);
-                              },
+                              onChanged: !SmsService.supported
+                                  ? null
+                                  : (v) async {
+                                      final ok =
+                                          v &&
+                                          await SmsService()
+                                              .requestSmsPermission();
+                                      if (mounted) {
+                                        setState(() => _smsVerify = ok);
+                                      }
+                                    },
                             ),
                           ],
                         ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -47,7 +48,10 @@ class TicketDownloadService {
       });
 
       server.listen((HttpRequest request) async {
-        request.response.headers.contentType = ContentType('application', 'pdf');
+        request.response.headers.contentType = ContentType(
+          'application',
+          'pdf',
+        );
         request.response.headers.set(
           'Content-Disposition',
           'attachment; filename="$fileName"',
@@ -71,18 +75,20 @@ class TicketDownloadService {
     }
   }
 
-  /// Saves the PDF bytes to the device's Downloads/RailPro directory
-  /// and opens the system PDF viewer so the user can inspect or print the ticket.
+  /// Saves the PDF to Downloads on Android or app Documents on iOS and opens
+  /// the native viewer, where the user can inspect, share or print the ticket.
   static Future<String?> saveAndOpenTicketPdf({
     required Uint8List bytes,
     required String fileName,
   }) async {
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    if (!kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
       try {
-        final res = await _channel.invokeMethod<String>(
-          'saveAndOpenPdf',
-          {'bytes': bytes, 'fileName': fileName},
-        );
+        final res = await _channel.invokeMethod<String>('saveAndOpenPdf', {
+          'bytes': bytes,
+          'fileName': fileName,
+        });
         return res;
       } catch (e) {
         return null;

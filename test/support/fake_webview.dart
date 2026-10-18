@@ -52,6 +52,8 @@ class FakeWebViewController extends PlatformWebViewController {
   final scripts = <String>[];
   String? htmlBaseUrl;
   int loads = 0;
+  final userAgentOverrides = <String?>[];
+  final userAgentOverridesAtLoad = <List<String?>>[];
   String? url;
   Object javascriptResult = '{}';
 
@@ -68,7 +70,10 @@ class FakeWebViewController extends PlatformWebViewController {
   @override
   Future<void> setJavaScriptMode(JavaScriptMode mode) async {}
   @override
-  Future<void> setUserAgent(String? userAgent) async {}
+  Future<void> setUserAgent(String? userAgent) async {
+    userAgentOverrides.add(userAgent);
+  }
+
   @override
   Future<void> setBackgroundColor(Color color) async {}
   @override
@@ -85,6 +90,7 @@ class FakeWebViewController extends PlatformWebViewController {
 
   @override
   Future<void> loadRequest(LoadRequestParams params) async {
+    userAgentOverridesAtLoad.add(List.of(userAgentOverrides));
     loads++;
     url = params.uri.toString();
     delegate?.pageStarted?.call(url!);

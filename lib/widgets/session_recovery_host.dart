@@ -105,9 +105,6 @@ class _RecoveryRunnerState extends State<_RecoveryRunner> {
       if (!mounted || _done) return;
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setUserAgent(
-          'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-        )
         ..addJavaScriptChannel(
           'RailBridge',
           onMessageReceived: (m) => _onBridge(m.message),
@@ -139,6 +136,8 @@ class _RecoveryRunnerState extends State<_RecoveryRunner> {
             },
           ),
         );
+      await WebSessionService.configureLoginBrowser(controller);
+      if (!mounted || _done) return;
       setState(() => _controller = controller);
       await controller.loadRequest(Uri.parse(RailLoginScript.loginUrl));
     } catch (_) {

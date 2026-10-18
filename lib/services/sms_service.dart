@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'app_config.dart';
 
 class SmsService {
+  static bool get supported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   static final SmsService _instance = SmsService._();
   factory SmsService() => _instance;
   SmsService._();
@@ -17,6 +20,7 @@ class SmsService {
 
   /// Arm Google SMS consent before the request that sends the Railway OTP.
   Future<bool> prepareListening() async {
+    if (!supported) return false;
     try {
       return await _methods.invokeMethod<bool>('prepareListening') ?? false;
     } catch (_) {
@@ -25,6 +29,7 @@ class SmsService {
   }
 
   Future<bool> requestSmsPermission() async {
+    if (!supported) return false;
     try {
       return await _methods.invokeMethod<bool>('requestSmsPermission') ?? false;
     } catch (_) {
@@ -33,6 +38,7 @@ class SmsService {
   }
 
   Future<bool> hasPermission() async {
+    if (!supported) return false;
     try {
       return await _methods.invokeMethod<bool>('hasSmsPermission') ?? false;
     } catch (_) {
@@ -41,6 +47,7 @@ class SmsService {
   }
 
   Future<bool> promptPendingConsent() async {
+    if (!supported) return false;
     try {
       return await _methods.invokeMethod<bool>('promptPendingConsent') ?? false;
     } catch (_) {

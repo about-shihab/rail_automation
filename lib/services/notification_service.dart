@@ -257,7 +257,9 @@ class NotificationService {
     final ready = state['status'] == 'readyForPayment';
     final bn = await prefersBangla();
     final title = ready
-        ? (bn ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · মূল্য পরিশোধ করুন' : 'Seats held · Pay now')
+        ? (bn
+              ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · মূল্য পরিশোধ করুন'
+              : 'Seats held · Pay now')
         : (bn
               ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · বুকিং কনফার্ম'
               : 'Your seat reservation is confirmed');
@@ -558,6 +560,18 @@ class NotificationService {
   }
 
   Future<bool> requestPermissions() async {
+    final iosImpl = _notificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
+    if (iosImpl != null) {
+      return await iosImpl.requestPermissions(
+            alert: true,
+            badge: true,
+            sound: true,
+          ) ??
+          false;
+    }
     final androidImpl = _notificationsPlugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
@@ -570,6 +584,13 @@ class NotificationService {
   }
 
   Future<bool> areNotificationsEnabled() async {
+    final iosImpl = _notificationsPlugin
+        .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin
+        >();
+    if (iosImpl != null) {
+      return (await iosImpl.checkPermissions())?.isEnabled ?? false;
+    }
     final androidImpl = _notificationsPlugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin

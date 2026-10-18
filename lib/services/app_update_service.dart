@@ -26,10 +26,9 @@ class UpdatePolicy {
     final fallbackUrl = isIos
         ? 'https://github.com/about-shihab/rail-pro/releases/latest'
         : '';
-    final downloadUrl = (isIos ? value['ipa_url'] : null) ??
-        (isIos && (value['apk_url'] == null || value['apk_url'].toString().endsWith('.apk'))
-            ? fallbackUrl
-            : value['apk_url']);
+    final downloadUrl = isIos
+        ? value['ipa_url'] ?? fallbackUrl
+        : value['apk_url'];
     final uri = Uri.tryParse('${downloadUrl ?? ''}');
     if (build is! int ||
         minimum is! int ||
@@ -57,6 +56,8 @@ class UpdatePolicy {
     'build_number': build,
     'minimum_build_number': minimumBuild,
     'apk_url': download.toString(),
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
+      'ipa_url': download.toString(),
   };
 }
 

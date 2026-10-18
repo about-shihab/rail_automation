@@ -152,19 +152,19 @@ class _TripsScreenState extends State<TripsScreen> {
 
       final fileName = 'rail_ticket_${ticket.orderId}.pdf';
 
-      // Save locally to device Downloads/RailPro as well
-      TicketDownloadService.saveAndOpenTicketPdf(
+      final savedPath = await TicketDownloadService.saveAndOpenTicketPdf(
         bytes: bytes,
         fileName: fileName,
       );
 
-      // Open in browser so Chrome/system browser natively downloads & opens the PDF
-      final openedInBrowser = await TicketDownloadService.downloadPdfViaBrowser(
-        bytes: bytes,
-        fileName: fileName,
-      );
+      final openedInBrowser =
+          savedPath == null &&
+          await TicketDownloadService.downloadPdfViaBrowser(
+            bytes: bytes,
+            fileName: fileName,
+          );
 
-      if (!openedInBrowser) {
+      if (savedPath == null && !openedInBrowser) {
         await TicketDownloadService.openInBrowser(
           TicketDownloadService.purchaseHistoryUrl,
         );
@@ -173,12 +173,22 @@ class _TripsScreenState extends State<TripsScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Row(
+            content: Row(
               children: [
-                Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                SizedBox(width: 8),
+                const Icon(
+                  Icons.check_circle_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+                const SizedBox(width: 8),
                 Expanded(
-                  child: Text('Ticket PDF opened in browser for download!'),
+                  child: Text(
+                    savedPath != null
+                        ? 'Ticket PDF saved and opened'
+                        : openedInBrowser
+                        ? 'Ticket PDF opened in browser for download!'
+                        : 'Opened Railway Purchase History to download ticket',
+                  ),
                 ),
               ],
             ),
@@ -200,14 +210,18 @@ class _TripsScreenState extends State<TripsScreen> {
           if (!mounted) return;
           Navigator.push(
             context,
-            MaterialPageRoute(builder: (_) => const WebviewLoginScreen(clearSession: true)),
+            MaterialPageRoute(
+              builder: (_) => const WebviewLoginScreen(clearSession: true),
+            ),
           );
           return;
         }
 
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Opened Railway Purchase History in browser to download ticket.'),
+            content: const Text(
+              'Opened Railway Purchase History in browser to download ticket.',
+            ),
             backgroundColor: AppColors.primary,
             behavior: SnackBarBehavior.floating,
             action: SnackBarAction(

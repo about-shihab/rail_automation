@@ -49,7 +49,7 @@ class _WatchSheet extends StatefulWidget {
 
 class _WatchSheetState extends State<_WatchSheet> {
   int _quantity = 1;
-  bool _autoVerify = true;
+  bool _autoVerify = SmsService.supported;
   bool _busy = false;
 
   Future<void> _start() async {
@@ -329,17 +329,22 @@ class _WatchSheetState extends State<_WatchSheet> {
                         ),
                       ),
                       subtitle: Text(
-                        lang.tr(
-                          'Google asks to read this OTP when the SMS arrives',
-                          'ওটিপির SMS এলে Google সেটি পড়ার অনুমতি চাইবে',
-                        ),
+                        !SmsService.supported
+                            ? lang.tr(
+                                'Enter the OTP manually or use the keyboard code suggestion',
+                                'ওটিপি লিখুন অথবা কিবোর্ডের কোড সাজেশন ব্যবহার করুন',
+                              )
+                            : lang.tr(
+                                'Google asks to read this OTP when the SMS arrives',
+                                'ওটিপির SMS এলে Google সেটি পড়ার অনুমতি চাইবে',
+                              ),
                         style: TextStyle(
                           fontSize: 12,
                           color: AppColors.textSecondary(dark),
                         ),
                       ),
                       value: _autoVerify,
-                      onChanged: _busy
+                      onChanged: _busy || !SmsService.supported
                           ? null
                           : (v) async {
                               if (v) {

@@ -54,6 +54,31 @@ void main() {
     await tester.pump(const Duration(milliseconds: 50));
   }
 
+  testWidgets('iOS login keeps the native WebKit user agent', (tester) async {
+    await showLogin(tester);
+    expect(webview.controller.loads, 1);
+    expect(webview.controller.userAgentOverridesAtLoad.single, isEmpty);
+    webview.controller.delegate!.pageFinished!(
+      'https://eticket.railway.gov.bd/login',
+    );
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(webview.controller.userAgentOverrides, isEmpty);
+    expect(webview.cookieClears, 0);
+    expect(webview.storageClears, 0);
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
+
+  testWidgets('Android login configures its user agent before loading', (
+    tester,
+  ) async {
+    await showLogin(tester);
+    final overrides = webview.controller.userAgentOverridesAtLoad.single;
+    expect(overrides, hasLength(1));
+    expect(overrides.single, contains('Android 14'));
+    expect(overrides.single, contains('Chrome/130.0.0.0'));
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant({TargetPlatform.android}));
+
   testWidgets('stored session on login immediately opens native Search once', (
     tester,
   ) async {
