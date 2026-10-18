@@ -40,10 +40,10 @@ class UpdatePolicy {
   }
 
   bool requiresUpdate(int installedBuild) =>
-      !kIsWeb &&
-      defaultTargetPlatform == TargetPlatform.android &&
-      installedBuild > 0 &&
-      installedBuild < minimumBuild;
+      installedBuild > 0 && installedBuild < minimumBuild;
+
+  bool hasUpdate(int installedBuild) =>
+      installedBuild > 0 && installedBuild < build;
   Map<String, dynamic> toJson() => {
     'version': version,
     'build_number': build,
@@ -73,6 +73,7 @@ class AppUpdateService extends ChangeNotifier {
   Future<void>? _refreshing;
   DateTime? _lastChecked;
   bool get required => policy?.requiresUpdate(installedBuild) ?? false;
+  bool get hasUpdate => policy?.hasUpdate(installedBuild) ?? false;
 
   Future<void> initialize() async {
     Map<String, dynamic>? info;

@@ -64,6 +64,11 @@ def publish(repo):
         api(token, upload + '?name=Rail-Pro.apk', 'POST', apk.read_bytes(),
             'application/vnd.android.package-archive')
         api(token, upload + '?name=update.json', 'POST', (bundle / 'update.json').read_bytes())
+        ipa = ROOT / 'build/ios/ipa/RailPro.ipa'
+        if ipa.is_file():
+            print(f'Uploading iOS IPA for {tag}...', flush=True)
+            api(token, upload + '?name=RailPro.ipa', 'POST', ipa.read_bytes(),
+                'application/octet-stream')
     except Exception:
         api(token, f"repos/{repo}/releases/{release['id']}", 'DELETE')
         raise
@@ -95,7 +100,69 @@ def publish(repo):
     print(f"Website: {pages['html_url']}")
 
 
+def publish_ipa(repo):
+    token = github_token()
+    metadata = api(token, f'repos/{repo}')
+    if metadata['private']:
+        raise RuntimeError('The distribution repository must be public.')
+    ipa = ROOT / 'build/ios/ipa/RailPro.ipa'
+    if not ipa.is_file():
+        raise FileNotFoundError(f'IPA not found at {ipa}')
+
+    target_release = None
+    try:
+        latest = api(token, f'repos/{repo}/releases/latest')
+        if latest and 'id' in latest:
+            target_release = latest
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+
+    if not target_release:
+        releases = api(token, f'repos/{repo}/releases')
+        if releases and len(releases) > 0:
+            target_release = releases[0]
+
+    if not target_release:
+        pubspec_path = ROOT / 'pubspec.yaml'
+        version_str = '1.0.0'
+        if pubspec_path.is_file():
+            import re
+            m = re.search(r'^version:\s*([^\s+]+)', pubspec_path.read_text(), re.MULTILINE)
+            if m:
+                version_str = m.group(1)
+        tag = f'v{version_str}'
+        print(f'No existing release found; creating release {tag}...', flush=True)
+        target_release = api(token, f'repos/{repo}/releases', 'POST', {
+            'tag_name': tag,
+            'target_commitish': metadata['default_branch'],
+            'name': f'Rail Pro {version_str}',
+            'draft': False,
+            'make_latest': 'true',
+            'body': f'Release {version_str}.\n\nDownload RailPro.ipa for iOS.',
+        })
+
+    upload_url = target_release['upload_url'].split('{')[0]
+    assets = target_release.get('assets', [])
+
+    for asset in assets:
+        if asset.get('name') == 'RailPro.ipa':
+            print(f"Deleting existing RailPro.ipa asset (ID: {asset['id']})...", flush=True)
+            api(token, f"repos/{repo}/releases/assets/{asset['id']}", 'DELETE')
+            break
+
+    print(f"Uploading RailPro.ipa ({ipa.stat().st_size} bytes) to release {target_release.get('tag_name')}...", flush=True)
+    api(token, upload_url + '?name=RailPro.ipa', 'POST', ipa.read_bytes(), 'application/octet-stream')
+    print(f"Successfully published RailPro.ipa to https://github.com/{repo}/releases/tag/{target_release.get('tag_name')}")
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repo', default='about-shihab/rail-pro')
-    publish(parser.parse_args().repo)
+    parser.add_argument('--upload-ipa-only', action='store_true',
+                        help='Upload RailPro.ipa to the latest release on the distribution repo')
+    args = parser.parse_args()
+    if args.upload_ipa_only:
+        publish_ipa(args.repo)
+    else:
+        publish(args.repo)

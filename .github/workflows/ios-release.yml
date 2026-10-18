@@ -134,3 +134,15 @@ jobs:
           path: |
             build/ios/ipa/RailPro.ipa
             build/ios/archive/Runner.xcarchive
+
+      - name: Publish IPA to public distribution repository
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          if [ -n "$GH_TOKEN" ]; then
+            python3 scripts/publish_github.py --repo "about-shihab/rail-pro" --upload-ipa-only
+          else
+            echo "PUBLIC_REPO_TOKEN secret not set; skipping release upload to about-shihab/rail-pro."
+          fi
+

@@ -21,8 +21,9 @@ import 'admin_screen.dart';
 import 'monitor_dashboard_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'search_screen.dart';
-import 'trips_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'webview_login_screen.dart';
+import '../widgets/app_update_dialog.dart';
 
 /// Root screen with a bottom navigation bar: Search · Monitor · Alerts · More.
 class AppShell extends StatefulWidget {
@@ -60,6 +61,23 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     AppShell._alive = true;
     AppShell.tab.value = widget.initialTab;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkForUpdates());
+  }
+
+  Future<void> _checkForUpdates() async {
+    final updates = AppUpdateService.instance;
+    await updates.initialize();
+    if (!mounted) return;
+    if (updates.required) {
+      AppUpdateDialog.show(context, force: true);
+    } else if (updates.hasUpdate) {
+      final prefs = await SharedPreferences.getInstance();
+      final dismissed = prefs.getString('dismissed_update_version');
+      final currentTarget = updates.policy?.version;
+      if (dismissed != currentTarget && mounted) {
+        AppUpdateDialog.show(context, force: false);
+      }
+    }
   }
 
   @override
@@ -631,6 +649,68 @@ class ProfileTab extends StatelessWidget {
               ),
               onTap: () => NotificationService().openBooking('rail://login'),
             ),
+          ),
+          // ── App Update Check ──
+          ListenableBuilder(
+            listenable: AppUpdateService.instance,
+            builder: (context, _) {
+              final updates = AppUpdateService.instance;
+              return AppCard(
+                child: tile(
+                  Icons.system_update_rounded,
+                  lang.tr('Check for updates', 'আপডেট চেক করুন'),
+                  sub: updates.hasUpdate
+                      ? lang.tr(
+                          'New version v${updates.policy?.version} is available',
+                          'নতুন সংস্করণ v${updates.policy?.version} পাওয়া গেছে',
+                        )
+                      : lang.tr(
+                          'App is up to date (v${updates.installedVersion.isNotEmpty ? updates.installedVersion : "1.0.0"})',
+                          'অ্যাপটি আপডেট রয়েছে (v${updates.installedVersion.isNotEmpty ? updates.installedVersion : "1.0.0"})',
+                        ),
+                  trailing: updates.hasUpdate
+                      ? Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            lang.tr('UPDATE', 'আপডেট'),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        )
+                      : const Icon(Icons.chevron_right_rounded),
+                  onTap: () async {
+                    await updates.refresh(force: true);
+                    if (!context.mounted) return;
+                    if (updates.hasUpdate || updates.required) {
+                      AppUpdateDialog.show(context, force: updates.required);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            lang.tr(
+                              'You are using the latest version.',
+                              'আপনি সর্বশেষ সংস্করণ ব্যবহার করছেন।',
+                            ),
+                          ),
+                          behavior: SnackBarBehavior.floating,
+                          duration: const Duration(seconds: 2),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              );
+            },
           ),
           const SizedBox(height: 14),
 

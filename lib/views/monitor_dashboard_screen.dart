@@ -6,6 +6,7 @@ import 'app_shell.dart';
 
 import 'package:provider/provider.dart';
 
+import '../services/booking_activity.dart';
 import '../services/booking_service.dart';
 import '../services/credit_service.dart';
 import '../services/language_service.dart';
@@ -47,6 +48,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   void initState() {
     super.initState();
     CreditService().addListener(_onCreditChanged);
+    BookingActivity.instance.addListener(_onCreditChanged);
     final isTest = WidgetsBinding.instance.runtimeType.toString().contains(
       'Test',
     );
@@ -154,6 +156,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   @override
   void dispose() {
     CreditService().removeListener(_onCreditChanged);
+    BookingActivity.instance.removeListener(_onCreditChanged);
     _refreshTimer?.cancel();
     _queueCtrl.dispose();
     _pulseCtrl.dispose();
@@ -320,12 +323,48 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     );
   }
 
-  _BookingStep _step(MonitorService m, Map<String, dynamic>? p) {
-    if (p == null) return _BookingStep.searching;
-    final s = p['status']?.toString() ?? '';
-    if (s == 'readyForPayment') return _BookingStep.paying;
-    if (s == 'awaitingOtp') return _BookingStep.verifying;
-    return _BookingStep.reserving;
+  String? _extractTrainName(Map<String, dynamic>? p, String? fallback) {
+    if (p?['train'] != null) {
+      final t = p!['train'];
+      if (t is Map) {
+        return (t['trip_number'] ?? t['train_name'] ?? t['name'])?.toString();
+      }
+      return t.toString();
+    }
+    return fallback;
+  }
+
+  String? _extractSeatClass(Map<String, dynamic>? p, String? fallback) {
+    if (p?['seatClass'] != null) {
+      final s = p!['seatClass'];
+      if (s is Map) {
+        return (s['type'] ?? s['name'])?.toString();
+      }
+      return s.toString();
+    }
+    return fallback;
+  }
+
+  _BookingStep _step(MonitorService m, Map<String, dynamic>? p, BookingActivity activity) {
+    if (p != null) {
+      final s = p['status']?.toString() ?? '';
+      if (s == 'readyForPayment') return _BookingStep.paying;
+      if (s == 'awaitingOtp') return _BookingStep.verifying;
+      return _BookingStep.reserving;
+    }
+    if (activity.busy) {
+      switch (activity.stage) {
+        case BookingActivityStage.verifying:
+          return _BookingStep.verifying;
+        case BookingActivityStage.reserving:
+          return _BookingStep.reserving;
+        case BookingActivityStage.layout:
+        case BookingActivityStage.tickets:
+        case BookingActivityStage.searching:
+          return _BookingStep.searching;
+      }
+    }
+    return _BookingStep.searching;
   }
 
   @override
@@ -334,19 +373,28 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final credit = CreditService();
     final lang = LanguageService.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final activity = BookingActivity.instance;
     final hasSearch = m.dateOfJourney.isNotEmpty;
     final p = _reservation;
     final expiry = DateTime.tryParse('${p?['expiresAt'] ?? ''}');
     final expired = expiry != null && !expiry.isAfter(DateTime.now());
     final ready = p?['status'] == 'readyForPayment' && !expired;
     final otp = p?['status'] == 'awaitingOtp' && !expired;
-    final step = _step(m, p);
+    final hasReservation = p != null && !expired;
+    final isBookingBusy = activity.busy;
+    final step = _step(m, p, activity);
+    final hasActiveContent =
+        hasSearch || hasReservation || isBookingBusy || credit.credits <= 0;
     final isActive =
-        m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin;
+        (m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin) ||
+        (isBookingBusy && p == null);
     final exactError =
         m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
     final isReservationExpired = !m.isMonitoring &&
-        (m.lastReservationExpired || (p != null && expired) || (m.bookingFailureReason != null && m.bookingFailureReason!.isNotEmpty));
+        (m.lastReservationExpired ||
+            (p != null && expired) ||
+            (m.bookingFailureReason != null &&
+                m.bookingFailureReason!.isNotEmpty));
 
     if (_sessionExpired) {
       return Scaffold(
@@ -355,8 +403,17 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       );
     }
 
-    final fromCity = m.fromCity.isEmpty ? 'Dhaka' : m.fromCity;
-    final toCity = m.toCity.isEmpty ? 'Chattogram' : m.toCity;
+    final fromCity = (p?['from']?.toString().isNotEmpty == true)
+        ? p!['from'].toString()
+        : (m.fromCity.isNotEmpty ? m.fromCity : 'Dhaka');
+    final toCity = (p?['to']?.toString().isNotEmpty == true)
+        ? p!['to'].toString()
+        : (m.toCity.isNotEmpty ? m.toCity : 'Chattogram');
+    final dateOfJourney = (p?['date']?.toString().isNotEmpty == true)
+        ? p!['date'].toString()
+        : m.dateOfJourney;
+    final trainName = _extractTrainName(p, m.targetTrain);
+    final seatClass = _extractSeatClass(p, m.targetSeatClass);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -364,7 +421,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       appBar: _TopBar(
         onGuide: _showWalkthroughGuide,
         credits: credit.credits,
-        isMonitoring: m.isMonitoring,
+        isMonitoring: m.isMonitoring || isBookingBusy,
         isScheduled: m.isScheduled,
       ),
       body: Stack(
@@ -389,14 +446,14 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        if (hasSearch || credit.credits <= 0) ...[
+                        if (hasActiveContent) ...[
                           if (isReservationExpired)
                             _ReservationExpiredCard(
                               fromCity: fromCity,
                               toCity: toCity,
-                              trainName: m.targetTrain,
-                              seatClass: m.targetSeatClass,
-                              dateOfJourney: m.dateOfJourney,
+                              trainName: trainName,
+                              seatClass: seatClass,
+                              dateOfJourney: dateOfJourney,
                               reason: m.bookingFailureReason,
                               isOtpFailure: p?['status'] == 'awaitingOtp',
                               isPaymentFailure: p?['status'] == 'readyForPayment',
@@ -412,9 +469,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                             _CockpitHudCard(
                               fromCity: fromCity,
                               toCity: toCity,
-                              trainName: m.targetTrain,
-                              seatClass: m.targetSeatClass,
-                              dateOfJourney: m.dateOfJourney,
+                              trainName: trainName,
+                              seatClass: seatClass,
+                              dateOfJourney: dateOfJourney,
                               step: step,
                               isActive: isActive,
                               scheduledStart: m.isScheduled
@@ -481,6 +538,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                             otp: otp,
                             expired: expired,
                             hasSearch: hasSearch,
+                            isBookingBusy: isBookingBusy,
                             credits: credit.credits,
                             onReservation: () async {
                               await Navigator.push(
@@ -496,10 +554,10 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               MaterialPageRoute(
                                 builder: (_) => BookingScreen(
                                   url: NotificationService.bookingUrl(
-                                    m.fromCity,
-                                    m.toCity,
-                                    m.dateOfJourney,
-                                    m.targetSeatClass ?? 'SNIGDHA',
+                                    fromCity,
+                                    toCity,
+                                    dateOfJourney,
+                                    seatClass ?? 'SNIGDHA',
                                   ),
                                 ),
                               ),
@@ -1950,7 +2008,7 @@ class _PaymentTimerBarState extends State<_PaymentTimerBar>
 class _TrainActionButtons extends StatelessWidget {
   final MonitorService m;
   final Map<String, dynamic>? p;
-  final bool ready, otp, expired, hasSearch;
+  final bool ready, otp, expired, hasSearch, isBookingBusy;
   final int credits;
   final VoidCallback onReservation, onRailway, onSignIn;
   final VoidCallback? onPause;
@@ -1966,6 +2024,7 @@ class _TrainActionButtons extends StatelessWidget {
     required this.otp,
     required this.expired,
     required this.hasSearch,
+    this.isBookingBusy = false,
     required this.credits,
     required this.onReservation,
     required this.onRailway,
@@ -2010,6 +2069,23 @@ class _TrainActionButtons extends StatelessWidget {
             icon: Icons.open_in_new_rounded,
             onTap: onRailway,
             isDark: isDark,
+          ),
+        ],
+      );
+    }
+
+    // If manual booking or automated booking is currently in progress
+    if (isBookingBusy && p == null) {
+      return Column(
+        children: [
+          _MasterButton(
+            label: lang.tr('Booking in progress…', 'বুকিং প্রক্রিয়া চলছে…'),
+            icon: Icons.hourglass_top_rounded,
+            gradientColors: const [Color(0xFF3B82F6), Color(0xFF1D4ED8)],
+            textColor: Colors.white,
+            pulseAura: true,
+            pulseCtrl: pulseCtrl,
+            onTap: () {},
           ),
         ],
       );
