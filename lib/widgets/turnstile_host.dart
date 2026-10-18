@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
@@ -18,6 +22,28 @@ class TurnstileHost extends StatefulWidget {
 
 class _TurnstileHostState extends State<TurnstileHost> {
   final session = TurnstileSession.instance;
+  bool get _isIos => defaultTargetPlatform == TargetPlatform.iOS;
+  late final _bridgeId = base64UrlEncode(
+    List<int>.generate(24, (_) => Random.secure().nextInt(256)),
+  );
+  bool _localDocumentReady = false;
+
+  bool _isLocalDocument(String? url) =>
+      url == 'https://eticket.railway.gov.bd/' ||
+      url == 'https://eticket.railway.gov.bd' ||
+      (_isIos && url == 'about:blank');
+
+  Future<void> _evaluate(
+    InAppWebViewController controller,
+    String source,
+  ) async {
+    await controller.evaluateJavascript(
+      source: _isIos && source == TurnstileSession.bootstrap
+          ? TurnstileSession.bootstrapForBridge(_bridgeId)
+          : source,
+    );
+  }
+
   late final Widget browser = InAppWebView(
     initialData: InAppWebViewInitialData(
       data: TurnstileSession.html,
@@ -31,31 +57,61 @@ class _TurnstileHostState extends State<TurnstileHost> {
       javaScriptBridgeForMainFrameOnly: true,
     ),
     onWebViewCreated: (controller) {
-      session.attach((source) async {
-        await controller.evaluateJavascript(source: source);
-      });
+      if (!_isIos) {
+        session.attach((source) => _evaluate(controller, source));
+      }
       controller.addJavaScriptHandler(
         handlerName: 'TurnstileBridge',
         callback: (JavaScriptHandlerFunctionData data) {
+          // WKWebView can report an empty security origin for loadHTMLString.
+          // Authenticate our local document with a per-host bridge ID instead
+          // of discarding its READY/SUCCESS messages or trusting arbitrary frames.
           if (!data.isMainFrame ||
-              !WebSessionService.isRailwayUrl(data.origin.toString())) {
+              (_isIos
+                  ? !_localDocumentReady
+                  : !WebSessionService.isRailwayUrl(data.origin.toString()))) {
             return;
           }
           final arguments = data.args;
           if (arguments.isNotEmpty && arguments.first is Map) {
-            session.receive(Map<String, dynamic>.from(arguments.first as Map));
+            final message = Map<String, dynamic>.from(arguments.first as Map);
+            if (_isIos && message['bridgeId'] != _bridgeId) return;
+            session.receive(message);
           }
         },
       );
     },
+    onLoadStart: (_, _) {
+      if (!_isIos) return;
+      _localDocumentReady = false;
+      if (session.attached) session.detach();
+    },
     onLoadStop: (controller, url) async {
-      if (WebSessionService.isRailwayUrl(url?.toString())) {
-        await controller.evaluateJavascript(source: TurnstileSession.bootstrap);
+      if (!_isIos) {
+        if (WebSessionService.isRailwayUrl(url?.toString())) {
+          await _evaluate(controller, TurnstileSession.bootstrap);
+        }
+        return;
+      }
+      if (_isLocalDocument(url?.toString())) {
+        _localDocumentReady = true;
+        // Only attach after the HTML and native bridge are available. In iOS
+        // onWebViewCreated can precede the initial document navigation.
+        session.attach((source) => _evaluate(controller, source));
+        try {
+          await _evaluate(controller, TurnstileSession.bootstrap);
+        } catch (_) {
+          session.fail('Could not prepare the security check. Please retry.');
+        }
       }
     },
     shouldOverrideUrlLoading: (controller, action) async =>
         !action.isForMainFrame ||
-            WebSessionService.isRailwayUrl(action.request.url?.toString())
+            (_isIos
+                ? _isLocalDocument(action.request.url?.toString())
+                : WebSessionService.isRailwayUrl(
+                    action.request.url?.toString(),
+                  ))
         ? NavigationActionPolicy.ALLOW
         : NavigationActionPolicy.CANCEL,
     onReceivedError: (controller, request, error) {
@@ -83,7 +139,10 @@ class _TurnstileHostState extends State<TurnstileHost> {
             child: SizedBox(width: 150, height: 170, child: browser),
           ),
           builder: (context, child) {
-            final visible = session.phase == TurnstilePhase.interactive;
+            final visible =
+                session.phase == TurnstilePhase.interactive ||
+                (defaultTargetPlatform == TargetPlatform.iOS &&
+                    session.phase == TurnstilePhase.connecting);
             return IgnorePointer(
               ignoring: !visible,
               child: ExcludeSemantics(

@@ -5,15 +5,31 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 class FakeInAppWebViewPlatform extends InAppWebViewPlatform {
   late FakeInAppWebViewController controller;
+  late PlatformInAppWebViewWidgetCreationParams parameters;
+  bool autoFinishLoad = true;
+  bool autoReady = true;
+  String origin = 'https://eticket.railway.gov.bd/';
+  String loadUrl = 'https://eticket.railway.gov.bd/';
   int creations = 0;
+
+  void finishLoad() {
+    parameters.onLoadStop?.call(
+      parameters.controllerFromPlatform!(controller),
+      WebUri(loadUrl),
+    );
+  }
 
   @override
   PlatformInAppWebViewWidget createPlatformInAppWebViewWidget(
     PlatformInAppWebViewWidgetCreationParams params,
   ) {
     creations++;
-    controller = FakeInAppWebViewController();
-    return _FakeInAppWebViewWidget(params, controller);
+    parameters = params;
+    controller = FakeInAppWebViewController()
+      ..origin = origin
+      ..requestUrl = loadUrl
+      ..autoReady = autoReady;
+    return _FakeInAppWebViewWidget(params, controller, this);
   }
 }
 
@@ -25,18 +41,23 @@ class FakeInAppWebViewController extends PlatformInAppWebViewController {
   final scripts = <String>[];
   late Function callback;
   int? requestId;
+  String? bridgeId;
+  String origin = 'https://eticket.railway.gov.bd/';
+  String requestUrl = 'https://eticket.railway.gov.bd/';
+  bool autoReady = true;
   int get executions =>
       scripts.where((s) => s.startsWith('window.__railBegin(')).length;
 
-  void send(String message) {
+  void send(String message, {bool isMainFrame = true}) {
     final data = jsonDecode(message) as Map<String, dynamic>;
     data.putIfAbsent('requestId', () => requestId);
+    data.putIfAbsent('bridgeId', () => bridgeId);
     callback(
       JavaScriptHandlerFunctionData(
         args: [data],
-        isMainFrame: true,
-        origin: WebUri('https://eticket.railway.gov.bd/'),
-        requestUrl: WebUri('https://eticket.railway.gov.bd/'),
+        isMainFrame: isMainFrame,
+        origin: WebUri(origin),
+        requestUrl: WebUri(requestUrl),
       ),
     );
   }
@@ -47,8 +68,10 @@ class FakeInAppWebViewController extends PlatformInAppWebViewController {
     ContentWorld? contentWorld,
   }) async {
     scripts.add(source);
+    final bridge = RegExp(r'var bridgeId = ("[^"]*");').firstMatch(source);
+    if (bridge != null) bridgeId = jsonDecode(bridge[1]!) as String;
     if (source.contains('window.__railPrepared = true')) {
-      send('{"status":"READY"}');
+      if (autoReady) send('{"status":"READY"}');
     }
     final match = RegExp(r'^window\.__railBegin\((\d+)\)').firstMatch(source);
     if (match != null) requestId = int.parse(match[1]!);
@@ -64,13 +87,14 @@ class FakeInAppWebViewController extends PlatformInAppWebViewController {
 }
 
 class _FakeInAppWebViewWidget extends PlatformInAppWebViewWidget {
-  _FakeInAppWebViewWidget(super.params, this.controller)
+  _FakeInAppWebViewWidget(super.params, this.controller, this.platform)
     : super.implementation();
   final FakeInAppWebViewController controller;
+  final FakeInAppWebViewPlatform platform;
 
   @override
   Widget build(BuildContext context) =>
-      _FakeBrowser(params: params, controller: controller);
+      _FakeBrowser(params: params, controller: controller, platform: platform);
   @override
   T controllerFromPlatform<T>(PlatformInAppWebViewController controller) =>
       params.controllerFromPlatform!(controller) as T;
@@ -79,9 +103,14 @@ class _FakeInAppWebViewWidget extends PlatformInAppWebViewWidget {
 }
 
 class _FakeBrowser extends StatefulWidget {
-  const _FakeBrowser({required this.params, required this.controller});
+  const _FakeBrowser({
+    required this.params,
+    required this.controller,
+    required this.platform,
+  });
   final PlatformInAppWebViewWidgetCreationParams params;
   final FakeInAppWebViewController controller;
+  final FakeInAppWebViewPlatform platform;
   @override
   State<_FakeBrowser> createState() => _FakeBrowserState();
 }
@@ -95,10 +124,7 @@ class _FakeBrowserState extends State<_FakeBrowser> {
         widget.controller,
       );
       widget.params.onWebViewCreated?.call(controller);
-      widget.params.onLoadStop?.call(
-        controller,
-        widget.params.initialData?.baseUrl,
-      );
+      if (widget.platform.autoFinishLoad) widget.platform.finishLoad();
     });
   }
 

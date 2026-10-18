@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -59,6 +60,7 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
   Future<String?>? _suppliedRequest;
 
   bool get _animate => !MediaQuery.disableAnimationsOf(context);
+  bool get _isIos => defaultTargetPlatform == TargetPlatform.iOS;
 
   @override
   void initState() {
@@ -100,7 +102,7 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
   // ── Logic ────────────────────────────────────────────────────────────────
 
   Future<void> _load() async {
-    if (_session.generating) _onSessionChanged();
+    if (_isIos || _session.generating) _onSessionChanged();
     _hasPendingRequest = true;
     final supplied = _suppliedRequest;
     _suppliedRequest = null;
@@ -108,8 +110,12 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
     _hasPendingRequest = false;
     // Return immediately: animation must never delay submitting a fresh token.
     if (mounted && token != null) Navigator.of(context).pop(token);
-    if (mounted && token == null && !_session.attached) {
-      _fail('Security check is not ready. Please reopen the app.');
+    if (mounted && token == null) {
+      if (_isIos) {
+        _fail(_session.error ?? 'Security check is not ready. Please retry.');
+      } else if (!_session.attached) {
+        _fail('Security check is not ready. Please reopen the app.');
+      }
     }
   }
 
@@ -374,6 +380,10 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
   Widget _body(bool isDark) {
     final accent = _accent;
     final interactive = _phase == _Phase.interactive;
+    final showChallenge =
+        interactive ||
+        (defaultTargetPlatform == TargetPlatform.iOS &&
+            _phase == _Phase.connecting);
 
     final title = switch (_phase) {
       _Phase.connecting => 'Checking access',
@@ -442,19 +452,19 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
               backgroundColor: accent.withValues(alpha: 0.15),
             ),
           ),
-          // Cloudflare widget: always mounted (so it can solve silently),
-          // only expands when Cloudflare actually needs a tap.
+          // iOS needs a painted WKWebView while checking, before Cloudflare
+          // requests interaction. Keep Android's existing compact flow.
           AnimatedSize(
             duration: const Duration(milliseconds: 350),
             curve: Curves.easeOutCubic,
             alignment: Alignment.topCenter,
             child: Padding(
-              padding: EdgeInsets.only(top: interactive ? 14 : 0),
+              padding: EdgeInsets.only(top: showChallenge ? 14 : 0),
               child: Column(
                 children: [
                   ClipRect(
                     child: Align(
-                      heightFactor: interactive ? 1 : 0,
+                      heightFactor: showChallenge ? 1 : 0,
                       child: SizedBox(
                         height: 170,
                         child: Center(

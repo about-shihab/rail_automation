@@ -183,4 +183,121 @@ void main() {
     expect(platform.creations, 1);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'iOS local HTML callbacks return a seat-layout token while checking is visible',
+    (tester) async {
+      platform.origin = '';
+      platform.loadUrl = 'about:blank';
+      await mount(tester);
+      final tokens = <String?>[];
+      final layout = TurnstileGate.instance.guardSeatLayout<void>(
+        run: (token) async => tokens.add(token),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(platform.controller.executions, 1);
+      expect(find.text('Human verification').hitTestable(), findsOneWidget);
+      platform.controller.send(
+        '{"status":"SUCCESS","bridgeId":"untrusted","token":"wrong"}',
+      );
+      platform.controller.send(
+        '{"status":"SUCCESS","token":"iframe-token"}',
+        isMainFrame: false,
+      );
+      expect(TurnstileSession.instance.generating, isTrue);
+      expect(tokens, isEmpty);
+      platform.controller.send('{"status":"SUCCESS","token":"ios-cft"}');
+      await tester.pump();
+      await layout;
+      expect(tokens, ['ios-cft']);
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
+
+  testWidgets('cold iOS requests wait for document load before executing JS', (
+    tester,
+  ) async {
+    platform.autoFinishLoad = false;
+    await mount(tester);
+    final result = TurnstileGate.instance.acquire(forceFresh: true);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(TurnstileSession.instance.attached, isFalse);
+    expect(platform.controller.scripts, isEmpty);
+    platform.parameters.onLoadStart?.call(
+      platform.parameters.controllerFromPlatform!(platform.controller),
+      WebUri('https://eticket.railway.gov.bd/'),
+    );
+    platform.finishLoad();
+    await tester.pump();
+    expect(platform.controller.executions, 1);
+    platform.controller.send('{"status":"SUCCESS","token":"after-load"}');
+    await tester.pump();
+    expect(await result, 'after-load');
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
+
+  testWidgets(
+    'an error before the overlay loads offers retry instead of spinning',
+    (tester) async {
+      await mount(tester);
+      TurnstileSession.instance.fail(
+        'Security check unavailable. Please retry.',
+      );
+      final result = NotificationService.navigatorKey.currentState!
+          .push<String>(
+            MaterialPageRoute(
+              builder: (_) => TicketProcessingOverlay(
+                tokenRequest: Future<String?>.value(null),
+              ),
+            ),
+          );
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.text('Retry'), findsOneWidget);
+      expect(
+        find.text('Security check unavailable. Please retry.'),
+        findsOneWidget,
+      );
+      expect(find.text('Checking access'), findsNothing);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(await result, isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
+
+  testWidgets(
+    'Android retains early attachment, original script and origin checks',
+    (tester) async {
+      platform.autoFinishLoad = false;
+      await mount(tester);
+      expect(TurnstileSession.instance.attached, isTrue);
+      platform.finishLoad();
+      await tester.pump();
+      final preload = platform.controller.scripts.single;
+      expect(preload, TurnstileSession.bootstrap);
+      expect(preload, isNot(contains('bridgeId')));
+      final result = TurnstileGate.instance.acquire(forceFresh: true);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.text('Human verification').hitTestable(), findsNothing);
+      platform.controller.origin = '';
+      platform.controller.send('{"status":"SUCCESS","token":"wrong-origin"}');
+      expect(TurnstileSession.instance.generating, isTrue);
+      platform.controller.origin = 'https://eticket.railway.gov.bd/';
+      platform.controller.send('{"status":"SUCCESS","token":"android-cft"}');
+      await tester.pump();
+      expect(await result, 'android-cft');
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant({TargetPlatform.android}),
+  );
 }

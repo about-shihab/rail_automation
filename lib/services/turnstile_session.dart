@@ -241,4 +241,15 @@ class TurnstileSession extends ChangeNotifier {
   document.head.appendChild(script);
 })();
 ''';
+
+  /// iOS-only variant; the original Android script remains unchanged.
+  static String bootstrapForBridge(String bridgeId) => bootstrap
+      .replaceFirst(
+        'var defaultSiteKey',
+        'var bridgeId = ${jsonEncode(bridgeId)};\n  var defaultSiteKey',
+      )
+      .replaceFirst(
+        'Object.assign({status:',
+        'Object.assign({bridgeId: bridgeId, status:',
+      );
 }
