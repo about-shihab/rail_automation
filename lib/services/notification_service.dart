@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -44,6 +44,49 @@ class NotificationService {
   static const int idHumanCheck = 801;
   static const int idOtp = 802;
   static const int idPurchaseSuccess = 803;
+  static const int idIosSearchStatus = 805;
+
+  Future<void> showIosSearchStatus({
+    required String from,
+    required String to,
+    required String date,
+    bool scheduled = false,
+  }) async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    await initialize(background: true);
+    if (!_isInitialized) {
+      throw StateError('Could not initialize iOS notifications.');
+    }
+    if (!await areNotificationsEnabled()) {
+      throw StateError(
+        'Enable Rail Pro notifications in iPhone Settings to receive search and seat alerts.',
+      );
+    }
+    final bn = await prefersBangla();
+    await _notificationsPlugin.show(
+      id: idIosSearchStatus,
+      title: scheduled
+          ? (bn ? 'ট্রেন অনুসন্ধান নির্ধারিত' : 'Train search scheduled')
+          : (bn ? 'ট্রেন অনুসন্ধান চালু' : 'Train search enabled'),
+      body:
+          '$from → $to · $date\n${bn ? 'iOS অনুমতি দিলে ব্যাকগ্রাউন্ডে পরীক্ষা হবে। আসন পেলে জানানো হবে।' : 'Background checks run when iOS allows. You will be alerted when seats are found.'}',
+      payload: 'rail://search-status',
+      notificationDetails: const NotificationDetails(
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBanner: true,
+          presentList: true,
+          presentSound: false,
+          threadIdentifier: 'rail_pro.search',
+        ),
+      ),
+    );
+  }
+
+  Future<void> cancelIosSearchStatus() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) return;
+    await _notificationsPlugin.cancel(id: idIosSearchStatus);
+  }
 
   /// Read the persisted locale again so background-isolate alerts follow changes.
   static Future<bool> prefersBangla() async {
@@ -104,6 +147,24 @@ class NotificationService {
 
   void openBooking(String? payload) {
     if (payload == null) return;
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        payload == 'rail://search-status') {
+      final navigator = navigatorKey.currentState;
+      if (navigator == null || !navigator.mounted) {
+        _pendingBooking = payload;
+        return;
+      }
+      _pendingBooking = null;
+      AppShell.tab.value = AppShell.tabSearch;
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const AppShell(initialTab: AppShell.tabSearch),
+        ),
+        (_) => false,
+      );
+      return;
+    }
     final announcement = Uri.tryParse(payload);
     if (announcement?.scheme == 'rail' &&
         announcement?.host == 'announcement' &&
@@ -662,6 +723,38 @@ class NotificationService {
         presentSound: true,
       ),
     );
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      // Workmanager uses a new engine. Prepare its plugin without requesting
+      // permission in the background and report delivery failures to the search.
+      await initialize(background: true);
+      if (!_isInitialized) {
+        throw StateError('Could not initialize iOS seat notifications.');
+      }
+      if (!await areNotificationsEnabled()) {
+        throw StateError(
+          'Enable Rail Pro notifications in iPhone Settings to receive seat alerts.',
+        );
+      }
+      await _notificationsPlugin.show(
+        id: idSeatFound,
+        title: title,
+        body: body,
+        payload: automaticBooking
+            ? 'rail://booking-progress'
+            : bookingLink ?? 'https://eticket.railway.gov.bd/',
+        notificationDetails: const NotificationDetails(
+          iOS: DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            presentBanner: true,
+            presentList: true,
+          ),
+        ),
+      );
+      return;
+    }
 
     try {
       await _notificationsPlugin.show(

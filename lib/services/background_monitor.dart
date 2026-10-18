@@ -7,10 +7,14 @@ import 'pro_service.dart';
 import 'foreground_monitor.dart';
 import 'app_config.dart';
 import 'app_update_service.dart';
+import '../models/auth_session.dart';
 
 @pragma('vm:entry-point')
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) async {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      AuthSession.iosBackgroundExecution = true;
+    }
     final pro = ProService();
     final monitor = MonitorService(proService: pro, backgroundWorker: true);
     try {
@@ -33,6 +37,9 @@ void callbackDispatcher() {
       if (!monitor.isMonitoring) await BackgroundMonitor.cancel();
       return monitor.lastError == null;
     } finally {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+        AuthSession.iosBackgroundExecution = false;
+      }
       monitor.dispose();
       pro.dispose();
     }
@@ -58,6 +65,11 @@ class BackgroundMonitor {
     bool replaceSchedule = false,
   }) async {
     if (!supported) return;
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      // Existing installations must copy the session while the app is open;
+      // the normal Keychain entry cannot be read after the screen locks.
+      await AuthSession.prepareIosBackgroundAccess();
+    }
     if (replaceSchedule) {
       await Workmanager().cancelByUniqueName(taskName);
     }
@@ -88,6 +100,9 @@ class BackgroundMonitor {
     }
     if (supported) {
       await Workmanager().cancelByUniqueName(taskName);
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await NotificationService().cancelIosSearchStatus();
     }
   }
 }

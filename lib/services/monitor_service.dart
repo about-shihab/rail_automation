@@ -301,6 +301,23 @@ class MonitorService extends ChangeNotifier {
           } catch (_) {
             backgroundError = 'Keep the app open to continue searching';
           }
+        } else if (!kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.iOS &&
+            !backgroundWorker) {
+          try {
+            await BackgroundMonitor.schedule(startsAt: scheduledStartAt);
+            await _notificationService.showIosSearchStatus(
+              from: _fromCity,
+              to: _toCity,
+              date: _dateOfJourney,
+              scheduled: isScheduled,
+            );
+            backgroundError = null;
+          } catch (error) {
+            backgroundError = error is StateError
+                ? error.message.toString()
+                : 'Keep Rail Pro open until background searching reconnects.';
+          }
         }
         _restartTimer();
         _startSecondTicker();
@@ -341,12 +358,26 @@ class MonitorService extends ChangeNotifier {
             startsAt: startsAt,
             replaceSchedule: replaceSchedule,
           );
+          if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+            final saved = jsonDecode(data) as Map<String, dynamic>;
+            await _notificationService.showIosSearchStatus(
+              from: saved['from'] as String,
+              to: saved['to'] as String,
+              date: saved['date'] as String,
+              scheduled: startsAt != null && startsAt.isAfter(_now()),
+            );
+            backgroundError = null;
+          }
         } else {
           await BackgroundMonitor.cancel();
         }
-      } catch (_) {
+      } catch (error) {
         backgroundError =
-            'অ্যাপ খোলা রাখুন • Keep the app open to continue searching';
+            !kIsWeb &&
+                defaultTargetPlatform == TargetPlatform.iOS &&
+                error is StateError
+            ? error.message.toString()
+            : 'অ্যাপ খোলা রাখুন • Keep the app open to continue searching';
         notifyListeners();
       }
     });
@@ -508,8 +539,7 @@ class MonitorService extends ChangeNotifier {
 
   void markReservationExpired({String? reason}) {
     _lastReservationExpired = true;
-    _lastBookingFailureReason = reason ??
-        'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.';
+    _lastBookingFailureReason = reason ?? 'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.';
     bookingIntent = bookingIntent.copyWith(autoReserve: false);
     stopMonitoring();
     notifyListeners();
@@ -655,6 +685,9 @@ class MonitorService extends ChangeNotifier {
   bool get needsTurnstile => _bookingNeedsVerification;
   bool get needsLogin => RailwayCredentialsRejected.isError(_lastError);
   String get userStatus {
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS && backgroundError != null) {
+      return backgroundError!;
+    }
     if (isScheduled) {
       return 'Scheduled · starts $scheduledStartLabel (Bangladesh time)';
     }
@@ -1134,7 +1167,7 @@ class MonitorService extends ChangeNotifier {
           return;
         }
       }
-      var session = await AuthSession.load();
+      var session = await AuthSession.load(background: backgroundWorker);
       if (session == null) {
         _lastError =
             'Not logged in. Please authenticate with Railway credentials.';
@@ -1281,6 +1314,11 @@ class MonitorService extends ChangeNotifier {
                   ),
                 );
               } catch (err) {
+                if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+                  // A failed iOS delivery must not suppress the next alert just
+                  // because seats remained available between refreshes.
+                  current[key] = 0;
+                }
                 _addLog('Seat notification alert error: $err', isError: true);
               }
             }
@@ -1423,7 +1461,8 @@ class MonitorService extends ChangeNotifier {
               // Per requirement: Ignore error, don't annoy user with error banner,
               // automatically search for new seat and retry booking.
               autoBookRetries++;
-              _lastBookingError = null; // Suppress error banner so user isn't annoyed
+              _lastBookingError =
+                  null; // Suppress error banner so user isn't annoyed
               _addLog(
                 'Auto-booking retry #$autoBookRetries: Seat unavailable or server busy. Retrying automatically...',
                 isAlert: false,

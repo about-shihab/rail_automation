@@ -1,7 +1,16 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:intl/intl.dart';
+import 'package:rail_automation/services/monitor_service.dart';
+import 'package:rail_automation/services/notification_service.dart';
+import 'package:rail_automation/services/pro_service.dart';
 import 'package:workmanager/workmanager.dart';
 // ignore: depend_on_referenced_packages
 import 'package:workmanager_android/workmanager_android.dart';
@@ -73,6 +82,8 @@ void main() {
   late RecordingWorkmanager platform;
   late WorkmanagerPlatform original;
   setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
     Workmanager();
     original = WorkmanagerPlatform.instance;
     platform = RecordingWorkmanager();
@@ -112,6 +123,56 @@ void main() {
     expect(platform.periodicDelays.single, const Duration(minutes: 15));
     expect(platform.oneOffDelays, isEmpty);
     expect(platform.periodicPolicies.single, ExistingPeriodicWorkPolicy.keep);
+  });
+
+  test('iOS restores an active search status and reports disabled notification permission', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    IOSFlutterLocalNotificationsPlugin.registerWith();
+    const notifications = MethodChannel(
+      'dexterous.com/flutter/local_notifications',
+    );
+    final calls = <MethodCall>[];
+    var allowed = true;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(notifications, (call) async {
+          calls.add(call);
+          if (call.method == 'initialize') return true;
+          if (call.method == 'checkPermissions') return {'isEnabled': allowed};
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(notifications, null),
+    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      MonitorService.preferenceKey,
+      jsonEncode({
+        'id': 'restored-ios',
+        'from': 'Dhaka',
+        'to': 'Chattogram',
+        'date': DateFormat('dd-MMM-yyyy')
+            .format(DateTime.now().add(const Duration(days: 20))),
+        'active': true,
+        'expires': DateTime.now()
+            .add(const Duration(days: 21))
+            .toIso8601String(),
+      }),
+    );
+    final pro = ProService();
+    final monitor = MonitorService(proService: pro);
+    addTearDown(monitor.dispose);
+    addTearDown(pro.dispose);
+    await monitor.restore();
+    expect(platform.periodicDelays, hasLength(1));
+    expect(
+      calls.where((c) => c.method == 'show').single.arguments['id'],
+      NotificationService.idIosSearchStatus,
+    );
+    allowed = false;
+    await monitor.restore();
+    expect(monitor.backgroundError, contains('iPhone Settings'));
+    expect(monitor.userStatus, contains('iPhone Settings'));
   });
 
   test(

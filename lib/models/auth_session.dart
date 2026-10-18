@@ -1,5 +1,9 @@
 import 'dart:convert';
 import 'dart:math' as math;
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
 import '../services/secure_store.dart';
 
 class AuthSession {
@@ -110,15 +114,50 @@ class AuthSession {
   static const String _prefKey = 'br_auth_session';
   static const String _prefPhoneKey = 'br_saved_phone';
   static const String _prefPasswordKey = 'br_saved_password';
+  static bool get _isIos =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+
+  /// Set only inside the iOS Workmanager engine, never in the foreground UI.
+  static bool iosBackgroundExecution = false;
+  // Separate, device-bound session for iOS background refresh after the first
+  // unlock since reboot. Saved passwords retain their existing locked policy.
+  static const _iosBackgroundStorage = FlutterSecureStorage(
+    iOptions: IOSOptions(
+      accountName: 'rail_pro_background_session',
+      accessibility: KeychainAccessibility.first_unlock_this_device,
+    ),
+  );
+
+  static Future<void> prepareIosBackgroundAccess() async {
+    if (!_isIos) return;
+    final session = await load();
+    if (session == null) {
+      await _iosBackgroundStorage.delete(key: _prefKey);
+    } else {
+      await _iosBackgroundStorage.write(
+        key: _prefKey,
+        value: jsonEncode(session.toJson()),
+      );
+    }
+  }
 
   static Future<void> save(AuthSession session) async {
     await SecureStore.write(_prefKey, jsonEncode(session.toJson()));
+    if (_isIos) {
+      await _iosBackgroundStorage.write(
+        key: _prefKey,
+        value: jsonEncode(session.toJson()),
+      );
+    }
     if (session.phoneNumber != null && session.phoneNumber!.isNotEmpty) {
       await SecureStore.write(_prefPhoneKey, session.phoneNumber!);
     }
   }
 
-  static Future<void> saveUserCredentials(String phone, [String? password]) async {
+  static Future<void> saveUserCredentials(
+    String phone, [
+    String? password,
+  ]) async {
     if (phone.isNotEmpty) {
       await SecureStore.write(_prefPhoneKey, phone.trim());
     }
@@ -150,8 +189,10 @@ class AuthSession {
     return (c['phone'] ?? '').isNotEmpty && (c['password'] ?? '').isNotEmpty;
   }
 
-  static Future<AuthSession?> load() async {
-    final raw = await SecureStore.read(_prefKey);
+  static Future<AuthSession?> load({bool background = false}) async {
+    final raw = _isIos && (background || iosBackgroundExecution)
+        ? await _iosBackgroundStorage.read(key: _prefKey)
+        : await SecureStore.read(_prefKey);
     if (raw == null) return null;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
@@ -168,5 +209,6 @@ class AuthSession {
 
   static Future<void> clear() async {
     await SecureStore.delete(_prefKey);
+    if (_isIos) await _iosBackgroundStorage.delete(key: _prefKey);
   }
 }

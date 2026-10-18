@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/auth_session.dart';
@@ -90,6 +91,14 @@ class RailApiClient {
         if (latest.isValid && latest.token != (rejectedToken ?? auth.token)) {
           return latest;
         }
+        if (!kIsWeb &&
+            defaultTargetPlatform == TargetPlatform.iOS &&
+            AuthSession.iosBackgroundExecution) {
+          await NotificationService().showLoginRequired();
+          throw const LoginRecoveryRequired(
+            'Open Rail Pro to renew your Railway session.',
+          );
+        }
         if (SessionRecovery.instance.canRunWebView) {
           return await SessionRecovery.instance.recover(
             previous: auth,
@@ -160,8 +169,9 @@ class RailApiClient {
         }
         final decoded = jsonDecode(response.body);
         final data = decoded is Map ? decoded['data'] : null;
-        final token =
-            data is Map ? (data['token'] ?? data['access_token']) : null;
+        final token = data is Map
+            ? (data['token'] ?? data['access_token'])
+            : null;
         if (token is! String ||
             token.isEmpty ||
             (data is Map && data['success'] == false)) {
@@ -180,7 +190,8 @@ class RailApiClient {
           deviceId: auth.deviceId,
           deviceKey: auth.deviceKey,
           phoneNumber: phone,
-          displayName: user?['display_name']?.toString() ??
+          displayName:
+              user?['display_name']?.toString() ??
               user?['name']?.toString() ??
               auth.displayName,
           email: user?['email']?.toString() ?? auth.email,

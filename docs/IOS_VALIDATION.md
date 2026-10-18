@@ -15,6 +15,20 @@ plugin. Android Google SMS consent is unavailable on iOS; automatic SMS controls
 are disabled and the OTP field retains its one-time-code keyboard suggestion.
 An existing automatic OTP reservation falls back to manual entry on iOS.
 
+iOS now posts a quiet, separate search-status notification when monitoring is
+enabled or scheduled, and removes it when monitoring stops. This is a normal
+iOS notification, not a pinned Android foreground-service indicator. Seat-found
+alerts use banners, Notification Center entries and sound. Permission denial or
+native delivery failure is reported rather than silently accepted; failed seat
+notifications remain eligible on the next refresh.
+
+Background refresh reads a separate encrypted, device-bound Keychain session
+that is accessible after the first unlock since reboot. Existing sessions are
+copied while scheduling from the open app, and updated/removed on login/logout.
+Saved passwords retain their original unlocked-device access. The worker asks
+the user to reopen the app when its session expires instead of attempting to
+read a locked password or solve Cloudflare in the background.
+
 The periodic refresh handler is registered before application launch finishes,
 including the first launch. iOS decides when background refresh runs; it cannot
 provide Android's continuous foreground-service polling or guarantee a 15-minute
@@ -33,7 +47,8 @@ Cloudflare, or prove delivery while the app is suspended.
 - Complete Cloudflare verification and login, then expire the session and test
   recovery and manual login.
 - Deny notifications, check the reported status, then enable notifications in
-  Settings and check again. Test a local seat alert and its destination.
+  Settings and check again. Test a local seat alert and its destination, verify
+  the separate search-status notification, and stop searching to remove it.
 - Reserve a seat, fill an SMS code using the keyboard suggestion, and complete
   the OTP/payment flow.
 - Download a purchased ticket, preview it, share it, and print it. Confirm a
@@ -41,7 +56,8 @@ Cloudflare, or prove delivery while the app is suspended.
 - Restart offline after caching an update policy and confirm its link remains
   the IPA link. Verify the installed version is read from the app bundle.
 - Schedule a search and test background refresh on a physical device. Delivery
-  timing remains controlled by iOS.
+  timing remains controlled by iOS. Unlock once after reboot, lock the screen,
+  and test seat detection and alert delivery during a background refresh.
 
 Remote administrator announcements remain Android-only in `AdminPushService`.
 Enabling iOS remote push also requires a valid Firebase iOS app registration,
