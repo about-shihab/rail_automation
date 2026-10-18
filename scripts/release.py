@@ -97,6 +97,8 @@ def prepare(args):
     manifest = next_release(baseline, previous, args.force)
     manifest['apk_url'] = (f'https://github.com/{args.release_repo}/releases/latest/download/Rail-Pro.apk'
                            if args.release_repo else base + '/downloads/Rail-Pro.apk')
+    manifest['ipa_url'] = (f'https://github.com/{args.release_repo}/releases/latest/download/RailPro.ipa'
+                           if args.release_repo else base + '/downloads/RailPro.ipa')
     path = ROOT / 'build/release-plan.json'
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2) + '\n')

@@ -1,11 +1,5 @@
-name: iOS IPA Build and Release
-
+name: Standalone iOS IPA Build
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - '.gitignore'
   workflow_dispatch:
     inputs:
       build_type:

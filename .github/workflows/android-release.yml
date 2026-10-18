@@ -1,4 +1,4 @@
-name: Android release and public website
+name: Production release (APK, IPA, website)
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
       force_update:
         description: Require all older builds to update after publishing
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write   # needed to create the GitHub Release
@@ -25,7 +25,69 @@ env:
   PUBLIC_REPO: about-shihab/rail-pro
 
 jobs:
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Flutter pub packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.pub-cache
+          key: flutter-pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: |
+            flutter-pub-${{ runner.os }}-
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: ios/Pods
+          key: cocoapods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.1'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Setup CocoaPods
+        run: |
+          cd ios
+          pod install --repo-update
+          cd ..
+
+      - name: Build and Package iOS IPA
+        run: |
+          flutter build ipa --no-codesign --release
+          OUTPUT_DIR="build/ios/ipa"
+          mkdir -p "$OUTPUT_DIR/Payload"
+          ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+          if [ -d "$ARCHIVE_APP" ]; then
+            cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
+            cd "$OUTPUT_DIR"
+            zip -r -y "RailPro.ipa" "Payload"
+            cd - > /dev/null
+            echo "Successfully packaged RailPro.ipa"
+          else
+            echo "Error: Archive app not found"
+            exit 1
+          fi
+
+      - name: Upload iOS IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rail-pro-ios-ipa
+          path: build/ios/ipa/RailPro.ipa
+
   publish:
+    name: Build Android APK and Publish Release
+    needs: [build-ios]
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -65,15 +127,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Assign the next version
+      - name: Assign the next version (automatic force update)
         id: version
         env:
-          FORCE: ${{ inputs.force_update == true || contains(github.event.head_commit.message, '[force update]') || contains(github.event.head_commit.message, '[force-update]') }}
+          FORCE: ${{ inputs.force_update != false }}
         run: |
-          if [ "$FORCE" = "true" ]; then
-            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json --force
-          else
+          if [ "$FORCE" = "false" ]; then
             python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json
+          else
+            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json --force
           fi
 
       - name: Analyze and test
@@ -102,10 +164,16 @@ jobs:
           --build-name "$VERSION" --build-number "$BUILD"
           --dart-define="UPDATE_MANIFEST_URL=$SITE_URL/update.json"
 
+      - name: Download iOS IPA Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rail-pro-ios-ipa
+          path: build/ios/ipa
+
       - name: Bundle the website
         run: python scripts/release.py bundle
 
-      - name: Publish APK and website to the public distribution repository
+      - name: Publish APK, IPA, and website to the public distribution repository
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
@@ -118,4 +186,5 @@ jobs:
           name: signed-release-${{ steps.version.outputs.version }}
           path: |
             build/app/outputs/flutter-apk/app-release.apk
+            build/ios/ipa/RailPro.ipa
             build/public-site/update.json

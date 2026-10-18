@@ -56,8 +56,9 @@ def publish(repo):
     release = api(token, f'repos/{repo}/releases', 'POST', {
         'tag_name': tag, 'target_commitish': metadata['default_branch'],
         'name': f"Rail Pro {manifest['version']}", 'draft': True,
-        'body': f"Android release {manifest['version']} (build {manifest['build_number']}).\n\n"
-                'Download Rail-Pro.apk. update.json contains version and SHA-256 metadata.'})
+        'body': f"Release {manifest['version']} (build {manifest['build_number']}).\n\n"
+                'Download Rail-Pro.apk for Android or RailPro.ipa for iOS.\n'
+                'update.json contains version and SHA-256 metadata.'})
     try:
         print(f'Uploading signed APK and metadata for {tag}...', flush=True)
         upload = release['upload_url'].split('{')[0]
