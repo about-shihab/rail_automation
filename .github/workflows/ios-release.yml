@@ -9,13 +9,13 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'Build Type'
+        description: 'Build Type (signed requires Apple secrets, unsigned can be sideloaded)'
         required: true
-        default: 'unsigned'
+        default: 'signed'
         type: choice
         options:
-          - unsigned
           - signed
+          - unsigned
 
 permissions:
   contents: write
@@ -71,11 +71,19 @@ jobs:
       - name: Setup Apple Codesigning (if secrets provided)
         id: codesign_setup
         env:
+          BUILD_TYPE: ${{ github.event.inputs.build_type }}
           BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
           P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
-          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD || 'temporal-keychain-pass-2026' }}
+          CUSTOM_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
         run: |
+          if [ "$BUILD_TYPE" = "unsigned" ]; then
+            echo "Explicitly requested unsigned build."
+            echo "codesign=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           if [ -n "$BUILD_CERTIFICATE_BASE64" ] && [ -n "$BUILD_PROVISION_PROFILE_BASE64" ]; then
             echo "codesign=true" >> $GITHUB_OUTPUT
             CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
@@ -85,46 +93,137 @@ jobs:
             echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o $CERTIFICATE_PATH
             echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o $PP_PATH
 
+            # Create and unlock temporary keychain
             security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
             security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
             security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
 
+            # Import certificate with codesign partition access
             security import $CERTIFICATE_PATH -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-            security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-            security list-keychain -d user -s $KEYCHAIN_PATH
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+            security list-keychains -d user -s $KEYCHAIN_PATH $(security list-keychains -d user | tr -d '"')
+            security default-keychain -s $KEYCHAIN_PATH
 
+            # Extract metadata from provisioning profile
+            PP_PLIST=$RUNNER_TEMP/profile.plist
+            security cms -D -i "$PP_PATH" > "$PP_PLIST"
+            UUID=$(/usr/libexec/PlistBuddy -c "Print :UUID" "$PP_PLIST")
+            TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print :TeamIdentifier:0" "$PP_PLIST")
+            APP_ID_PREFIX=$(/usr/libexec/PlistBuddy -c "Print :ApplicationIdentifierPrefix:0" "$PP_PLIST" 2>/dev/null || echo "$TEAM_ID")
+            APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:application-identifier" "$PP_PLIST" 2>/dev/null || echo "")
+            DETECTED_BUNDLE_ID=$(echo "$APP_ID" | sed -E "s/^$APP_ID_PREFIX\.//")
+
+            FINAL_BUNDLE_ID="${CUSTOM_BUNDLE_ID:-$DETECTED_BUNDLE_ID}"
+            if [ -z "$FINAL_BUNDLE_ID" ] || [ "$FINAL_BUNDLE_ID" = "*" ]; then
+              FINAL_BUNDLE_ID="com.example.railAutomation"
+            fi
+
+            # Install provisioning profile with its UUID
             mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-            cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/
+            cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+            echo "Installed profile UUID: $UUID (Team: $TEAM_ID, Bundle ID: $FINAL_BUNDLE_ID)"
+
+            # Detect export method: development, ad-hoc, enterprise, or app-store
+            PROVISIONS_ALL=$(/usr/libexec/PlistBuddy -c "Print :ProvisionsAllDevices" "$PP_PLIST" 2>/dev/null || echo "false")
+            HAS_DEVICES=$(/usr/libexec/PlistBuddy -c "Print :ProvisionedDevices" "$PP_PLIST" 2>/dev/null || echo "")
+            GET_TASK_ALLOW=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:get-task-allow" "$PP_PLIST" 2>/dev/null || echo "false")
+
+            if [ "$PROVISIONS_ALL" = "true" ]; then
+              EXPORT_METHOD="enterprise"
+            elif [ -n "$HAS_DEVICES" ]; then
+              if [ "$GET_TASK_ALLOW" = "true" ]; then
+                EXPORT_METHOD="development"
+              else
+                EXPORT_METHOD="ad-hoc"
+              fi
+            else
+              EXPORT_METHOD="app-store"
+            fi
+            echo "Detected export method: $EXPORT_METHOD"
+
+            # Sync project bundle ID to match provisioning profile
+            if [ "$FINAL_BUNDLE_ID" != "com.example.railAutomation" ]; then
+              echo "Updating project bundle identifier to $FINAL_BUNDLE_ID"
+              sed -i '' "s/com.example.railAutomation/$FINAL_BUNDLE_ID/g" ios/Runner.xcodeproj/project.pbxproj
+            fi
+
+            # Generate dynamic ExportOptions.plist
+            cat <<EOF > $RUNNER_TEMP/ExportOptions.plist
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>$EXPORT_METHOD</string>
+    <key>teamID</key>
+    <string>$TEAM_ID</string>
+    <key>signingStyle</key>
+    <string>manual</string>
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>$FINAL_BUNDLE_ID</key>
+        <string>$UUID</string>
+    </dict>
+</dict>
+</plist>
+EOF
+            echo "export_options=$RUNNER_TEMP/ExportOptions.plist" >> $GITHUB_OUTPUT
           else
+            if [ "$BUILD_TYPE" = "signed" ]; then
+              echo "::error::Signed build was requested, but APPLE_CERTIFICATE_BASE64 or APPLE_PROVISIONING_PROFILE_BASE64 is missing."
+              echo "Please configure the required Apple signing secrets in your GitHub repository secrets."
+              exit 1
+            fi
             echo "codesign=false" >> $GITHUB_OUTPUT
-            echo "No signing secrets provided; proceeding with unsigned IPA generation."
+            echo "No Apple signing secrets provided; proceeding with unsigned IPA."
           fi
 
       - name: Build iOS Archive
         run: |
           if [ "${{ steps.codesign_setup.outputs.codesign }}" = "true" ]; then
-            flutter build ipa --release
+            echo "Building signed iOS IPA using ExportOptions..."
+            flutter build ipa --release --export-options-plist="${{ steps.codesign_setup.outputs.export_options }}"
           else
+            echo "Building unsigned iOS Archive..."
             flutter build ipa --no-codesign --release
           fi
 
       - name: Package IPA
         run: |
-          ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
           OUTPUT_DIR="build/ios/ipa"
-          mkdir -p "$OUTPUT_DIR/Payload"
+          mkdir -p "$OUTPUT_DIR"
 
-          if [ -d "$ARCHIVE_APP" ]; then
-            cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
-            cd "$OUTPUT_DIR"
-            zip -r -y "RailPro.ipa" "Payload"
-            cd - > /dev/null
-            echo "Unsigned RailPro.ipa successfully packaged!"
-          elif [ -f "build/ios/ipa/rail_automation.ipa" ]; then
-            cp "build/ios/ipa/rail_automation.ipa" "$OUTPUT_DIR/RailPro.ipa"
+          if [ "${{ steps.codesign_setup.outputs.codesign }}" = "true" ]; then
+            EXPORTED_IPA=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.ipa" ! -name "RailPro.ipa" -print -quit)
+            if [ -n "$EXPORTED_IPA" ]; then
+              echo "Found exported signed IPA at $EXPORTED_IPA"
+              cp "$EXPORTED_IPA" "$OUTPUT_DIR/RailPro.ipa"
+            elif [ -f "$OUTPUT_DIR/RailPro.ipa" ]; then
+              echo "Signed RailPro.ipa already in $OUTPUT_DIR"
+            else
+              echo "Warning: Exported IPA not in $OUTPUT_DIR; creating fallback package from archive..."
+              ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+              mkdir -p "$OUTPUT_DIR/Payload"
+              cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
+              cd "$OUTPUT_DIR"
+              zip -r -y "RailPro.ipa" "Payload"
+              cd - > /dev/null
+            fi
+            echo "Signed RailPro.ipa successfully prepared for installation."
           else
-            echo "Error: Neither archive app nor exported ipa was found."
-            exit 1
+            ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
+            if [ -d "$ARCHIVE_APP" ]; then
+              echo "Packaging unsigned IPA from Runner.app archive..."
+              mkdir -p "$OUTPUT_DIR/Payload"
+              cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
+              cd "$OUTPUT_DIR"
+              zip -r -y "RailPro.ipa" "Payload"
+              cd - > /dev/null
+              echo "Unsigned RailPro.ipa successfully packaged for sideloading!"
+            else
+              echo "Error: Archive app not found at $ARCHIVE_APP"
+              exit 1
+            fi
           fi
 
       - name: Upload IPA Artifact

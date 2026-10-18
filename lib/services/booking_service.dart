@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'sms_service.dart';
+
 import 'rail_api_client.dart';
 import 'rail_api_config.dart';
 
@@ -425,6 +427,9 @@ class BookingService {
             (state['confirmedTicketIds'] as List<int>).add(item.$2.ticketId);
             await save(state);
           }
+          if (autoVerify && !await SmsService().prepareListening()) {
+            state['autoVerify'] = false;
+          }
           final data = await request(
             'POST',
             '/bookings/passenger-details',
@@ -629,6 +634,10 @@ class BookingService {
     final state = await pending();
     if (state == null || state['status'] != 'awaitingOtp') {
       throw StateError('No booking is awaiting OTP.');
+    }
+    if (state['autoVerify'] == true && !await SmsService().prepareListening()) {
+      state['autoVerify'] = false;
+      await save(state);
     }
     final data = await request(
       'POST',

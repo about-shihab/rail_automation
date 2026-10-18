@@ -365,7 +365,7 @@ void main() {
       ],
     },
   };
-  Future<Map<String, dynamic>> reserve() => BookingService.reserve(
+  Future<Map<String, dynamic>> reserve({bool autoVerify = false}) => BookingService.reserve(
     train: train,
     seat: seat,
     from: 'Dhaka',
@@ -374,7 +374,52 @@ void main() {
     auth: auth,
     quantity: 2,
     maxFare: 600,
+    autoVerify: autoVerify,
   );
+
+  for (final available in [true, false]) {
+    test('OTP capture is armed before sending SMS, available=$available', () async {
+      const sms = MethodChannel('com.example.rail_automation/sms');
+      final order = <String>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sms, (call) async {
+        if (call.method == 'prepareListening') order.add('armed');
+        return available;
+      });
+      addTearDown(() => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(sms, null));
+      await http.runWithClient(() async {
+        final state = await reserve(autoVerify: true);
+        expect(state['status'], 'awaitingOtp');
+        expect(state['autoVerify'], available);
+        expect(order, ['armed', 'SMS requested']);
+        if (available) {
+          order.clear();
+          await BookingService.resendOtp(auth);
+          expect(order, ['armed', 'SMS resent']);
+        }
+      }, () => MockClient((request) async {
+        if (request.url.path.endsWith('/handshake')) {
+          return http.Response('{"data":{"release_time_interval_in_minutes":300}}', 200);
+        }
+        if (request.url.path.endsWith('/seat-layout')) {
+          return http.Response(jsonEncode(layout()), 200);
+        }
+        if (request.url.path.endsWith('/reserve-seat')) {
+          return http.Response('{"data":{"ack":1}}', 200);
+        }
+        if (request.url.path.endsWith('/passenger-details')) {
+          expect(order, ['armed']);
+          order.add('SMS requested');
+        }
+        if (request.url.path.endsWith('/resend-otp')) {
+          expect(order, ['armed']);
+          order.add('SMS resent');
+        }
+        return http.Response('{"data":{"success":true}}', 200);
+      }));
+    });
+  }
 
   test('cancellation after layout prevents reservation mutations', () async {
     await http.runWithClient(

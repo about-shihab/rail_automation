@@ -23,6 +23,7 @@ import 'recharge_credit_dialog.dart';
 import 'search_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'webview_login_screen.dart';
+import 'trips_screen.dart';
 import '../widgets/app_update_dialog.dart';
 
 /// Root screen with a bottom navigation bar: Search · Monitor · Alerts · More.

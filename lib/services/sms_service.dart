@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 
 import 'package:flutter/services.dart';
 
@@ -15,9 +14,19 @@ class SmsService {
   DateTime? _startedAt;
   Timer? _timeout;
   bool _starting = false;
+
+  /// Arm Google SMS consent before the request that sends the Railway OTP.
+  Future<bool> prepareListening() async {
+    try {
+      return await _methods.invokeMethod<bool>('prepareListening') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<bool> requestSmsPermission() async {
     try {
-      return await _methods.invokeMethod<bool>('requestSmsPermission') ?? true;
+      return await _methods.invokeMethod<bool>('requestSmsPermission') ?? false;
     } catch (_) {
       return false;
     }
@@ -25,7 +34,7 @@ class SmsService {
 
   Future<bool> hasPermission() async {
     try {
-      return await _methods.invokeMethod<bool>('hasSmsPermission') ?? true;
+      return await _methods.invokeMethod<bool>('hasSmsPermission') ?? false;
     } catch (_) {
       return false;
     }
@@ -46,8 +55,16 @@ class SmsService {
     int digits,
   ) {
     const bnDigits = {
-      '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
-      '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+      '০': '0',
+      '১': '1',
+      '২': '2',
+      '৩': '3',
+      '৪': '4',
+      '৫': '5',
+      '৬': '6',
+      '৭': '7',
+      '৮': '8',
+      '৯': '9',
     };
     final normalizedBody = body.split('').map((c) => bnDigits[c] ?? c).join();
     final senderUpper = sender.trim().toUpperCase();
@@ -114,14 +131,11 @@ class SmsService {
         return;
       }
       _startedAt = DateTime.now();
-      final timeoutSec = min(AppConfig.instance.number('otp_window_seconds'), 25);
-      _timeout = Timer(
-        Duration(seconds: timeoutSec),
-        () {
-          stopListening();
-          onUnavailable?.call();
-        },
-      );
+      final timeoutSec = AppConfig.instance.number('otp_window_seconds');
+      _timeout = Timer(Duration(seconds: timeoutSec), () {
+        stopListening();
+        onUnavailable?.call();
+      });
       _subscription = _events.receiveBroadcastStream().listen(
         (event) {
           if (event is! Map || _startedAt == null) return;

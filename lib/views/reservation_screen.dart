@@ -119,14 +119,6 @@ class _ReservationScreenState extends State<ReservationScreen> {
           seatInfo: seatInfo,
         );
       }
-      if (state?['status'] == 'awaitingOtp' && state?['autoVerify'] == true) {
-        final startedAtStr = state?['startedAt'] as String? ?? state?['updatedAt'] as String?;
-        final startedAt = startedAtStr != null ? DateTime.tryParse(startedAtStr) : null;
-        if (startedAt != null && DateTime.now().difference(startedAt).inSeconds >= 20) {
-          state?['autoVerify'] = false;
-          await BookingService.save(state!);
-        }
-      }
       if (mounted) setState(() => _state = state);
       if (state?['status'] == 'readyForPayment') {
         unawaited(_checkPaymentStatus());

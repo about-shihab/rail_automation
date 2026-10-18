@@ -330,8 +330,8 @@ class _WatchSheetState extends State<_WatchSheet> {
                       ),
                       subtitle: Text(
                         lang.tr(
-                          'Google OTP Verifier permission',
-                          'Google SMS Consent দ্বারা স্বয়ংক্রিয় ওটিপি যাচাই',
+                          'Google asks to read this OTP when the SMS arrives',
+                          'ওটিপির SMS এলে Google সেটি পড়ার অনুমতি চাইবে',
                         ),
                         style: TextStyle(
                           fontSize: 12,
@@ -343,7 +343,8 @@ class _WatchSheetState extends State<_WatchSheet> {
                           ? null
                           : (v) async {
                               if (v) {
-                                final ok = await SmsService().requestSmsPermission();
+                                final ok = await SmsService()
+                                    .requestSmsPermission();
                                 if (mounted) setState(() => _autoVerify = ok);
                               } else {
                                 setState(() => _autoVerify = false);
