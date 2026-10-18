@@ -116,11 +116,25 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
         ..setNavigationDelegate(
           NavigationDelegate(
             onNavigationRequest: (request) async {
-              if (_hasNavigated ||
-                  !WebSessionService.isRailwayUrl(request.url)) {
+              if (_hasNavigated) return NavigationDecision.prevent;
+              // WKWebView also delegates iframe navigations. Turnstile needs
+              // its HTTPS challenge frame and local blank/srcdoc frames, but
+              // these must never replace the Railway login page.
+              if (!request.isMainFrame) {
+                final uri = Uri.tryParse(request.url);
+                if ((uri?.scheme == 'https' &&
+                        uri?.host == 'challenges.cloudflare.com' &&
+                        uri?.port == 443) ||
+                    request.url == 'about:blank' ||
+                    request.url == 'about:srcdoc') {
+                  return NavigationDecision.navigate;
+                }
+              }
+              if (!WebSessionService.isRailwayUrl(request.url)) {
                 return NavigationDecision.prevent;
               }
-              if (Uri.tryParse(request.url)?.path == '/booking/train/search') {
+              if (request.isMainFrame &&
+                  Uri.tryParse(request.url)?.path == '/booking/train/search') {
                 await _checkLiveSession();
                 if (_hasNavigated) return NavigationDecision.prevent;
               }

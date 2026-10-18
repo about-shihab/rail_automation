@@ -128,6 +128,56 @@ void main() {
     },
   );
 
+  testWidgets('login allows Cloudflare verification frames on iOS', (
+    tester,
+  ) async {
+    await showLogin(tester);
+    final navigate = webview.controller.delegate!.navigationRequest!;
+    for (final url in [
+      'https://challenges.cloudflare.com/turnstile/v0/widget',
+      'about:blank',
+      'about:srcdoc',
+    ]) {
+      expect(
+        await navigate(NavigationRequest(url: url, isMainFrame: false)),
+        NavigationDecision.navigate,
+        reason: 'Verification iframe must load: $url',
+      );
+      expect(
+        await navigate(NavigationRequest(url: url, isMainFrame: true)),
+        NavigationDecision.prevent,
+        reason: 'Verification must not replace the login page: $url',
+      );
+    }
+    for (final isMainFrame in [true, false]) {
+      expect(
+        await navigate(
+          NavigationRequest(
+            url: 'https://eticket.railway.gov.bd/login',
+            isMainFrame: isMainFrame,
+          ),
+        ),
+        NavigationDecision.navigate,
+      );
+      for (final url in [
+        'https://untrusted.example/login',
+        'https://challenges.cloudflare.com.evil.test/widget',
+        'http://challenges.cloudflare.com/widget',
+        'https://challenges.cloudflare.com:444/widget',
+        'javascript:alert(1)',
+      ]) {
+        expect(
+          await navigate(NavigationRequest(url: url, isMainFrame: isMainFrame)),
+          NavigationDecision.prevent,
+          reason: 'Untrusted navigation must stay blocked: $url',
+        );
+      }
+    }
+    expect(webview.controller.url, 'https://eticket.railway.gov.bd/login');
+    expect(await AuthSession.load(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('expired or off-origin bridge sessions never complete login', (
     tester,
   ) async {
