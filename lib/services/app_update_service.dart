@@ -22,7 +22,15 @@ class UpdatePolicy {
     final build = value['build_number'];
     final minimum = value['minimum_build_number'];
     final version = value['version'];
-    final uri = Uri.tryParse('${value['apk_url'] ?? ''}');
+    final isIos = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    final fallbackUrl = isIos
+        ? 'https://github.com/about-shihab/rail-pro/releases/latest'
+        : '';
+    final downloadUrl = (isIos ? value['ipa_url'] : null) ??
+        (isIos && (value['apk_url'] == null || value['apk_url'].toString().endsWith('.apk'))
+            ? fallbackUrl
+            : value['apk_url']);
+    final uri = Uri.tryParse('${downloadUrl ?? ''}');
     if (build is! int ||
         minimum is! int ||
         build < 1 ||

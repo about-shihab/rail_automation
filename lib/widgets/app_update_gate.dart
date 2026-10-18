@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -95,10 +96,15 @@ class AppUpdateGate extends StatelessWidget {
                           ),
                         const SizedBox(height: 12),
                         Text(
-                          tr(
-                            'Open the downloaded APK and approve installation. Keep the existing app installed.',
-                            'ডাউনলোড করা APK খুলে ইনস্টল করার অনুমতি দিন। আগের অ্যাপ আনইনস্টল করবেন না।',
-                          ),
+                          (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS)
+                              ? tr(
+                                  'Download the latest RailPro.ipa from Releases and install via your computer.',
+                                  'রিলিজ থেকে নতুন RailPro.ipa ডাউনলোড করে কম্পিউটার দিয়ে ইনস্টল করুন।',
+                                )
+                              : tr(
+                                  'Open the downloaded APK and approve installation. Keep the existing app installed.',
+                                  'ডাউনলোড করা APK খুলে ইনস্টল করার অনুমতি দিন। আগের অ্যাপ আনইনস্টল করবেন না।',
+                                ),
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
