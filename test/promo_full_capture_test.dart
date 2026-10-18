@@ -10,8 +10,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:rail_automation/models/auth_session.dart';
-import 'package:rail_automation/models/purchased_ticket.dart';
-import 'package:rail_automation/models/trip_record.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/credit_service.dart';
@@ -26,7 +24,6 @@ import 'package:rail_automation/views/app_shell.dart';
 import 'package:rail_automation/views/monitor_dashboard_screen.dart';
 import 'package:rail_automation/views/reservation_screen.dart';
 import 'package:rail_automation/views/train_selection_screen.dart';
-import 'package:rail_automation/views/trips_screen.dart';
 
 void main() {
   setUp(() async {
@@ -164,7 +161,6 @@ void main() {
     }
     await capture('promo-stations-bn');
 
-    final context = key.currentContext!;
     final appShells = find.byType(AppShell).evaluate();
     if (appShells.isNotEmpty) {
       final navigator = Navigator.of(appShells.first);
@@ -240,26 +236,6 @@ void main() {
     }
 
     // 6. Capture Trips / Confirmed Tickets Screen
-    // Construct a beautiful mock ticket view
-    final mockPurchasedTicket = PurchasedTicket.fromJson({
-      'order_id': 1380682290,
-      'journey_date': '24 Oct 2026, 07:00 AM',
-      'booking_date': '18 Oct 2026, 11:30 AM',
-      'trip_number': 'SONAR BANGLA EXPRESS (788) [SNIGDHA]',
-      'pnr': '6ABA11BBCF03D',
-      'order_status': 1,
-      'print_date': null,
-      'trip_id': 8611622,
-      'origin_city_id': 47,
-      'user_id': 1287535,
-      'refund_validity_info': {
-        'is_applicable': true,
-        'is_in_progress': false,
-        'is_printed': false,
-        'is_refunded': false,
-      },
-    });
-
     final tripsKey = GlobalKey();
     await tester.pumpWidget(
       MultiProvider(
