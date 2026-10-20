@@ -11,6 +11,7 @@ import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/auth_session.dart';
@@ -173,6 +174,13 @@ class _BookingScreenState extends State<BookingScreen> {
                     return;
                   }
                 }
+              }
+
+              if (defaultTargetPlatform == TargetPlatform.iOS &&
+                  !url.contains('/rail-pro-checkout-bootstrap')) {
+                await _controller?.runJavaScript(
+                  WebSessionService.iosCheckoutLocationScript,
+                );
               }
 
               // Finished loading target booking / payment page

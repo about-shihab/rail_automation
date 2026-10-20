@@ -16,6 +16,7 @@ import 'webview_login_screen.dart';
 import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'watch_options_dialog.dart';
+import 'intermediate_station_screen.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
   final TripSearchResponse searchResponse;
@@ -820,6 +821,26 @@ class TrainSelectionScreen extends StatelessWidget {
                           isMonitored: isMon,
                           onWatch: () => _watch(ctx, train: trains[i].tripNumber),
                           onBook: () => _book(ctx, trains[i]),
+                          onIntermediateSearch: () => Navigator.push(
+                            ctx,
+                            MaterialPageRoute(
+                              builder: (_) => IntermediateStationScreen(
+                                train: trains[i],
+                                from: fromCity,
+                                to: toCity,
+                                date: dateOfJourney,
+                                seatClass: initialClass,
+                              ),
+                            ),
+                          ),
+                          showIntermediateSearch:
+                              !trains[i].hasAnyOnlineSeats ||
+                              (initialClass != null &&
+                                  initialClass != 'ALL' &&
+                                  initialClass != 'RANDOM' &&
+                                  !(trains[i].seatTypeByName(initialClass!)
+                                          ?.isAvailable ??
+                                      false)),
                           onSeatWatch: (seat) => _watch(
                             ctx,
                             train: trains[i].tripNumber,
@@ -845,7 +866,8 @@ class _TrainCard extends StatelessWidget {
   final TrainTrip train;
   final bool isDark;
   final bool isMonitored;
-  final VoidCallback onWatch, onBook;
+  final VoidCallback onWatch, onBook, onIntermediateSearch;
+  final bool showIntermediateSearch;
   final ValueChanged<SeatType> onSeatWatch;
 
   const _TrainCard({
@@ -854,6 +876,8 @@ class _TrainCard extends StatelessWidget {
     this.isMonitored = false,
     required this.onWatch,
     required this.onBook,
+    required this.onIntermediateSearch,
+    required this.showIntermediateSearch,
     required this.onSeatWatch,
   });
 
@@ -1039,6 +1063,15 @@ class _TrainCard extends StatelessWidget {
             ],
 
             const SizedBox(height: 12),
+            if (showIntermediateSearch)
+              TextButton.icon(
+                icon: const Icon(Icons.alt_route_rounded),
+                label: Text(lang.tr(
+                  'Search via intermediate station',
+                  'মধ্যবর্তী স্টেশন হয়ে খুঁজুন',
+                )),
+                onPressed: onIntermediateSearch,
+              ),
             // ── Action row: icon buttons ─────────────────────────────────
             Row(
               children: [

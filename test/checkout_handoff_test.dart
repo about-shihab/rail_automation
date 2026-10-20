@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -12,6 +13,7 @@ import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/sms_service.dart';
 import 'package:rail_automation/services/secure_store.dart';
+import 'package:rail_automation/services/web_session_service.dart';
 import 'package:rail_automation/models/purchased_ticket.dart';
 import 'package:rail_automation/views/booking_screen.dart';
 
@@ -130,6 +132,56 @@ void main() {
       );
     },
   );
+
+  for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    testWidgets('checkout location timeout is scoped to iOS: $platform', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
+      try {
+        await http.runWithClient(
+          () async {
+            await tester.pumpWidget(
+              const MaterialApp(
+                home: BookingScreen(url: BookingService.tripInfoUrl),
+              ),
+            );
+            await tester.pump(const Duration(milliseconds: 50));
+            webview.controller.delegate!.pageFinished!(
+              BookingService.tripInfoUrl,
+            );
+            await tester.pump();
+            expect(
+              webview.controller.scripts.contains(
+                WebSessionService.iosCheckoutLocationScript,
+              ),
+              platform == TargetPlatform.iOS,
+            );
+            final count = webview.controller.scripts.length;
+            webview.controller.delegate!.pageFinished!(
+              'https://payment.example/checkout',
+            );
+            await tester.pump();
+            expect(
+              webview.controller.scripts.length,
+              count,
+              reason: 'Do not inject into payment providers',
+            );
+            expect(
+              (await BookingService.pending())?['status'],
+              'readyForPayment',
+            );
+            await tester.pumpWidget(const SizedBox.shrink());
+          },
+          () => MockClient(
+            (_) async => http.Response(jsonEncode({'data': []}), 200),
+          ),
+        );
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  }
 
   test(
     'checkout normalizes mobile-only identity and preserves the profile',

@@ -11,6 +11,7 @@ class RailApiConfig {
   static const paths = <String, String>{
     'sign_in': '/auth/sign-in',
     'search_trips': '/bookings/search-trips-v2',
+    'train_routes': '/train-routes',
     'seat_layout': '/bookings/seat-layout',
     'purchase_history': '/purchase-history',
     'download_ticket': '/trips/download-ticket/{order_id}',

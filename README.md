@@ -68,6 +68,10 @@ The foreground-service isolate requests verification from the retained UI browse
 
 Checkout uses the official Railway flow. A return URL alone cannot mark a ticket paid; confirmation requires a matching new confirmed, non-refunded purchase with a PNR. Tests use fake Railway responses and WebViews. Actual background behavior, challenge acceptance and checkout need physical-device verification. See [release readiness](docs/RELEASE_READINESS.md).
 
+When a train or selected class is sold out, **Search via intermediate station** checks two legs through each stop between your stations. Results require online seats in the same class on the same train run. Both legs show their own date, fare and booking action; overnight departures use the next day's date. Each option requires two separate tickets and may require changing seats. These searches run on demand; they do not auto-book both legs or change background monitoring. This simpler workflow was inspired by [RailwayMatrixBD](https://github.com/AhmedTrooper/RailwayMatrixBD).
+
+On iOS, checkout bounds Railway's optional location lookup to five seconds so an unanswered WKWebView location request cannot block payment submission indefinitely. Android checkout is unchanged. Verify on a physical iPhone after OTP, including with location denied or unavailable. Run `node --test test/ios_checkout_location_test.cjs` for the simulated location timeout checks.
+
 ## Privacy and independence
 
 Rail Pro is independent and unaffiliated with Bangladesh Railway or Shohoz-Synesis-Vincen JV. Reservations, fares and payments are processed through the official Railway portal. Read the [privacy policy](PRIVACY_POLICY.md).
