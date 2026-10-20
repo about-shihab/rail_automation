@@ -11,6 +11,7 @@ import 'services/otp_verifier.dart';
 import 'services/theme_service.dart';
 import 'services/language_service.dart';
 import 'services/background_monitor.dart';
+import 'services/ios_search_continuation.dart';
 import 'services/foreground_monitor.dart';
 import 'services/firebase_user_service.dart';
 import 'utils/app_theme.dart';
@@ -174,6 +175,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       AppConfig.instance.syncFromFirestore();
     } else if (state == AppLifecycleState.paused) {
       monitor.suspendForegroundTimers();
+      unawaited(IosSearchContinuation.run(monitor));
       firebaseUser.setUserActive(false);
     }
   }

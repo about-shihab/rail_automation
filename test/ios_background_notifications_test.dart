@@ -171,6 +171,8 @@ void main() {
 
   test('locked iOS search alerts on seats and retries a failed notification on the next refresh', () async {
     await AuthSession.save(session);
+    await SecureStore.write('rail_action_token', 'locked-action-token');
+    await SecureStore.write('rail_pending_reservation_v1', '{"status":"readyForPayment"}');
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       MonitorService.preferenceKey,
@@ -216,6 +218,8 @@ void main() {
       },
       () => MockClient((request) async {
         expect(request.headers['Authorization'], 'Bearer valid-session');
+        expect(request.url.path, endsWith('/search-trips-v2'));
+        expect(request.headers.keys.map((k) => k.toLowerCase()), isNot(contains('x-action-token')));
         return http.Response(
           jsonEncode({
             'data': {

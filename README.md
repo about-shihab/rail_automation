@@ -60,11 +60,13 @@ Release builds require `android/key.properties` with `storeFile`, `storePassword
 
 ## Booking and verification
 
-Monitoring does not request Turnstile tokens. A retained invisible `InAppWebView` preloads the browser and widget; a fresh token is generated when a booking needs the seat-layout API. The existing loading animation remains visible during refresh. A checkbox appears only when Cloudflare requires interaction.
+Monitoring does not request Turnstile tokens. A retained invisible `InAppWebView` preloads the browser and widget; a fresh token is generated silently when a booking needs the seat-layout API. There is no access-check loading popup during silent execution. A checkbox appears only when Cloudflare requires interaction. Ordinary API loading stays separate from verification.
 
 Each token is submitted once as `cft_response`. Concurrent layout reads share one request; reservation reuses an already loaded layout. Rejected tokens require an explicit retry. Reservation requests use Railway's separate action-token header and never reuse the Turnstile token. Booking mutations are not retried automatically after an unknown outcome.
 
 The foreground-service isolate requests verification from the retained UI browser. When an interactive check is necessary, or Android has destroyed the UI engine, one seat-found notification asks the user to return. A notification tap starts the pending refresh immediately. A WebView cannot stay alive after Android destroys its engine. Verification speed depends on Cloudflare and the network.
+
+iOS uses system-scheduled background refresh, with one short native background task to finish an availability check when leaving the app. Pending refreshes are preserved on resume. Locked-screen checks use the background-accessible session and never read protected booking/action-token storage or start seat-layout, reservation, or Turnstile work. Seats found produce a notification; booking continues when the user returns. iOS does not provide a persistent Android-style foreground service or guarantee a polling interval while suspended. Force-quitting, disabling Background App Refresh, and system power policies can prevent background checks. Continuous monitoring while the app is suspended would require a separate server service.
 
 Checkout uses the official Railway flow. A return URL alone cannot mark a ticket paid; confirmation requires a matching new confirmed, non-refunded purchase with a PNR. Tests use fake Railway responses and WebViews. Actual background behavior, challenge acceptance and checkout need physical-device verification. See [release readiness](docs/RELEASE_READINESS.md).
 

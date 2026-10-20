@@ -139,10 +139,7 @@ class _TurnstileHostState extends State<TurnstileHost> {
             child: SizedBox(width: 150, height: 170, child: browser),
           ),
           builder: (context, child) {
-            final visible =
-                session.phase == TurnstilePhase.interactive ||
-                (defaultTargetPlatform == TargetPlatform.iOS &&
-                    session.phase == TurnstilePhase.connecting);
+            final visible = session.phase == TurnstilePhase.interactive;
             return IgnorePointer(
               ignoring: !visible,
               child: ExcludeSemantics(

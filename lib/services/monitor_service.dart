@@ -54,6 +54,10 @@ class MonitorService extends ChangeNotifier {
   final ProService proService;
 
   final bool backgroundWorker;
+  bool get _iosBackgroundSearch =>
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      (backgroundWorker || AuthSession.useBackgroundStorage);
   BookingIntent bookingIntent = const BookingIntent();
   final DateTime Function() _now;
   MonitorService({
@@ -193,6 +197,8 @@ class MonitorService extends ChangeNotifier {
   DateTime? _expiresAt;
   DateTime? _startedAt;
   bool _checking = false;
+  bool _foregroundSuspended = false;
+  Future<void>? _activeCheck;
   int _generation = 0;
   bool _disposed = false;
   Future<void> _persistence = Future.value();
@@ -295,6 +301,7 @@ class MonitorService extends ChangeNotifier {
         if (data['active'] == true) await _saveAndSchedule();
       }
       if (_isMonitoring && startTimers) {
+        _foregroundSuspended = false;
         if (_nativeMonitoring) {
           try {
             await BackgroundMonitor.schedule(startsAt: scheduledStartAt);
@@ -387,6 +394,7 @@ class MonitorService extends ChangeNotifier {
   Future<void> checkNow() => _executeCheck();
 
   void suspendForegroundTimers() {
+    _foregroundSuspended = true;
     _checkTimer?.cancel();
     _secondTicker?.cancel();
   }
@@ -572,7 +580,7 @@ class MonitorService extends ChangeNotifier {
     notifyListeners();
     if (_nativeMonitoring) {
       await ForegroundMonitor.start();
-    } else if (_checking) {
+    } else if (_checking || _activeCheck != null) {
       _recheckAfterVerification = true;
     } else {
       await checkNow();
@@ -685,7 +693,9 @@ class MonitorService extends ChangeNotifier {
   bool get needsTurnstile => _bookingNeedsVerification;
   bool get needsLogin => RailwayCredentialsRejected.isError(_lastError);
   String get userStatus {
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS && backgroundError != null) {
+    if (!kIsWeb &&
+        defaultTargetPlatform == TargetPlatform.iOS &&
+        backgroundError != null) {
       return backgroundError!;
     }
     if (isScheduled) {
@@ -927,6 +937,9 @@ class MonitorService extends ChangeNotifier {
         : targetSeatClass.trim().toUpperCase();
     _generation++;
     _searchId = DateTime.now().microsecondsSinceEpoch.toString();
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _foregroundSuspended =
+        lifecycle != null && lifecycle != AppLifecycleState.resumed;
     _turnstileRequestedForBooking = false;
     _turnstileWaitingForUi = false;
 
@@ -1083,14 +1096,34 @@ class MonitorService extends ChangeNotifier {
   void _scheduleNext() {
     _checkTimer?.cancel();
     _checkTimer = null;
-    if (!_isMonitoring || _disposed || backgroundWorker) return;
+    if (!_isMonitoring ||
+        _disposed ||
+        backgroundWorker ||
+        _foregroundSuspended) {
+      return;
+    }
     final delay = nextCheckDelay();
     _intervalSeconds = delay.inSeconds < 1 ? 1 : delay.inSeconds;
     _secondsUntilNextCheck = _intervalSeconds;
     _checkTimer = Timer(delay, _executeCheck);
   }
 
-  Future<void> _executeCheck() async {
+  Future<void> _executeCheck() {
+    final running = _activeCheck;
+    if (running != null) return running;
+    late final Future<void> request;
+    request = _executeAndSchedule().whenComplete(() {
+      if (identical(_activeCheck, request)) _activeCheck = null;
+      if (_recheckAfterVerification && !_disposed) {
+        _recheckAfterVerification = false;
+        scheduleMicrotask(checkNow);
+      }
+    });
+    _activeCheck = request;
+    return request;
+  }
+
+  Future<void> _executeAndSchedule() async {
     try {
       await _runCheck();
     } finally {
@@ -1146,7 +1179,11 @@ class MonitorService extends ChangeNotifier {
     final generation = _generation;
     try {
       // Check for held or pending reservation
-      final pendingReservation = await BookingService.pending();
+      // A saved active search is sufficient for a read-only iOS refresh.
+      // Booking state uses locked Keychain storage and belongs to foreground UI.
+      final pendingReservation = _iosBackgroundSearch
+          ? null
+          : await BookingService.pending();
       if (pendingReservation != null) {
         final expiry = DateTime.tryParse(
           '${pendingReservation['expiresAt'] ?? ''}',
@@ -1167,7 +1204,9 @@ class MonitorService extends ChangeNotifier {
           return;
         }
       }
-      var session = await AuthSession.load(background: backgroundWorker);
+      var session = await AuthSession.load(
+        background: backgroundWorker || _iosBackgroundSearch,
+      );
       if (session == null) {
         _lastError =
             'Not logged in. Please authenticate with Railway credentials.';
@@ -1305,7 +1344,8 @@ class MonitorService extends ChangeNotifier {
                   seatCount: seat.seatCounts.online,
                   travelDate: _dateOfJourney,
                   needsHumanVerification: true,
-                  automaticBooking: bookingIntent.autoReserve,
+                  automaticBooking:
+                      bookingIntent.autoReserve && !_iosBackgroundSearch,
                   bookingLink: NotificationService.bookingUrl(
                     _fromCity,
                     _toCity,
@@ -1344,13 +1384,15 @@ class MonitorService extends ChangeNotifier {
             !await _savedSearchIsActive()) {
           return;
         }
-        if (bookingIntent.autoReserve &&
+        if (!_iosBackgroundSearch &&
+            bookingIntent.autoReserve &&
             await BookingService.pending() == null) {
           int autoBookRetries = 0;
           const maxAutoBookRetries = 4;
           bool autoBookSuccess = false;
 
           while (autoBookRetries < maxAutoBookRetries &&
+              !_iosBackgroundSearch &&
               !autoBookSuccess &&
               _isMonitoring &&
               !_disposed &&
@@ -1504,10 +1546,6 @@ class MonitorService extends ChangeNotifier {
       notifyListeners();
     } finally {
       _checking = false;
-      if (_recheckAfterVerification && !_disposed) {
-        _recheckAfterVerification = false;
-        scheduleMicrotask(checkNow);
-      }
       if (!_disposed &&
           generation == _generation &&
           await _savedSearchIsActive()) {

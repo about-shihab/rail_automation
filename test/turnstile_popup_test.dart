@@ -53,7 +53,7 @@ void main() {
   });
 
   testWidgets(
-    'Notification tap starts the warm check immediately with loading',
+    'Notification tap starts silently and only prompts for interaction',
     (tester) async {
       final monitor = MonitorService(proService: ProService());
       addTearDown(monitor.dispose);
@@ -75,13 +75,17 @@ void main() {
       expect(TurnstileSession.instance.generating, isTrue);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 600));
-      expect(find.text('Checking access'), findsOneWidget);
+      expect(find.text('Checking access'), findsNothing);
+      expect(find.byType(TicketProcessingOverlay), findsNothing);
       expect(webview.creations, 1);
       expect(webview.controller.executions, 1);
       // Repeated delivery joins the ongoing check rather than executing again.
       NotificationService().openBooking('rail://turnstile');
       await tester.pump();
       expect(webview.controller.executions, 1);
+      webview.controller.send('{"status":"INTERACTIVE"}');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
       await tester.tap(find.byIcon(Icons.close_rounded));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox.shrink());

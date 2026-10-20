@@ -97,8 +97,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(platform.controller.executions, 1);
-    expect(find.text('Checking access'), findsOneWidget);
-    expect(find.byType(TicketProcessingOverlay), findsOneWidget);
+    expect(find.text('Checking access'), findsNothing);
+    expect(find.byType(TicketProcessingOverlay), findsNothing);
     platform.controller.send('{"status":"SUCCESS","token":"first-token"}');
     await tester.pump();
     await first;
@@ -185,7 +185,7 @@ void main() {
   });
 
   testWidgets(
-    'iOS local HTML callbacks return a seat-layout token while checking is visible',
+    'iOS keeps silent execution hidden and only reveals a genuine challenge',
     (tester) async {
       platform.origin = '';
       platform.loadUrl = 'about:blank';
@@ -198,6 +198,11 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 600));
       expect(platform.controller.executions, 1);
+      expect(find.text('Human verification').hitTestable(), findsNothing);
+      expect(find.text('Checking access'), findsNothing);
+      platform.controller.send('{"status":"INTERACTIVE"}');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
       expect(find.text('Human verification').hitTestable(), findsOneWidget);
       platform.controller.send(
         '{"status":"SUCCESS","bridgeId":"untrusted","token":"wrong"}',

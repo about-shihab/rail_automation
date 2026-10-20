@@ -122,7 +122,8 @@ class TurnstileGate {
     // Capture a pending silent execution before any async storage/navigation.
     // It may finish while the overlay is mounting; its result still belongs
     // to this request and must not start a second challenge.
-    final targetKey = siteKey ??
+    final targetKey =
+        siteKey ??
         (label == 'Railway login' ? '0x4AAAAAAB5VTjZ90pUxRuXR' : null);
     final session = TurnstileSession.instance;
     final pending = session.generating
@@ -141,6 +142,38 @@ class TurnstileGate {
     if (!canShowUi) return null;
 
     final request = pending ?? session.generateWhenAttached(targetKey);
+    // Execute in the retained browser without navigating or interrupting the
+    // current screen. Only an actual interactive challenge needs an overlay.
+    final interactive = Completer<void>();
+    void watchInteraction() {
+      if (session.phase == TurnstilePhase.interactive &&
+          !interactive.isCompleted) {
+        interactive.complete();
+      }
+    }
+
+    session.addListener(watchInteraction);
+    try {
+      watchInteraction();
+      final result = await Future.any<({bool interactive, String? token})>([
+        request.then((token) => (interactive: false, token: token)),
+        interactive.future.then((_) => (interactive: true, token: null)),
+      ]);
+      if (!result.interactive) return result.token;
+      if (!canShowUi) {
+        session.cancel();
+        return null;
+      }
+      return await _showInteraction(label, request);
+    } finally {
+      session.removeListener(watchInteraction);
+    }
+  }
+
+  Future<String?> _showInteraction(
+    String label,
+    Future<String?> request,
+  ) async {
     final nav = NotificationService.navigatorKey.currentState!;
     HapticFeedback.mediumImpact();
 
@@ -167,6 +200,9 @@ class TurnstileGate {
 
   /// Closes the overlay without a result (e.g. booking finished another way).
   void dismiss() {
+    if (_route == null && _inflight != null) {
+      TurnstileSession.instance.cancel();
+    }
     final r = _route;
     final n = _navigator;
     if (r != null && n != null && n.mounted && r.isActive) {

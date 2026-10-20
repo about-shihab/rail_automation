@@ -302,7 +302,7 @@ class RailApiClient {
       'X-Device-Key': auth.deviceKey,
       if (auth.cookie?.isNotEmpty == true) 'Cookie': auth.cookie!,
     });
-    if (authenticated) {
+    if (authenticated && !AuthSession.useBackgroundStorage) {
       final action = await SecureStore.read('rail_action_token');
       headers.removeWhere((key, _) => key.toLowerCase() == 'x-action-token');
       if (action?.isNotEmpty == true) headers['X-Action-Token'] = action!;

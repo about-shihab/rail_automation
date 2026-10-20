@@ -3,11 +3,13 @@ import UIKit
 import workmanager_apple
 import UserNotifications
 import QuickLook
+import BackgroundTasks
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var appChannel: FlutterMethodChannel?
   private var ticketPreviewURL: URL?
+  private var searchBackgroundTask: UIBackgroundTaskIdentifier = .invalid
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -43,6 +45,27 @@ import QuickLook
         let buildString = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "2"
         let build = Int(buildString) ?? 2
         result(["version": version, "build": build])
+      } else if call.method == "isSearchBackgroundScheduled" {
+        BGTaskScheduler.shared.getPendingTaskRequests { requests in
+          DispatchQueue.main.async {
+            result(requests.contains { $0.identifier == "com.example.rail_automation.ticketSearch" })
+          }
+        }
+      } else if call.method == "beginSearchBackgroundTask" {
+        guard let self = self else { result(nil); return }
+        self.endSearchBackgroundTask()
+        self.searchBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Finish train search") { [weak self] in
+          self?.endSearchBackgroundTask()
+        }
+        result(self.searchBackgroundTask == .invalid ? nil : Int(self.searchBackgroundTask.rawValue))
+      } else if call.method == "endSearchBackgroundTask" {
+        if let self = self,
+           let arguments = call.arguments as? [String: Any],
+           let identifier = arguments["id"] as? Int,
+           Int(self.searchBackgroundTask.rawValue) == identifier {
+          self.endSearchBackgroundTask()
+        }
+        result(nil)
       } else if call.method == "canDrawOverlays" {
         result(true)
       } else if call.method == "requestOverlayPermission" {
@@ -57,6 +80,13 @@ import QuickLook
         result(FlutterMethodNotImplemented)
       }
     }
+  }
+
+  private func endSearchBackgroundTask() {
+    guard searchBackgroundTask != .invalid else { return }
+    let task = searchBackgroundTask
+    searchBackgroundTask = .invalid
+    UIApplication.shared.endBackgroundTask(task)
   }
 
   private func saveAndOpenPdf(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

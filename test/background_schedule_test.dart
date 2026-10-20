@@ -125,6 +125,29 @@ void main() {
     expect(platform.periodicPolicies.single, ExistingPeriodicWorkPolicy.keep);
   });
 
+  test(
+    'iOS keeps a pending native refresh instead of postponing it on resume',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      const channel = MethodChannel('com.example.rail_automation/overlay');
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            expect(call.method, 'isSearchBackgroundScheduled');
+            return true;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      await BackgroundMonitor.schedule();
+      await BackgroundMonitor.schedule();
+      expect(platform.periodicDelays, isEmpty);
+      await BackgroundMonitor.schedule(replaceSchedule: true);
+      expect(platform.cancelled, [BackgroundMonitor.taskName]);
+      expect(platform.periodicDelays, hasLength(1));
+    },
+  );
+
   test('iOS restores an active search status and reports disabled notification permission', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     IOSFlutterLocalNotificationsPlugin.registerWith();

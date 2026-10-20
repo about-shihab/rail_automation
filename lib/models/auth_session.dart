@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../services/secure_store.dart';
@@ -119,6 +120,10 @@ class AuthSession {
 
   /// Set only inside the iOS Workmanager engine, never in the foreground UI.
   static bool iosBackgroundExecution = false;
+  static bool get useBackgroundStorage => _isIos &&
+      (iosBackgroundExecution ||
+       WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused ||
+       WidgetsBinding.instance.lifecycleState == AppLifecycleState.hidden);
   // Separate, device-bound session for iOS background refresh after the first
   // unlock since reboot. Saved passwords retain their existing locked policy.
   static const _iosBackgroundStorage = FlutterSecureStorage(
@@ -190,7 +195,7 @@ class AuthSession {
   }
 
   static Future<AuthSession?> load({bool background = false}) async {
-    final raw = _isIos && (background || iosBackgroundExecution)
+    final raw = _isIos && (background || useBackgroundStorage)
         ? await _iosBackgroundStorage.read(key: _prefKey)
         : await SecureStore.read(_prefKey);
     if (raw == null) return null;

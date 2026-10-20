@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'monitor_service.dart';
@@ -18,7 +19,12 @@ void callbackDispatcher() {
     final pro = ProService();
     final monitor = MonitorService(proService: pro, backgroundWorker: true);
     try {
-      await AppUpdateService.instance.refresh();
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        // Spend the short BGAppRefresh network budget on availability.
+        await AppUpdateService.instance.reloadCache();
+      } else {
+        await AppUpdateService.instance.refresh();
+      }
       await AppConfig.instance.reloadCache();
       await NotificationService().initialize(background: true);
       await monitor.restore(startTimers: false);
@@ -69,6 +75,17 @@ class BackgroundMonitor {
       // Existing installations must copy the session while the app is open;
       // the normal Keychain entry cannot be read after the screen locks.
       await AuthSession.prepareIosBackgroundAccess();
+      if (!replaceSchedule) {
+        try {
+          const channel = MethodChannel('com.example.rail_automation/overlay');
+          if (await channel.invokeMethod<bool>('isSearchBackgroundScheduled') ==
+              true) {
+            return; // App resumes must not postpone an already pending task.
+          }
+        } on MissingPluginException {
+          // Older native builds and test hosts use Workmanager directly.
+        }
+      }
     }
     if (replaceSchedule) {
       await Workmanager().cancelByUniqueName(taskName);
