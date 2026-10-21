@@ -58,6 +58,12 @@ Release builds require `android/key.properties` with `storeFile`, `storePassword
 | `scripts` | Version allocation, CI signing and public distribution bundling |
 | `test` | Booking, notification, browser, update and interface checks |
 
+## Building the iOS IPA
+
+Use macOS with Xcode 26 or newer selected. `workmanager_apple` 0.9.11 references iOS 26 SDK types, so Xcode 16 cannot compile it even though the app's minimum iOS version remains 16.0. Both GitHub Actions iOS jobs explicitly select Xcode 26.3 and verify the SDK before building.
+
+On a Mac, run `bash scripts/build_ios.sh` to build and package `build/ios/ipa/RailPro.ipa`. For a hosted build, run the **Standalone iOS IPA Build** workflow with `build_type: unsigned` and download the **RailPro-iOS-IPA** artifact. The unsigned IPA must be signed before installing on a device; Sideloadly or AltStore can handle signing during sideloading.
+
 ## Booking and verification
 
 Monitoring does not request Turnstile tokens. A retained invisible `InAppWebView` preloads the browser and widget; a fresh token is generated silently when a booking needs the seat-layout API. There is no access-check loading popup during silent execution. A checkbox appears only when Cloudflare requires interaction. Ordinary API loading stays separate from verification.

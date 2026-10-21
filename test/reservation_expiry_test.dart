@@ -38,6 +38,7 @@ void main() {
       fromCity: 'Dhaka',
       toCity: 'Chattogram',
       dateOfJourney: '2026-10-20',
+      departureTime: DateTime.now().add(const Duration(days: 3)),
       targetTrains: ['Subarna Express'],
       targetSeatClass: 'SNIGDHA',
     );
@@ -476,6 +477,7 @@ void main() {
       fromCity: 'Dhaka',
       toCity: 'Chattogram',
       dateOfJourney: '2026-10-20',
+      departureTime: DateTime.now().add(const Duration(days: 3)),
       targetTrains: ['Subarna Express'],
       targetSeatClass: 'SNIGDHA',
     );

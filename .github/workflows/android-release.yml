@@ -31,6 +31,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # workmanager_apple 0.9.11 references iOS 26 SDK types.
+      # The Intel runner defaults to Xcode 16.4, even with Xcode 26 installed.
+      - name: Select Xcode 26.3
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Verify iOS SDK
+        run: |
+          xcodebuild -version
+          SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          echo "iOS SDK: $SDK_VERSION"
+          if [ "${SDK_VERSION%%.*}" -lt 26 ]; then
+            echo "::error::workmanager_apple requires the iOS 26 SDK or newer. Select Xcode 26+."
+            exit 1
+          fi
+
       - name: Cache Flutter pub packages
         uses: actions/cache@v4
         with:
