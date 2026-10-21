@@ -160,6 +160,7 @@ class MonitorService extends ChangeNotifier {
     _targetSeatClass = null;
     bookingIntent = const BookingIntent();
     _lastTrains = [];
+    _viaJourneys = [];
     _lastError = null;
     _lastBookingError = null;
     _bookingNeedsVerification = false;
@@ -419,6 +420,7 @@ class MonitorService extends ChangeNotifier {
   String? _lastError;
   String? _lastBookingError;
   List<TrainTrip> _lastTrains = [];
+  List<IntermediateJourney> _viaJourneys = [];
   final List<MonitorLog> _logs = [];
 
   // Monitoring lasts until departure; waiting for sales does not count as checks.
@@ -731,6 +733,7 @@ class MonitorService extends ChangeNotifier {
   }
 
   List<TrainTrip> get lastTrains => List.unmodifiable(_lastTrains);
+  List<IntermediateJourney> get viaJourneys => List.unmodifiable(_viaJourneys);
   List<MonitorLog> get logs => List.unmodifiable(_logs);
 
   /// Parses departure date and time from various Bangladesh Railway formats.
@@ -949,6 +952,7 @@ class MonitorService extends ChangeNotifier {
     _startedAt = _now();
     _elapsedMonitoringSeconds = 0;
     _lastTrains = [];
+    _viaJourneys = [];
     backgroundError = null;
     _isMonitoring = true;
     _totalChecksCount = 0;
@@ -1386,6 +1390,11 @@ class MonitorService extends ChangeNotifier {
               previous: previous,
             );
           }
+        } else {
+          if (_viaJourneys.isNotEmpty) {
+            _viaJourneys = [];
+            notifyListeners();
+          }
         }
         if (!_isMonitoring ||
             _disposed ||
@@ -1587,6 +1596,8 @@ class MonitorService extends ChangeNotifier {
       return true;
     }).take(2).toList();
 
+    final List<IntermediateJourney> discovered = [];
+
     for (final train in trainsToCheck) {
       if (!_isMonitoring || _disposed) break;
       try {
@@ -1601,6 +1612,7 @@ class MonitorService extends ChangeNotifier {
         );
 
         if (viaResults.isNotEmpty) {
+          discovered.addAll(viaResults);
           final best = viaResults.first;
           final viaKey = 'via_${train.tripNumber}_${best.via}_${best.firstSeat.type}';
           current[viaKey] = best.seats;
@@ -1625,6 +1637,11 @@ class MonitorService extends ChangeNotifier {
       } catch (_) {
         // Silently continue if intermediate search is not applicable or busy
       }
+    }
+
+    if (discovered.isNotEmpty || _viaJourneys.isNotEmpty) {
+      _viaJourneys = discovered;
+      notifyListeners();
     }
   }
 

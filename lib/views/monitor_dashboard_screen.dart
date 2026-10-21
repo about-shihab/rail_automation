@@ -23,6 +23,14 @@ import '../widgets/fancy_train_loader.dart';
 import '../widgets/scenic_rail_header.dart';
 import '../services/turnstile_gate.dart';
 import '../utils/friendly_error.dart';
+import '../models/auth_session.dart';
+import '../models/seat_type.dart';
+import '../models/train_trip.dart';
+import '../services/intermediate_station_search.dart';
+import '../services/otp_verifier.dart';
+import 'intermediate_station_screen.dart';
+import '../services/login_flow.dart';
+import 'seat_booking_screen.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
 
@@ -367,6 +375,225 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     return _BookingStep.searching;
   }
 
+
+  Future<void> _handleAutoBookLeg({
+    required IntermediateJourney journey,
+    required bool isFirstLeg,
+    required String fromCity,
+    required String toCity,
+  }) async {
+    final leg = isFirstLeg ? journey.first : journey.second;
+    final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
+    final legFrom = isFirstLeg ? fromCity : journey.via;
+    final legTo = isFirstLeg ? journey.via : toCity;
+    final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
+
+    var session = await AuthSession.load();
+    if (session == null || !session.isValid) {
+      final ok = await LoginFlow.openManualLogin();
+      if (!ok) return;
+      session = await AuthSession.load();
+      if (session == null || !session.isValid) return;
+    }
+
+    final bookingTrain = TrainTrip(
+      tripNumber: leg.tripNumber,
+      departureDateTime: leg.departureDateTime,
+      departureFullDate: leg.departureFullDate,
+      departureDateTimeJd: leg.departureDateTimeJd,
+      arrivalDateTime: leg.arrivalDateTime,
+      travelTime: leg.travelTime,
+      originCityName: legFrom,
+      destinationCityName: legTo,
+      trainModel: leg.trainModel,
+      isOpenForAll: leg.isOpenForAll,
+      boardingPoints: leg.boardingPoints.isNotEmpty
+          ? leg.boardingPoints
+          : [
+              BoardingPoint(
+                locationName: legFrom,
+                locationTime: leg.departureDateTime,
+                locationDate: legDate,
+              ),
+            ],
+      seatTypes: [seat],
+    );
+
+    if (!mounted) return;
+    final lang = LanguageService.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          margin: const EdgeInsets.symmetric(horizontal: 32),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E293B) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.2),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                lang.tr(
+                  'Auto-booking $legFrom → $legTo...',
+                  '$legFrom → $legTo অটো-বুকিং হচ্ছে...',
+                ),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                  color: AppColors.textPrimary(isDark),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '${leg.tripNumber} • ${seat.displayName}',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted(isDark),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final reservation = await BookingService.reserve(
+        train: bookingTrain,
+        seat: seat,
+        from: legFrom,
+        to: legTo,
+        date: legDate,
+        auth: session,
+        quantity: 1,
+        isAutoBook: true,
+        allowVerificationPrompt: true,
+      );
+
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      await NotificationService().showReservation(reservation);
+      await OtpVerifier.listen();
+
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ReservationScreen()),
+        );
+        await _refresh();
+      }
+    } catch (err) {
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              friendlyErrorMessage(err.toString(), isBangla: lang.isBangla),
+            ),
+            backgroundColor: Colors.redAccent,
+            action: SnackBarAction(
+              label: lang.tr('Choose Seats', 'আসন বাছুন'),
+              textColor: Colors.white,
+              onPressed: () {
+                _openSeatBooking(bookingTrain, seat, legFrom, legTo, legDate, session!);
+              },
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleManualSeatSelect({
+    required IntermediateJourney journey,
+    required bool isFirstLeg,
+    required String fromCity,
+    required String toCity,
+  }) async {
+    final leg = isFirstLeg ? journey.first : journey.second;
+    final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
+    final legFrom = isFirstLeg ? fromCity : journey.via;
+    final legTo = isFirstLeg ? journey.via : toCity;
+    final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
+
+    var session = await AuthSession.load();
+    if (session == null || !session.isValid) {
+      final ok = await LoginFlow.openManualLogin();
+      if (!ok) return;
+      session = await AuthSession.load();
+      if (session == null || !session.isValid) return;
+    }
+
+    final bookingTrain = TrainTrip(
+      tripNumber: leg.tripNumber,
+      departureDateTime: leg.departureDateTime,
+      departureFullDate: leg.departureFullDate,
+      departureDateTimeJd: leg.departureDateTimeJd,
+      arrivalDateTime: leg.arrivalDateTime,
+      travelTime: leg.travelTime,
+      originCityName: legFrom,
+      destinationCityName: legTo,
+      trainModel: leg.trainModel,
+      isOpenForAll: leg.isOpenForAll,
+      boardingPoints: leg.boardingPoints.isNotEmpty
+          ? leg.boardingPoints
+          : [
+              BoardingPoint(
+                locationName: legFrom,
+                locationTime: leg.departureDateTime,
+                locationDate: legDate,
+              ),
+            ],
+      seatTypes: [seat],
+    );
+
+    _openSeatBooking(bookingTrain, seat, legFrom, legTo, legDate, session);
+  }
+
+  Future<void> _openSeatBooking(
+    TrainTrip train,
+    SeatType seat,
+    String from,
+    String to,
+    String date,
+    AuthSession session,
+  ) async {
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatBookingScreen(
+          train: train,
+          seatType: seat,
+          fromCity: from,
+          toCity: to,
+          dateOfJourney: date,
+          authSession: session,
+        ),
+      ),
+    );
+    await _refresh();
+  }
+
   @override
   Widget build(BuildContext context) {
     final m = context.watch<MonitorService>();
@@ -501,6 +728,44 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               isDark: isDark,
                             ),
                             const SizedBox(height: 12),
+                          ],
+
+                          
+                          // ── In-Between / Via Station Available Tickets ──
+                          if (m.viaJourneys.isNotEmpty && !isReservationExpired) ...[
+                            _ViaStationMonitorCard(
+                              viaJourneys: m.viaJourneys,
+                              fromCity: fromCity,
+                              toCity: toCity,
+                              dateOfJourney: dateOfJourney,
+                              isDark: isDark,
+                              pulseCtrl: _pulseCtrl,
+                              onAutoBookLeg: (journey, isFirstLeg) => _handleAutoBookLeg(
+                                journey: journey,
+                                isFirstLeg: isFirstLeg,
+                                fromCity: fromCity,
+                                toCity: toCity,
+                              ),
+                              onSelectSeatsLeg: (journey, isFirstLeg) => _handleManualSeatSelect(
+                                journey: journey,
+                                isFirstLeg: isFirstLeg,
+                                fromCity: fromCity,
+                                toCity: toCity,
+                              ),
+                              onOpenFullMatrix: (train) => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => IntermediateStationScreen(
+                                    train: train,
+                                    from: fromCity,
+                                    to: toCity,
+                                    date: dateOfJourney,
+                                    seatClass: m.targetSeatClass,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 14),
                           ],
 
                           // ── 2. Coupled Train Coach Route Tracker (4 Steps) ──
@@ -2945,3 +3210,372 @@ class _ReservationExpiredCard extends StatelessWidget {
 }
 
 
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-Between / Via Station Monitor Card
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ViaStationMonitorCard extends StatelessWidget {
+  final List<IntermediateJourney> viaJourneys;
+  final String fromCity;
+  final String toCity;
+  final String dateOfJourney;
+  final bool isDark;
+  final AnimationController pulseCtrl;
+  final void Function(IntermediateJourney journey, bool isFirstLeg) onAutoBookLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg) onSelectSeatsLeg;
+  final void Function(TrainTrip train) onOpenFullMatrix;
+
+  const _ViaStationMonitorCard({
+    required this.viaJourneys,
+    required this.fromCity,
+    required this.toCity,
+    required this.dateOfJourney,
+    required this.isDark,
+    required this.pulseCtrl,
+    required this.onAutoBookLeg,
+    required this.onSelectSeatsLeg,
+    required this.onOpenFullMatrix,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final borderColor = isDark
+        ? const Color(0xFF10B981).withValues(alpha: 0.35)
+        : const Color(0xFF10B981).withValues(alpha: 0.45);
+    final bgColor = isDark
+        ? const Color(0xFF062319)
+        : const Color(0xFFF0FDF4);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor, width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withValues(alpha: 0.08),
+            blurRadius: 12,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Badge
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(7),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.alt_route_rounded,
+                  color: Color(0xFF10B981),
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lang.tr(
+                        'In-Between Station Tickets Available',
+                        'বিকল্প রুট আসন পাওয়া গেছে',
+                      ),
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: isDark ? Colors.white : const Color(0xFF065F46),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      lang.tr(
+                        'Direct tickets are sold out. Book via intermediate stops below:',
+                        'সরাসরি টিকিট শেষ। নিচে বিকল্প স্টেশন হয়ে বুক করুন:',
+                      ),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF047857),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Discovered Via Journeys
+          ...viaJourneys.take(3).map((journey) {
+            final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0;
+            final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0;
+            final totalFare = fare1 + fare2;
+
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Train Info & Via Badge
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          journey.first.tripNumber,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'Via ${journey.via}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF10B981),
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      if (totalFare > 0)
+                        Text(
+                          '৳${totalFare.toStringAsFixed(0)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: isDark ? Colors.white : AppColors.lightTextPrimary,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Leg 1 Card
+                  _buildLegSection(
+                    context: context,
+                    lang: lang,
+                    isDark: isDark,
+                    title: '${lang.tr("Leg 1", "১ম অংশ")}: $fromCity ➔ ${journey.via}',
+                    time: '${IntermediateStationSearch.cleanTime(journey.first.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.first.arrivalDateTime)}',
+                    seatClass: journey.firstSeat.displayName,
+                    seats: journey.firstSeat.seatCounts.online,
+                    onAutoBook: () => onAutoBookLeg(journey, true),
+                    onSelectSeats: () => onSelectSeatsLeg(journey, true),
+                  ),
+
+                  // Layover Station Indicator
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 1,
+                          height: 14,
+                          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.swap_vert_rounded,
+                          size: 14,
+                          color: Color(0xFF10B981),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${lang.tr("Transfer / Layover at", "যাত্রাবিরতি")}: ${journey.via}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Leg 2 Card
+                  _buildLegSection(
+                    context: context,
+                    lang: lang,
+                    isDark: isDark,
+                    title: '${lang.tr("Leg 2", "২য় অংশ")}: ${journey.via} ➔ $toCity',
+                    time: '${IntermediateStationSearch.cleanTime(journey.second.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.second.arrivalDateTime)}',
+                    seatClass: journey.secondSeat.displayName,
+                    seats: journey.secondSeat.seatCounts.online,
+                    onAutoBook: () => onAutoBookLeg(journey, false),
+                    onSelectSeats: () => onSelectSeatsLeg(journey, false),
+                  ),
+
+                  const SizedBox(height: 8),
+                  // Open full matrix button
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      ),
+                      onPressed: () => onOpenFullMatrix(journey.first),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 13),
+                      label: Text(
+                        lang.tr('All Via Options', 'সব বিকল্প অপশন'),
+                        style: const TextStyle(fontSize: 11),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegSection({
+    required BuildContext context,
+    required LanguageService lang,
+    required bool isDark,
+    required String title,
+    required String time,
+    required String seatClass,
+    required int seats,
+    required VoidCallback onAutoBook,
+    required VoidCallback onSelectSeats,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark
+            ? const Color(0xFF1E293B).withValues(alpha: 0.5)
+            : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: isDark ? Colors.white : AppColors.lightTextPrimary,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  '$seats ${lang.tr("seats", "আসন")}',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFF10B981),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          Text(
+            '$seatClass • $time',
+            style: TextStyle(
+              fontSize: 10.5,
+              color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: onAutoBook,
+                  icon: const Icon(Icons.bolt_rounded, size: 14),
+                  label: Text(
+                    lang.tr('Auto Book', 'অটো বুক'),
+                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: isDark ? Colors.white70 : AppColors.lightTextPrimary,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    side: BorderSide(
+                      color: isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  onPressed: onSelectSeats,
+                  child: Text(
+                    lang.tr('Select Seats', 'আসন বাছুন'),
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
