@@ -9,8 +9,9 @@ import 'secure_store.dart';
 import 'seat_layout_challenge.dart';
 import 'turnstile_session.dart';
 
-/// Coordinates one in-app verification overlay for a pending seat-layout read.
-/// Unsubmitted tokens may be cached briefly; submitted tokens are consumed.
+/// Coordinates in-app verification for seat-layout reads.
+/// Tokens are solved silently in the background while the app is open and are
+/// valid for 5 minutes so users are not repeatedly prompted.
 class TurnstileGate {
   bool get isPresenting => _route?.isActive ?? false;
   TurnstileGate._();
@@ -19,9 +20,8 @@ class TurnstileGate {
   static const _tokenKey = 'rail_cft_token';
   static const _timeKey = 'rail_cft_token_time';
 
-  /// Cloudflare tokens live 300 s. Refresh a little early so a token never
-  /// expires halfway through a booking request.
-  static const maxTokenAge = Duration(seconds: 240);
+  /// Cloudflare Turnstile tokens are valid for 5 minutes.
+  static const maxTokenAge = Duration(minutes: 5);
 
   static bool isChallengeError(Object error) => error is SeatLayoutChallenge;
 
@@ -86,14 +86,31 @@ class TurnstileGate {
     }
   }
 
+  /// Silently solve a verification token in the background while the app is open.
+  /// Valid for 5 minutes. Never presents any UI unless an interaction is required.
+  void warmInBackground() {
+    if (!canShowUi || isShowing) return;
+    unawaited(() async {
+      try {
+        final existing = await cachedToken();
+        if (existing != null && existing.isNotEmpty) return;
+        final token = await acquire(label: 'Verification', forceFresh: false);
+        if (token != null && token.isNotEmpty) {
+          await storeToken(token);
+        }
+      } catch (_) {
+        // Silent background warm; keep app undisturbed
+      }
+    }());
+  }
+
   // ── Acquire ──────────────────────────────────────────────────────────────
 
   /// Returns a usable token.
   ///  * [forceFresh] false → a still-valid cached token is returned instantly,
   ///    no UI at all.
   ///  * [forceFresh] true → execute the preloaded widget for this booking.
-  /// Returns null when the user cancelled or the UI isn't available
-  /// (app in background → caller should fall back to a notification).
+  /// Returns null when the user cancelled or the UI isn't available.
   Future<String?> acquire({
     String label = '',
     bool forceFresh = false,
@@ -120,8 +137,6 @@ class TurnstileGate {
     String? siteKey,
   ]) async {
     // Capture a pending silent execution before any async storage/navigation.
-    // It may finish while the overlay is mounting; its result still belongs
-    // to this request and must not start a second challenge.
     final targetKey =
         siteKey ??
         (label == 'Railway login' ? '0x4AAAAAAB5VTjZ90pUxRuXR' : null);
@@ -153,6 +168,10 @@ class TurnstileGate {
     }
 
     session.addListener(watchInteraction);
+    if (session.phase == TurnstilePhase.interactive &&
+        !interactive.isCompleted) {
+      interactive.complete();
+    }
     try {
       watchInteraction();
       final result = await Future.any<({bool interactive, String? token})>([
@@ -212,9 +231,9 @@ class TurnstileGate {
     }
   }
 
-  /// Generate just before the seat-layout read and submit exactly once.
-  /// Never wrap reservation or OTP mutations. Rejections require an explicit
-  /// user retry; a rejected fresh token must not trigger another challenge.
+  /// Generate just before the seat-layout read.
+  /// If a valid token was already pre-solved in the background (< 5 min),
+  /// it is used immediately without showing any challenge to the user.
   Future<T> guardSeatLayout<T>({
     String label = '',
     bool allowPrompt = true,
@@ -238,8 +257,6 @@ class TurnstileGate {
     required bool allowPrompt,
     required Future<T> Function(String? token) run,
   }) async {
-    // A cached token here is an unsubmitted handoff from the foreground UI,
-    // never a token generated during idle monitoring.
     final handedOff = await takeCachedToken();
     workerPromptPresented = false;
     final token =
@@ -256,6 +273,7 @@ class TurnstileGate {
     try {
       return await run(token);
     } on SeatLayoutChallenge {
+      await invalidate();
       throw const SeatLayoutChallenge(verificationAttempted: true);
     }
   }

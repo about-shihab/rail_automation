@@ -63,9 +63,6 @@ class _TurnstileHostState extends State<TurnstileHost> {
       controller.addJavaScriptHandler(
         handlerName: 'TurnstileBridge',
         callback: (JavaScriptHandlerFunctionData data) {
-          // WKWebView can report an empty security origin for loadHTMLString.
-          // Authenticate our local document with a per-host bridge ID instead
-          // of discarding its READY/SUCCESS messages or trusting arbitrary frames.
           if (!data.isMainFrame ||
               (_isIos
                   ? !_localDocumentReady
@@ -95,8 +92,6 @@ class _TurnstileHostState extends State<TurnstileHost> {
       }
       if (_isLocalDocument(url?.toString())) {
         _localDocumentReady = true;
-        // Only attach after the HTML and native bridge are available. In iOS
-        // onWebViewCreated can precede the initial document navigation.
         session.attach((source) => _evaluate(controller, source));
         try {
           await _evaluate(controller, TurnstileSession.bootstrap);

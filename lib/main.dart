@@ -1,3 +1,4 @@
+import 'services/turnstile_gate.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -123,7 +124,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       if (!mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !AppUpdateService.instance.required) {
-          monitor.resumePendingTurnstile();
+          TurnstileGate.instance.warmInBackground();
         }
       });
     } finally {
@@ -197,7 +198,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || AppUpdateService.instance.required) return;
       NotificationService().openPendingBooking();
-      monitor.resumePendingTurnstile();
+      TurnstileGate.instance.warmInBackground();
     });
 
     return MaterialApp(
