@@ -634,6 +634,15 @@ class NotificationService {
             enableVibration: true,
           ),
           const AndroidNotificationChannel(
+            'br_reservations_v3',
+            'Reserved tickets (High Alert)',
+            description: 'Reservation and OTP alerts with loud train whistle',
+            importance: Importance.max,
+            sound: RawResourceAndroidNotificationSound('seat_found'),
+            playSound: true,
+            enableVibration: true,
+          ),
+          const AndroidNotificationChannel(
             'br_booking_success',
             'Booking Success',
             description: 'Ticket purchase confirmation alerts',
@@ -715,11 +724,7 @@ class NotificationService {
     final bn = await prefersBangla();
     final isHumanCheck =
         needsHumanVerification || bookingLink == 'rail://turnstile';
-    final title = isHumanCheck
-        ? (bn
-              ? 'বুকিং সম্পন্ন করতে অ্যাপ খুলুন'
-              : 'To complete booking, open app')
-        : reservationHeld
+    final title = reservationHeld
         ? (bn
               ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · আসন সংরক্ষিত'
               : 'Seats held · Booking in progress')
