@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/models/train_trip.dart';
 import 'package:rail_automation/services/intermediate_station_search.dart';
+import 'package:rail_automation/services/rail_request_pacer.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -32,6 +34,7 @@ void main() {
     {'city': 'After', 'departure_time': '03:00'},
   ];
   setUp(() {
+    TrainRouteCache.clear();
     SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
     FlutterSecureStorage.setMockInitialValues({});
   });
@@ -95,7 +98,7 @@ void main() {
     );
     expect(
       calls.length,
-      cancel || firstSeats == 0 || selected == 'SNIGDHA' ? (cancel ? 1 : 2) : 3,
+      cancel || firstSeats == 0 || selected == 'SNIGDHA' ? (cancel ? 0 : 2) : 3,
     );
     return results;
   }
@@ -143,4 +146,230 @@ void main() {
       throwsStateError,
     );
   });
+
+  test(
+    'concurrent route loads share one request and reuse the successful cache',
+    () async {
+      var calls = 0;
+      final response = Completer<http.Response>();
+      Future<List<RouteStation>> load() =>
+          IntermediateStationSearch.fetchTrainRouteStations(
+            trainModel: '100',
+            departureDate: '21-Oct-2026',
+            auth: auth,
+          );
+      await http.runWithClient(
+        () async {
+          final first = load();
+          final second = load();
+          await Future<void>.delayed(Duration.zero);
+          expect(calls, 1);
+          response.complete(
+            http.Response(
+              jsonEncode({
+                'data': {'routes': routes},
+              }),
+              200,
+            ),
+          );
+          final results = await Future.wait([first, second]);
+          expect(results.every((stops) => stops.length == 5), isTrue);
+          expect(await load(), hasLength(5));
+          expect(calls, 1);
+        },
+        () => MockClient((_) {
+          calls++;
+          return response.future;
+        }),
+      );
+    },
+  );
+
+  test(
+    'failed route load has no direct fallback and a later retry succeeds',
+    () async {
+      var calls = 0;
+      await http.runWithClient(
+        () async {
+          Future<List<RouteStation>> load() =>
+              IntermediateStationSearch.fetchTrainRouteStations(
+                trainModel: '100',
+                departureDate: '21-Oct-2026',
+                auth: auth,
+              );
+          await expectLater(load(), throwsStateError);
+          expect(calls, 1);
+          expect(await load(), hasLength(5));
+          expect(calls, 2);
+        },
+        () => MockClient((_) async {
+          calls++;
+          return calls == 1
+              ? http.Response('{}', 503)
+              : http.Response(
+                  jsonEncode({
+                    'data': {'routes': routes},
+                  }),
+                  200,
+                );
+        }),
+      );
+    },
+  );
+
+  test('a route 429 is reported without an unpaced fallback', () async {
+    var calls = 0;
+    await http.runWithClient(
+      () async {
+        await expectLater(
+          IntermediateStationSearch.fetchTrainRouteStations(
+            trainModel: '100',
+            departureDate: '21-Oct-2026',
+            auth: auth,
+          ),
+          throwsA(isA<RailwayRateLimited>()),
+        );
+        expect(calls, 1);
+      },
+      () => MockClient((_) async {
+        calls++;
+        return http.Response('Too many requests', 429);
+      }),
+    );
+  });
+
+  test('empty routes are not cached as a successful load', () async {
+    var calls = 0;
+    await http.runWithClient(
+      () async {
+        for (var i = 0; i < 2; i++) {
+          await expectLater(
+            IntermediateStationSearch.fetchTrainRouteStations(
+              trainModel: '100',
+              departureDate: '21-Oct-2026',
+              auth: auth,
+            ),
+            throwsStateError,
+          );
+        }
+        expect(calls, 2);
+      },
+      () => MockClient((_) async {
+        calls++;
+        return http.Response('{"data":{"routes":[]}}', 200);
+      }),
+    );
+  });
+
+  final stations = [
+    for (var i = 0; i < routes.length; i++) RouteStation.fromJson(routes[i], i),
+  ];
+  final target = TrainTrip.fromJson(train([seat('S_CHAIR', 1, 0)]));
+  Future<StationPairAvailability> pair({String? seatClass}) =>
+      IntermediateStationSearch.searchStationPair(
+        from: stations[1],
+        to: stations[3],
+        date: '21-Oct-2026',
+        targetTrain: target,
+        auth: auth,
+        seatClass: seatClass,
+      );
+
+  test(
+    'station-pair network errors remain errors rather than sold-out results',
+    () async {
+      await http.runWithClient(
+        () => expectLater(pair(), throwsException),
+        () => MockClient((_) async => http.Response('{}', 503)),
+      );
+    },
+  );
+
+  test('station-pair results never substitute an unrelated train', () async {
+    await http.runWithClient(
+      () async {
+        final result = await pair();
+        expect(result.train, isNull);
+        expect(result.hasSeats, isFalse);
+      },
+      () => MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'data': {
+              'trains': [
+                {
+                  'trip_number': 'OTHER (200)',
+                  'train_model': '200',
+                  'seat_types': [seat('S_CHAIR', 9, 6)],
+                },
+              ],
+            },
+          }),
+          200,
+        ),
+      ),
+    );
+  });
+
+  test('station-pair availability counts only the requested class', () async {
+    await http.runWithClient(
+      () async {
+        final result = await pair(seatClass: 'S_CHAIR');
+        expect(result.totalSeats, 2);
+        expect(result.seatTypes.single.type, 'S_CHAIR');
+      },
+      () => MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'data': {
+              'trains': [
+                train([seat('S_CHAIR', 1, 2), seat('SNIGDHA', 2, 10)]),
+              ],
+            },
+          }),
+          200,
+        ),
+      ),
+    );
+  });
+
+  test(
+    'station matching normalizes separators without matching partial names',
+    () {
+      final list = [
+        RouteStation.fromJson({'city': 'Dhaka_Airport'}, 0),
+        RouteStation.fromJson({'city': 'Dhaka'}, 1),
+      ];
+      expect(IntermediateStationSearch.findStationIndex(list, ' dhaka '), 1);
+      expect(
+        IntermediateStationSearch.findStationIndex(list, 'DHAKA  AIRPORT'),
+        0,
+      );
+      expect(IntermediateStationSearch.findStationIndex(list, ''), -1);
+    },
+  );
+
+  test(
+    'segment boarding date follows midnight and the original boarding station',
+    () {
+      expect(
+        IntermediateStationSearch.boardingDate(
+          stations: stations,
+          boarding: stations[2],
+          referenceStation: 'From',
+          date: '21-Oct-2026',
+        ),
+        '22-Oct-2026',
+      );
+      expect(
+        IntermediateStationSearch.boardingDate(
+          stations: stations,
+          boarding: stations[1],
+          referenceStation: 'Via',
+          date: '22-Oct-2026',
+        ),
+        '21-Oct-2026',
+      );
+    },
+  );
 }

@@ -15,6 +15,7 @@ import '../models/train_trip.dart';
 import '../models/seat_layout.dart';
 
 class ApiService {
+  static final _searchRequests = <String, Future<TripSearchResponse>>{};
   static String requestSeatClass(String? value) {
     final normalized = value?.trim().toUpperCase();
     return normalized == null ||
@@ -77,10 +78,24 @@ class ApiService {
       }
     }
 
-    if (silent) {
-      return perform();
-    }
-    return BookingActivity.instance.run(BookingActivityStage.searching, perform);
+    final key = jsonEncode([
+      authSession.token,
+      authSession.deviceId,
+      fromCity.trim().toLowerCase(),
+      toCity.trim().toLowerCase(),
+      dateOfJourney.trim().toLowerCase(),
+      requestSeatClass(seatClass),
+    ]);
+    Future<TripSearchResponse> shared() =>
+        _searchRequests.putIfAbsent(key, () async {
+          try {
+            return await perform();
+          } finally {
+            _searchRequests.remove(key);
+          }
+        });
+    if (silent) return shared();
+    return BookingActivity.instance.run(BookingActivityStage.searching, shared);
   }
 
   /// Provides realistic Bangladesh Railway train trips matching the official Shohoz search-trips-v2 schema.
@@ -478,13 +493,11 @@ class ApiService {
         if (response.statusCode == 401) {
           throw Exception('Railway session expired • Please sign in again');
         }
-        final challenge = RegExp(
-          r'turnstile|cft_response|human check|human verification',
-          caseSensitive: false,
-        ).hasMatch(response.body);
-        if (challenge &&
-            (response.statusCode == 403 || response.statusCode == 422)) {
-          throw const SeatLayoutChallenge();
+        if (SeatLayoutChallenge.isTokenRejection(
+          response.statusCode,
+          response.body,
+        )) {
+          throw const SeatLayoutChallenge(tokenRejected: true);
         }
         if (response.statusCode == 429) {
           throw Exception('Railway server busy (429) • Please wait a moment');
@@ -504,6 +517,12 @@ class ApiService {
       if (decoded is! Map<String, dynamic> ||
           decoded['data'] is! Map ||
           decoded['data']['seatLayout'] is! List) {
+        if (SeatLayoutChallenge.isTokenRejection(
+          response.statusCode,
+          response.body,
+        )) {
+          throw const SeatLayoutChallenge(tokenRejected: true);
+        }
         throw const FormatException(
           'Railway did not return a seat layout. Open the official booking page to continue.',
         );

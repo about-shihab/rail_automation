@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../services/login_flow.dart';
 
 import 'package:flutter/material.dart';
@@ -9,6 +11,8 @@ import '../models/seat_type.dart';
 import '../models/seat_layout.dart';
 import '../services/app_config.dart';
 import '../services/booking_service.dart';
+import '../services/seat_layout_challenge.dart';
+import '../services/seat_layout_continuation.dart';
 import '../services/monitor_service.dart';
 import '../services/notification_service.dart';
 import '../services/otp_verifier.dart';
@@ -24,6 +28,12 @@ class SeatBookingScreen extends StatefulWidget {
   final SeatType seatType;
   final String fromCity, toCity, dateOfJourney;
   final AuthSession authSession;
+  final String? continuationId;
+  static final _openContinuations = <String, VoidCallback>{};
+  static bool get hasOpenContinuation => _openContinuations.isNotEmpty;
+  static bool isContinuationOpen(String id) =>
+      _openContinuations.containsKey(id);
+  static void retryContinuation(String id) => _openContinuations[id]?.call();
 
   const SeatBookingScreen({
     super.key,
@@ -33,13 +43,15 @@ class SeatBookingScreen extends StatefulWidget {
     required this.toCity,
     required this.dateOfJourney,
     required this.authSession,
+    this.continuationId,
   });
 
   @override
   State<SeatBookingScreen> createState() => _SeatBookingScreenState();
 }
 
-class _SeatBookingScreenState extends State<SeatBookingScreen> {
+class _SeatBookingScreenState extends State<SeatBookingScreen>
+    with WidgetsBindingObserver {
   SeatLayoutResponse? _layout;
   BookingLayout? _preparedLayout;
   String? _error;
@@ -48,12 +60,101 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
   final Set<SeatItem> _selected = {};
 
   late SeatType _effectiveSeatType;
+  late final SeatLayoutContinuation _continuation;
+  bool _resumeRequested = false;
+  bool _retryWhenIdle = false;
+  bool _notified = false;
+  Future<void>? _deferral;
+
+  bool get _foreground {
+    final life = WidgetsBinding.instance.lifecycleState;
+    return life == null || life == AppLifecycleState.resumed;
+  }
 
   @override
   void initState() {
     super.initState();
     _effectiveSeatType = _resolveSeatType(widget.seatType, widget.train);
+    _continuation = SeatLayoutContinuation(
+      id: widget.continuationId ?? AuthSession.generateUuid(),
+      train: widget.train,
+      seat: _effectiveSeatType,
+      from: widget.fromCity,
+      to: widget.toCity,
+      date: widget.dateOfJourney,
+      account: SeatLayoutContinuation.accountFor(widget.authSession),
+      createdAt: DateTime.now(),
+    );
+    SeatBookingScreen._openContinuations[_continuation.id] =
+        _retryFromForeground;
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    SeatBookingScreen._openContinuations.remove(_continuation.id);
+    if (_foreground) unawaited(_clearContinuation());
+    super.dispose();
+  }
+
+  Future<void> _clearContinuation({bool waitForDeferral = true}) async {
+    final deferred = _deferral;
+    if (waitForDeferral && deferred != null) await deferred;
+    if (await SeatLayoutContinuation.clear(_continuation.id)) {
+      await NotificationService().clearSeatLayoutRequired();
+    }
+  }
+
+  void _retryFromForeground() {
+    if (!mounted || !_foreground) return;
+    if (_busy) {
+      _retryWhenIdle = true;
+    } else {
+      unawaited(_load());
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused && _busy && _layout == null) {
+      unawaited(_deferUntilForeground());
+    } else if (state == AppLifecycleState.resumed && _resumeRequested) {
+      _retryFromForeground();
+    }
+  }
+
+  Future<void> _deferUntilForeground() {
+    final running = _deferral;
+    if (running != null) return running;
+    late final Future<void> request;
+    request = _saveDeferred().whenComplete(() {
+      if (identical(_deferral, request)) _deferral = null;
+    });
+    _deferral = request;
+    return request;
+  }
+
+  Future<void> _saveDeferred() async {
+    _resumeRequested = true;
+    await _continuation.save();
+    if (!mounted && _foreground) {
+      await _clearContinuation(waitForDeferral: false);
+      return;
+    }
+    if (!_notified) {
+      _notified = await NotificationService().showSeatLayoutRequired(
+        _continuation,
+      );
+    }
+    if (mounted) {
+      setState(
+        () => _error = friendlyErrorMessage(
+          const SeatLayoutChallenge(requiresForeground: true),
+        ),
+      );
+    }
   }
 
   static SeatType _resolveSeatType(SeatType initial, TrainTrip train) {
@@ -87,7 +188,18 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
       _busy = true;
       _error = null;
     });
+    _resumeRequested = false;
+    _retryWhenIdle = false;
     try {
+      await _continuation.save();
+      if (!mounted) {
+        if (_foreground) await _clearContinuation();
+        return;
+      }
+      if (!_foreground) {
+        await _deferUntilForeground();
+        return;
+      }
       if (_effectiveSeatType.tripId == null ||
           _effectiveSeatType.tripRouteId == null) {
         throw StateError('Missing trip information');
@@ -97,6 +209,11 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         seat: _effectiveSeatType,
         auth: widget.authSession,
       );
+      if (!_foreground) {
+        await _deferUntilForeground();
+        return;
+      }
+      await _clearContinuation();
       if (mounted) {
         setState(() {
           _preparedLayout = prepared;
@@ -105,7 +222,11 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         });
       }
     } catch (e) {
-      final errStr = e.toString().replaceAll('Exception: ', '');
+      if (!mounted) return;
+      if (!_foreground || (e is SeatLayoutChallenge && e.requiresForeground)) {
+        await _deferUntilForeground();
+        return;
+      }
       if (LoginFlow.needsLogin(e) && mounted) {
         await AuthSession.clear();
         if (mounted) {
@@ -119,9 +240,14 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
         }
         return;
       }
-      if (mounted) setState(() => _error = friendlyErrorMessage(errStr));
+      if (mounted) setState(() => _error = friendlyErrorMessage(e));
     } finally {
       if (mounted) setState(() => _busy = false);
+      if (mounted && _retryWhenIdle && _foreground && _layout == null) {
+        _retryWhenIdle = false;
+        _resumeRequested = false;
+        scheduleMicrotask(_load);
+      }
     }
   }
 

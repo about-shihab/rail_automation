@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +10,7 @@ import '../models/train_trip.dart';
 import '../services/intermediate_station_search.dart';
 import '../services/language_service.dart';
 import '../services/login_flow.dart';
+import '../services/rail_api_client.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
 import 'seat_booking_screen.dart';
@@ -39,6 +42,15 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
   AuthSession? _auth;
   bool _loading = true;
   String? _error;
+  bool _initializing = false;
+  bool _routeLoading = false;
+  String? _routeError;
+  bool _cancelled = false;
+  int _checkedStops = 0;
+  int _totalStops = 0;
+  String _currentStation = '';
+  Timer? _cooldownTimer;
+  int _cooldownSeconds = 0;
 
   List<RouteStation> _routeStations = [];
   List<IntermediateJourney> _splitJourneys = [];
@@ -56,7 +68,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (_tabController.index == 1) {
-        _ensureRouteStationsLoaded();
+        _cancelled = true;
+      }
+    });
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final seconds = (RailApiClient.cooldownRemaining.inMilliseconds / 1000)
+          .ceil();
+      if (mounted && seconds != _cooldownSeconds) {
+        setState(() => _cooldownSeconds = seconds);
       }
     });
     _initialize();
@@ -64,14 +83,23 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
 
   @override
   void dispose() {
+    _cancelled = true;
+    _cooldownTimer?.cancel();
     _tabController.dispose();
     super.dispose();
   }
 
   Future<void> _initialize() async {
+    if (_initializing || _cooldownSeconds > 0) return;
+    _initializing = true;
+    _cancelled = false;
     setState(() {
       _loading = true;
       _error = null;
+      _checkedStops = 0;
+      _totalStops = 0;
+      _currentStation = '';
+      _splitJourneys = [];
     });
 
     try {
@@ -80,6 +108,11 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
         throw StateError('Please log in to search intermediate stations.');
       }
 
+      await _ensureRouteStationsLoaded();
+      if (!mounted || _routeStations.isEmpty) {
+        if (mounted) _error = _routeError;
+        return;
+      }
       final results = await IntermediateStationSearch.search(
         train: widget.train,
         from: widget.from,
@@ -87,7 +120,18 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
         date: widget.date,
         auth: _auth!,
         seatClass: widget.seatClass,
-        cancelled: () => !mounted,
+        cancelled: () => !mounted || _cancelled,
+        onProgress: (checked, total, station) {
+          if (!mounted) return;
+          setState(() {
+            _checkedStops = checked;
+            _totalStops = total;
+            _currentStation = station;
+          });
+        },
+        onResults: (results) {
+          if (mounted) setState(() => _splitJourneys = results);
+        },
       );
       if (mounted) {
         setState(() {
@@ -97,12 +141,17 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     } catch (e) {
       if (mounted) _error = friendlyErrorMessage(e);
     } finally {
+      _initializing = false;
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _ensureRouteStationsLoaded() async {
-    if (_routeStations.isNotEmpty) return;
+    if (_routeStations.isNotEmpty || _routeLoading) return;
+    setState(() {
+      _routeLoading = true;
+      _routeError = null;
+    });
     try {
       final model = IntermediateStationSearch.extractTrainModel(widget.train);
       final stations = await IntermediateStationSearch.fetchTrainRouteStations(
@@ -113,19 +162,34 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
       if (mounted) {
         setState(() {
           _routeStations = stations;
-          final startIdx =
-              IntermediateStationSearch.findStationIndex(stations, widget.from);
-          final endIdx =
-              IntermediateStationSearch.findStationIndex(stations, widget.to);
+          final startIdx = IntermediateStationSearch.findStationIndex(
+            stations,
+            widget.from,
+          );
+          final endIdx = IntermediateStationSearch.findStationIndex(
+            stations,
+            widget.to,
+          );
           if (startIdx >= 0) _selectedFromStation = stations[startIdx];
           if (endIdx >= 0) _selectedToStation = stations[endIdx];
         });
       }
-    } catch (_) {}
+    } catch (error) {
+      if (mounted) setState(() => _routeError = friendlyErrorMessage(error));
+    } finally {
+      if (mounted) setState(() => _routeLoading = false);
+    }
   }
 
   Future<void> _checkSelectedSegment() async {
-    if (_selectedFromStation == null || _selectedToStation == null) return;
+    if (_checkingSegment ||
+        _cooldownSeconds > 0 ||
+        _selectedFromStation == null ||
+        _selectedToStation == null) {
+      return;
+    }
+    final from = _selectedFromStation!;
+    final to = _selectedToStation!;
     if (_auth == null) {
       final loggedIn = await LoginFlow.openManualLogin();
       if (!loggedIn || !mounted) return;
@@ -141,9 +205,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
 
     try {
       final res = await IntermediateStationSearch.searchStationPair(
-        from: _selectedFromStation!,
-        to: _selectedToStation!,
-        date: widget.date,
+        from: from,
+        to: to,
+        date: IntermediateStationSearch.boardingDate(
+          stations: _routeStations,
+          boarding: from,
+          referenceStation: widget.from,
+          date: widget.date,
+        ),
         targetTrain: widget.train,
         auth: _auth!,
         seatClass: widget.seatClass,
@@ -181,7 +250,13 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     );
   }
 
-  Future<void> _bookLegDirect(TrainTrip legTrain, SeatType seat, String legFrom, String legTo, String legDate) async {
+  Future<void> _bookLegDirect(
+    TrainTrip legTrain,
+    SeatType seat,
+    String legFrom,
+    String legTo,
+    String legDate,
+  ) async {
     HapticFeedback.selectionClick();
     var auth = _auth ?? await AuthSession.load();
     if (auth == null || !auth.isLoggedIn) {
@@ -234,6 +309,8 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           children: [
             Text(
               widget.train.tripNumber,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
             ),
             Text(
@@ -251,28 +328,51 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           indicatorWeight: 3,
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
-          labelStyle: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          labelStyle: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 13,
+          ),
           tabs: [
             Tab(
               icon: const Icon(Icons.alt_route_rounded, size: 20),
-              text: lang.tr('Split Tickets', 'ব্রেক জার্নি'),
+              text: lang.tr('Two-ticket options', 'ব্রেক জার্নি'),
             ),
             Tab(
               icon: const Icon(Icons.grid_view_rounded, size: 20),
-              text: lang.tr('Route Matrix', 'স্টেশন রুট ও আসন'),
+              text: lang.tr('Station seats', 'স্টেশন রুট ও আসন'),
             ),
           ],
         ),
       ),
-      body: _loading
-          ? _buildLoadingView(isDark, lang)
-          : TabBarView(
+      body: Column(
+        children: [
+          if (_cooldownSeconds > 0)
+            MaterialBanner(
+              leading: const Icon(
+                Icons.hourglass_top_rounded,
+                color: AppColors.warning,
+              ),
+              content: Text(
+                lang.tr(
+                  'Railway is busy. Requests paused for ${_cooldownSeconds}s. Your results stay here.',
+                  'রেলওয়ে ব্যস্ত। $_cooldownSeconds সেকেন্ড অপেক্ষা করুন। পাওয়া ফলাফল সংরক্ষিত আছে।',
+                ),
+              ),
+              actions: [Text('${_cooldownSeconds}s')],
+            ),
+          Expanded(
+            child: TabBarView(
               controller: _tabController,
               children: [
-                _buildSplitJourneyTab(isDark, lang),
+                _loading
+                    ? _buildLoadingView(isDark, lang)
+                    : _buildSplitJourneyTab(isDark, lang),
                 _buildMatrixTab(isDark, lang),
               ],
             ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -309,6 +409,41 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               ),
               textAlign: TextAlign.center,
             ),
+            const SizedBox(height: 20),
+            LinearProgressIndicator(
+              value: _totalStops > 0 ? _checkedStops / _totalStops : null,
+              color: AppColors.primary,
+            ),
+            const SizedBox(height: 10),
+            Text(
+              lang.tr(
+                _totalStops > 0
+                    ? '$_checkedStops of $_totalStops stops checked${_currentStation.isEmpty ? '' : ' · $_currentStation'}'
+                    : 'Loading train stops…',
+                _totalStops > 0
+                    ? '$_totalStops টির মধ্যে $_checkedStops টি স্টেশন যাচাই হয়েছে'
+                    : 'ট্রেনের স্টেশন লোড হচ্ছে…',
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              lang.tr(
+                'Checking one station at a time to avoid too many requests.',
+                'অতিরিক্ত অনুরোধ এড়াতে একবারে একটি স্টেশন যাচাই করা হচ্ছে।',
+              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                color: AppColors.textMuted(isDark),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: () => setState(() => _cancelled = true),
+              icon: const Icon(Icons.stop_circle_outlined),
+              label: Text(lang.tr('Stop search', 'খোঁজা বন্ধ করুন')),
+            ),
           ],
         ),
       ),
@@ -320,23 +455,30 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
       return _buildLoginRequiredCard(isDark, lang);
     }
 
-    if (_error != null) {
+    if (_error != null && _splitJourneys.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.error_outline_rounded, color: AppColors.warning, size: 48),
+              const Icon(
+                Icons.error_outline_rounded,
+                color: AppColors.warning,
+                size: 48,
+              ),
               const SizedBox(height: 12),
               Text(
                 _error!,
-                style: TextStyle(color: AppColors.textPrimary(isDark), fontSize: 14),
+                style: TextStyle(
+                  color: AppColors.textPrimary(isDark),
+                  fontSize: 14,
+                ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
               ElevatedButton.icon(
-                onPressed: _initialize,
+                onPressed: _cooldownSeconds > 0 ? null : _initialize,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
@@ -353,6 +495,45 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
+        Text(
+          lang.tr('Travel with two tickets', 'দুই টিকিটে ভ্রমণ'),
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: AppColors.textPrimary(isDark),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          lang.tr(
+            '1. Choose a stop   2. Review both legs   3. Book each ticket',
+            '১. স্টেশন বাছুন   ২. দুই অংশ দেখুন   ৩. আলাদা টিকিট কিনুন',
+          ),
+          style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark)),
+        ),
+        const SizedBox(height: 12),
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              _error!,
+              style: const TextStyle(color: AppColors.warning),
+            ),
+          ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: _cooldownSeconds > 0 ? null : _initialize,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: Text(
+              lang.tr(
+                _cancelled ? 'Search again' : 'Refresh options',
+                _cancelled ? 'আবার খুঁজুন' : 'ফলাফল হালনাগাদ করুন',
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
         // Informational banner
         Container(
           padding: const EdgeInsets.all(14),
@@ -360,14 +541,16 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           decoration: BoxDecoration(
             color: AppColors.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: AppColors.primary.withValues(alpha: 0.3),
-            ),
+            border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.info_outline_rounded, color: AppColors.primary, size: 20),
+              const Icon(
+                Icons.info_outline_rounded,
+                color: AppColors.primary,
+                size: 20,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -396,7 +579,11 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             ),
             child: Column(
               children: [
-                Icon(Icons.alt_route_rounded, size: 54, color: AppColors.textMuted(isDark)),
+                Icon(
+                  Icons.alt_route_rounded,
+                  size: 54,
+                  color: AppColors.textMuted(isDark),
+                ),
                 const SizedBox(height: 14),
                 Text(
                   lang.tr(
@@ -413,7 +600,7 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                 const SizedBox(height: 8),
                 Text(
                   lang.tr(
-                    'Try checking individual station pairs or quota hopping in the Route Matrix tab.',
+                    'Use Station seats to check a specific part of this train’s route.',
                     'স্টেশন রুট ট্যাবে গিয়ে যেকোনো নির্দিষ্ট স্টেশনের টিকিট দেখতে পারেন।',
                   ),
                   style: TextStyle(
@@ -425,18 +612,26 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                 const SizedBox(height: 16),
                 OutlinedButton(
                   onPressed: () => _tabController.animateTo(1),
-                  child: Text(lang.tr('Open Route Matrix', 'রুট ম্যাট্রিক্স দেখুন')),
+                  child: Text(
+                    lang.tr('Open Route Matrix', 'রুট ম্যাট্রিক্স দেখুন'),
+                  ),
                 ),
               ],
             ),
           )
         else
-          ..._splitJourneys.map((journey) => _buildSplitJourneyCard(journey, isDark, lang)),
+          ..._splitJourneys.map(
+            (journey) => _buildSplitJourneyCard(journey, isDark, lang),
+          ),
       ],
     );
   }
 
-  Widget _buildSplitJourneyCard(IntermediateJourney journey, bool isDark, LanguageService lang) {
+  Widget _buildSplitJourneyCard(
+    IntermediateJourney journey,
+    bool isDark,
+    LanguageService lang,
+  ) {
     final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0.0;
     final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0.0;
     final totalFare = fare1 + fare2;
@@ -474,11 +669,16 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: AppColors.success.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: AppColors.success.withValues(alpha: 0.4)),
+                    border: Border.all(
+                      color: AppColors.success.withValues(alpha: 0.4),
+                    ),
                   ),
                   child: Text(
                     '${journey.seats} ${lang.tr('seats on both legs', 'আসন দুই অংশে')}',
@@ -500,7 +700,9 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               decoration: BoxDecoration(
                 color: AppColors.primary.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.3),
+                ),
               ),
               child: Text(
                 journey.firstSeat.displayName,
@@ -516,8 +718,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
 
             // Leg 1 details
             _buildLegSection(
-              sectionHeader: '${lang.tr('Leg 1', '১ম অংশ')}: ${widget.from} → ${journey.via}',
-              buttonTitle: '${lang.tr('View leg 1', 'প্রথম অংশ দেখুন')}: ${widget.from} → ${journey.via}',
+              sectionHeader:
+                  '${lang.tr('Leg 1', '১ম অংশ')}: ${widget.from} → ${journey.via}',
+              buttonTitle:
+                  '${lang.tr('View leg 1', 'প্রথম অংশ দেখুন')}: ${widget.from} → ${journey.via}',
               date: journey.firstDate,
               depTime: journey.first.departureDateTime,
               arrTime: journey.first.arrivalDateTime,
@@ -534,8 +738,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
 
             // Leg 2 details
             _buildLegSection(
-              sectionHeader: '${lang.tr('Leg 2', '২য় অংশ')}: ${journey.via} → ${widget.to}',
-              buttonTitle: '${lang.tr('View leg 2', 'দ্বিতীয় অংশ দেখুন')}: ${journey.via} → ${widget.to}',
+              sectionHeader:
+                  '${lang.tr('Leg 2', '২য় অংশ')}: ${journey.via} → ${widget.to}',
+              buttonTitle:
+                  '${lang.tr('View leg 2', 'দ্বিতীয় অংশ দেখুন')}: ${journey.via} → ${widget.to}',
               date: journey.secondDate,
               depTime: journey.second.departureDateTime,
               arrTime: journey.second.arrivalDateTime,
@@ -551,8 +757,9 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             const Divider(height: 24),
 
             // Fare and Summary
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            Wrap(
+              spacing: 12,
+              runSpacing: 8,
               children: [
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -575,7 +782,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   ],
                 ),
                 Text(
-                  lang.tr('Via transfer at ${journey.via}', '${journey.via}-এ বদল'),
+                  lang.tr(
+                    'Via transfer at ${journey.via}',
+                    '${journey.via}-এ বদল',
+                  ),
                   style: TextStyle(
                     fontSize: 11,
                     fontStyle: FontStyle.italic,
@@ -641,17 +851,32 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             children: [
               Text(
                 depTime.isNotEmpty ? depTime : '—',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
-              Text('  →  ', style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 11)),
+              Text(
+                '  →  ',
+                style: TextStyle(
+                  color: AppColors.textMuted(isDark),
+                  fontSize: 11,
+                ),
+              ),
               Text(
                 arrTime.isNotEmpty ? arrTime : '—',
-                style: TextStyle(color: AppColors.textSecondary(isDark), fontSize: 12),
+                style: TextStyle(
+                  color: AppColors.textSecondary(isDark),
+                  fontSize: 12,
+                ),
               ),
               const Spacer(),
               Text(
                 '৳${seat.fare}',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -663,24 +888,37 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   onPressed: onView,
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 8,
+                    ),
                   ),
-                  child: Text(buttonTitle, style: const TextStyle(fontSize: 12)),
+                  child: Text(
+                    buttonTitle,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               ElevatedButton.icon(
-                onPressed: () => _bookLegDirect(legTrain, seat, legFrom, legTo, date),
+                onPressed: () =>
+                    _bookLegDirect(legTrain, seat, legFrom, legTo, date),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
                   visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 10),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 6,
+                    horizontal: 10,
+                  ),
                 ),
                 icon: const Icon(Icons.event_seat_rounded, size: 14),
                 label: Text(
                   '${lang.tr('Book', 'বুক')} (${seat.type})',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -691,6 +929,42 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
   }
 
   Widget _buildMatrixTab(bool isDark, LanguageService lang) {
+    if (_routeError != null || (!_routeLoading && _routeStations.isEmpty)) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.error_outline_rounded,
+                color: AppColors.warning,
+                size: 40,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _routeError ??
+                    lang.tr(
+                      'No train stops available.',
+                      'ট্রেনের স্টেশন পাওয়া যায়নি।',
+                    ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _cooldownSeconds > 0 || _routeLoading
+                    ? null
+                    : _ensureRouteStationsLoaded,
+                icon: const Icon(Icons.refresh_rounded),
+                label: Text(
+                  lang.tr('Retry loading stops', 'স্টেশন আবার লোড করুন'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     if (_routeStations.isEmpty) {
       return Center(
         child: Padding(
@@ -705,7 +979,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   'Loading route stops for ${widget.train.tripNumber}…',
                   '${widget.train.tripNumber} এর স্টেশন তালিকা লোড হচ্ছে…',
                 ),
-                style: TextStyle(color: AppColors.textMuted(isDark), fontSize: 13),
+                style: TextStyle(
+                  color: AppColors.textMuted(isDark),
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -736,14 +1013,23 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             children: [
               Row(
                 children: [
-                  const Icon(Icons.hub_rounded, color: AppColors.primary, size: 20),
+                  const Icon(
+                    Icons.hub_rounded,
+                    color: AppColors.primary,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
-                  Text(
-                    lang.tr('Between-Station Checker', 'স্টেশন থেকে স্টেশন যাচাই'),
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 15,
-                      color: AppColors.textPrimary(isDark),
+                  Expanded(
+                    child: Text(
+                      lang.tr(
+                        'Check a part of your journey',
+                        'স্টেশন থেকে স্টেশন যাচাই',
+                      ),
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: AppColors.textPrimary(isDark),
+                      ),
                     ),
                   ),
                 ],
@@ -754,7 +1040,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   'Select any two stations on this train to check seat availability.',
                   'এই ট্রেনের যেকোনো দুটি স্টেশন বাছাই করে আসন সংখ্যা যাচাই করুন।',
                 ),
-                style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark)),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: AppColors.textMuted(isDark),
+                ),
               ),
               const SizedBox(height: 16),
 
@@ -762,9 +1051,21 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               _buildStationDropdown(
                 label: lang.tr('From (Boarding)', 'যাত্রার স্টেশন'),
                 selected: _selectedFromStation,
-                stations: _routeStations,
+                stations: _routeStations
+                    .where((s) => s.sequence < _routeStations.last.sequence)
+                    .toList(),
                 isDark: isDark,
-                onChanged: (st) => setState(() => _selectedFromStation = st),
+                onChanged: (st) => setState(() {
+                  _selectedFromStation = st;
+                  if (st != null &&
+                      (_selectedToStation?.sequence ?? -1) <= st.sequence) {
+                    _selectedToStation = _routeStations
+                        .where((s) => s.sequence > st.sequence)
+                        .firstOrNull;
+                  }
+                  _segmentResult = null;
+                  _segmentError = null;
+                }),
               ),
               const SizedBox(height: 12),
 
@@ -772,9 +1073,18 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               _buildStationDropdown(
                 label: lang.tr('To (Destination)', 'গন্তব্য স্টেশন'),
                 selected: _selectedToStation,
-                stations: _routeStations,
+                stations: _routeStations
+                    .where(
+                      (s) =>
+                          s.sequence > (_selectedFromStation?.sequence ?? -1),
+                    )
+                    .toList(),
                 isDark: isDark,
-                onChanged: (st) => setState(() => _selectedToStation = st),
+                onChanged: (st) => setState(() {
+                  _selectedToStation = st;
+                  _segmentResult = null;
+                  _segmentError = null;
+                }),
               ),
               const SizedBox(height: 16),
 
@@ -782,23 +1092,38 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed: _checkingSegment ? null : _checkSelectedSegment,
+                  onPressed:
+                      _checkingSegment ||
+                          _loading ||
+                          _cooldownSeconds > 0 ||
+                          _selectedFromStation == null ||
+                          _selectedToStation == null
+                      ? null
+                      : _checkSelectedSegment,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   icon: _checkingSegment
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : const Icon(Icons.search_rounded),
                   label: Text(
                     lang.tr('Check Seats', 'আসন পরীক্ষা করুন'),
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
                   ),
                 ),
               ),
@@ -811,7 +1136,10 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                 const SizedBox(height: 12),
                 Text(
                   _segmentError!,
-                  style: const TextStyle(color: AppColors.warning, fontSize: 12),
+                  style: const TextStyle(
+                    color: AppColors.warning,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ],
@@ -862,7 +1190,9 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: isUserStart || isUserEnd ? Colors.white : AppColors.textMuted(isDark),
+                      color: isUserStart || isUserEnd
+                          ? Colors.white
+                          : AppColors.textMuted(isDark),
                     ),
                   ),
                 ),
@@ -964,7 +1294,7 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                   ),
                 );
               }).toList(),
-              onChanged: onChanged,
+              onChanged: _checkingSegment ? null : onChanged,
             ),
           ),
         ),
@@ -972,7 +1302,11 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     );
   }
 
-  Widget _buildSegmentResultCard(StationPairAvailability res, bool isDark, LanguageService lang) {
+  Widget _buildSegmentResultCard(
+    StationPairAvailability res,
+    bool isDark,
+    LanguageService lang,
+  ) {
     if (!res.hasSeats || res.train == null) {
       return Container(
         padding: const EdgeInsets.all(14),
@@ -983,7 +1317,11 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
         ),
         child: Row(
           children: [
-            const Icon(Icons.event_seat_rounded, color: AppColors.warning, size: 24),
+            const Icon(
+              Icons.event_seat_rounded,
+              color: AppColors.warning,
+              size: 24,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -1015,12 +1353,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${res.from.name} → ${res.to.name}',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: AppColors.textPrimary(isDark),
+              Expanded(
+                child: Text(
+                  '${res.from.name} → ${res.to.name}',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                    color: AppColors.textPrimary(isDark),
+                  ),
                 ),
               ),
               Container(
@@ -1040,6 +1380,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
               ),
             ],
           ),
+          const SizedBox(height: 6),
+          Text(
+            '${lang.tr('Boarding date', 'যাত্রার তারিখ')}: ${res.date}',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.textSecondary(isDark),
+            ),
+          ),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
@@ -1047,7 +1395,9 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             children: res.seatTypes.map((seat) {
               return ActionChip(
                 backgroundColor: isDark ? AppColors.darkSurface : Colors.white,
-                side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+                side: BorderSide(
+                  color: AppColors.primary.withValues(alpha: 0.5),
+                ),
                 label: Text(
                   '${seat.type} (${seat.seatCounts.online}) · ৳${seat.fare}',
                   style: const TextStyle(
@@ -1066,7 +1416,7 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                         seatType: seat,
                         fromCity: res.from.city,
                         toCity: res.to.city,
-                        dateOfJourney: widget.date,
+                        dateOfJourney: res.date,
                         authSession: _auth!,
                       ),
                     ),
@@ -1094,7 +1444,11 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.lock_person_rounded, size: 48, color: AppColors.primary),
+              const Icon(
+                Icons.lock_person_rounded,
+                size: 48,
+                color: AppColors.primary,
+              ),
               const SizedBox(height: 16),
               Text(
                 lang.tr(
@@ -1131,11 +1485,18 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
                 icon: const Icon(Icons.login_rounded),
-                label: Text(lang.tr('Log in via Railway', 'রেলওয়েতে লগইন করুন')),
+                label: Text(
+                  lang.tr('Log in via Railway', 'রেলওয়েতে লগইন করুন'),
+                ),
               ),
             ],
           ),

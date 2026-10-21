@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
 
-import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
 
 import '../models/auth_session.dart';
@@ -10,7 +9,6 @@ import '../models/train_trip.dart';
 import 'api_service.dart';
 import 'journey_schedule.dart';
 import 'rail_api_client.dart';
-import 'rail_api_config.dart';
 
 /// Legacy model for backwards compatibility with tests and views.
 class IntermediateJourney {
@@ -75,13 +73,15 @@ class ViaRouteGroup {
   });
 
   int get maxAvailableSeats => classOptions.fold<int>(
-        0,
-        (maxVal, opt) => opt.minSeats > maxVal ? opt.minSeats : maxVal,
-      );
+    0,
+    (maxVal, opt) => opt.minSeats > maxVal ? opt.minSeats : maxVal,
+  );
 
   int? get layoverMinutes {
     final arr = IntermediateStationSearch.parseMinutes(first.arrivalDateTime);
-    final dep = IntermediateStationSearch.parseMinutes(second.departureDateTime);
+    final dep = IntermediateStationSearch.parseMinutes(
+      second.departureDateTime,
+    );
     if (arr != null && dep != null) {
       var diff = dep - arr;
       if (diff < 0) diff += 24 * 60;
@@ -92,7 +92,9 @@ class ViaRouteGroup {
 
   String layoverText({required bool isBangla}) {
     final mins = layoverMinutes;
-    if (mins == null) return isBangla ? '$via-এ যাত্রাবিরতি' : 'Transfer at $via';
+    if (mins == null) {
+      return isBangla ? '$via-এ যাত্রাবিরতি' : 'Transfer at $via';
+    }
     if (mins >= 60) {
       final h = mins ~/ 60;
       final m = mins % 60;
@@ -157,7 +159,6 @@ class ViaRouteGroup {
   }
 }
 
-
 /// In-memory cache for train routes and sliced intermediate stations.
 /// Once a train's route stops are loaded for a date, subsequent monitor cycles
 /// and searches re-use them directly without repeated POST /train-routes calls.
@@ -174,14 +175,23 @@ class TrainRouteCache {
   static List<Map<String, dynamic>>? getRoute(String model, String date) =>
       _routes[_routeKey(model, date)];
 
-  static void setRoute(String model, String date, List<Map<String, dynamic>> routes) {
+  static void setRoute(
+    String model,
+    String date,
+    List<Map<String, dynamic>> routes,
+  ) {
     _routes[_routeKey(model, date)] = routes;
   }
 
   static List<String>? getIntermediate(String train, String from, String to) =>
       _intermediate[_interKey(train, from, to)];
 
-  static void setIntermediate(String train, String from, String to, List<String> stops) {
+  static void setIntermediate(
+    String train,
+    String from,
+    String to,
+    List<String> stops,
+  ) {
     _intermediate[_interKey(train, from, to)] = stops;
   }
 
@@ -215,8 +225,12 @@ class RouteStation {
     return RouteStation(
       city: rawCity,
       name: clean.isEmpty ? 'Station ${index + 1}' : clean,
-      arrivalTime: IntermediateStationSearch.cleanTime('${json['arrival_time'] ?? ''}'),
-      departureTime: IntermediateStationSearch.cleanTime('${json['departure_time'] ?? ''}'),
+      arrivalTime: IntermediateStationSearch.cleanTime(
+        '${json['arrival_time'] ?? ''}',
+      ),
+      departureTime: IntermediateStationSearch.cleanTime(
+        '${json['departure_time'] ?? ''}',
+      ),
       haltTime: '${json['halt_time'] ?? ''}'.trim(),
       sequence: index,
     );
@@ -231,6 +245,7 @@ class StationPairAvailability {
   final bool hasSeats;
   final int totalSeats;
   final List<SeatType> seatTypes;
+  final String date;
 
   const StationPairAvailability({
     required this.from,
@@ -239,6 +254,7 @@ class StationPairAvailability {
     required this.hasSeats,
     required this.totalSeats,
     required this.seatTypes,
+    required this.date,
   });
 }
 
@@ -248,7 +264,8 @@ class StationPairAvailability {
 class IntermediateStationSearch {
   /// Extracts the numeric model code from a TrainTrip (e.g. "701" from "SUBORNO EXPRESS (701)").
   static String extractTrainModel(TrainTrip train) {
-    if (train.trainModel.trim().isNotEmpty && train.trainModel.trim() != 'null') {
+    if (train.trainModel.trim().isNotEmpty &&
+        train.trainModel.trim() != 'null') {
       return train.trainModel.trim();
     }
     final match = RegExp(r'\((\d+)\)').firstMatch(train.tripNumber);
@@ -272,7 +289,10 @@ class IntermediateStationSearch {
     if (cleaned.isEmpty) return null;
     for (final pattern in ['HH:mm', 'HH:mm:ss', 'hh:mm a', 'h:mm a']) {
       try {
-        final time = DateFormat(pattern, 'en_US').parseStrict(cleaned.toUpperCase());
+        final time = DateFormat(
+          pattern,
+          'en_US',
+        ).parseStrict(cleaned.toUpperCase());
         return time.hour * 60 + time.minute;
       } on FormatException {
         // try next
@@ -281,90 +301,115 @@ class IntermediateStationSearch {
     return null;
   }
 
-  /// Loads all stations along the train route using the official train-routes API.
+  static final _routeRequests = <String, Future<List<RouteStation>>>{};
+
+  /// One bounded, paced route request is shared by both tabs and all callers.
+  /// Failed/empty routes are never cached and never trigger an unpaced fallback.
   static Future<List<RouteStation>> fetchTrainRouteStations({
     required String trainModel,
     required String departureDate,
     AuthSession? auth,
-  }) async {
-    final journeyDate = JourneySchedule.parseDate(departureDate) ?? DateTime.now();
+  }) {
+    final journeyDate = JourneySchedule.parseDate(departureDate);
+    if (journeyDate == null || trainModel.trim().isEmpty) {
+      return Future.error(
+        StateError('Train route or journey date is unavailable.'),
+      );
+    }
     final dateParam = DateFormat('yyyy-MM-dd').format(journeyDate);
-
     final cached = TrainRouteCache.getRoute(trainModel, dateParam);
     if (cached != null) {
-      final stations = <RouteStation>[];
-      for (var i = 0; i < cached.length; i++) {
-        stations.add(RouteStation.fromJson(cached[i], i));
-      }
-      return stations;
+      return Future.value([
+        for (var i = 0; i < cached.length; i++)
+          RouteStation.fromJson(cached[i], i),
+      ]);
     }
-
-    Map<String, dynamic>? decoded;
-
-    if (auth != null && auth.isValid) {
+    final key = '${trainModel.trim().toLowerCase()}:$dateParam';
+    return _routeRequests.putIfAbsent(key, () async {
       try {
+        final session = auth ?? await AuthSession.load();
+        if (session == null) {
+          throw StateError('Please log in to load train stops.');
+        }
         final response = await RailApiClient.request(
           operation: 'train_routes',
           method: 'POST',
           payload: {
-            'model': trainModel,
+            'model': trainModel.trim(),
             'departure_date_time': dateParam,
           },
-          auth: auth,
+          auth: session,
         );
-        if (response.statusCode == 200) {
-          decoded = jsonDecode(response.body) as Map<String, dynamic>;
+        if (response.statusCode != 200) {
+          throw StateError(
+            'Unable to load train stops (${response.statusCode}). Try again.',
+          );
         }
-      } catch (_) {
-        // Fallback to direct public request
+        final decoded = jsonDecode(response.body);
+        final raw = decoded is Map && decoded['data'] is Map
+            ? decoded['data']['routes']
+            : null;
+        if (raw is! List ||
+            raw.length < 2 ||
+            raw.any((r) => r is! Map || '${r['city'] ?? ''}'.trim().isEmpty)) {
+          throw StateError('Train stops are unavailable. Please try again.');
+        }
+        final routes = raw
+            .map((r) => Map<String, dynamic>.from(r as Map))
+            .toList();
+        TrainRouteCache.setRoute(trainModel, dateParam, routes);
+        return [
+          for (var i = 0; i < routes.length; i++)
+            RouteStation.fromJson(routes[i], i),
+        ];
+      } finally {
+        _routeRequests.remove(key);
       }
-    }
-
-    if (decoded == null) {
-      final url = Uri.parse('${RailApiConfig.baseUrl}/train-routes');
-      final response = await http.post(
-        url,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'Origin': 'https://eticket.railway.gov.bd',
-          'Referer': 'https://eticket.railway.gov.bd/',
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
-        },
-        body: jsonEncode({
-          'model': trainModel,
-          'departure_date_time': dateParam,
-        }),
-      );
-      if (response.statusCode != 200) {
-        throw StateError(
-          'Could not load train route information (${response.statusCode}).',
-        );
-      }
-      decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    }
-
-    final rawRoutes = (decoded['data']?['routes'] as List? ?? []);
-    final routeMaps = rawRoutes.map((e) => Map<String, dynamic>.from(e as Map)).toList();
-    TrainRouteCache.setRoute(trainModel, dateParam, routeMaps);
-    final stations = <RouteStation>[];
-    for (var i = 0; i < routeMaps.length; i++) {
-      stations.add(RouteStation.fromJson(routeMaps[i], i));
-    }
-    return stations;
+    });
   }
 
-  /// Matches user-entered city against station list flexibly (with underscores or spaces).
+  static String _stationKey(String value) =>
+      value.trim().replaceAll(RegExp(r'[_\s]+'), ' ').toLowerCase();
+
+  /// Exact normalized names avoid matching a short station to a different stop.
   static int findStationIndex(List<RouteStation> stations, String query) {
-    final normalized = query.trim().replaceAll(' ', '_').toLowerCase();
-    for (var i = 0; i < stations.length; i++) {
-      final cityNorm = stations[i].city.trim().replaceAll(' ', '_').toLowerCase();
-      final nameNorm = stations[i].name.trim().replaceAll(' ', '_').toLowerCase();
-      if (cityNorm == normalized || nameNorm == normalized) return i;
-      if (cityNorm.contains(normalized) || normalized.contains(cityNorm)) return i;
+    final normalized = _stationKey(query);
+    if (normalized.isEmpty) return -1;
+    return stations.indexWhere(
+      (s) =>
+          _stationKey(s.city) == normalized ||
+          _stationKey(s.name) == normalized,
+    );
+  }
+
+  /// [date] is the original boarding date, not necessarily the route's first day.
+  static String boardingDate({
+    required List<RouteStation> stations,
+    required RouteStation boarding,
+    required String referenceStation,
+    required String date,
+  }) {
+    final journeyDate = JourneySchedule.parseDate(date);
+    final reference = findStationIndex(stations, referenceStation);
+    final target = findStationIndex(stations, boarding.city);
+    if (journeyDate == null || reference < 0 || target < 0) {
+      throw StateError('Boarding station or journey date is unavailable.');
     }
-    return -1;
+    final offsets = <int>[];
+    var day = 0;
+    int? previous;
+    for (final station in stations) {
+      for (final raw in [station.arrivalTime, station.departureTime]) {
+        final time = parseMinutes(raw);
+        if (time == null) continue;
+        if (previous != null && time < previous) day++;
+        previous = time;
+      }
+      offsets.add(day);
+    }
+    return DateFormat('dd-MMM-yyyy', 'en_US').format(
+      journeyDate.add(Duration(days: offsets[target] - offsets[reference])),
+    );
   }
 
   /// Searches for split journey options (From -> Via -> To) where tickets are available
@@ -377,6 +422,8 @@ class IntermediateStationSearch {
     required AuthSession auth,
     String? seatClass,
     bool Function()? cancelled,
+    void Function(int checked, int total, String station)? onProgress,
+    void Function(List<IntermediateJourney> results)? onResults,
   }) async {
     final journeyDate = JourneySchedule.parseDate(date);
     final model = extractTrainModel(train);
@@ -386,49 +433,24 @@ class IntermediateStationSearch {
       );
     }
 
-    final dateParam = DateFormat('yyyy-MM-dd').format(journeyDate);
-    final isTest = train.tripNumber.startsWith('TEST');
-
-    final cached = isTest ? null : TrainRouteCache.getRoute(model, dateParam);
-    List<Map<String, dynamic>> routes = cached ?? [];
-    if (routes.isEmpty) {
-      final response = await RailApiClient.request(
-        operation: 'train_routes',
-        method: 'POST',
-        payload: {
-          'model': model,
-          'departure_date_time': dateParam,
-        },
-        auth: auth,
-      );
-      if (response.statusCode != 200) {
-        throw StateError(
-          'Unable to load train stops (${response.statusCode}). Try again.',
-        );
-      }
-      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-      routes = (decoded['data']?['routes'] as List? ?? [])
-          .map((e) => Map<String, dynamic>.from(e as Map))
-          .toList();
-      if (!isTest) {
-        TrainRouteCache.setRoute(model, dateParam, routes);
-      }
-    }
-
-    String city(int i) => '${routes[i]['city'] ?? ''}'.trim();
-    final start = routes.indexWhere(
-      (r) => '${r['city']}'.trim().replaceAll(' ', '_').toLowerCase() ==
-          from.trim().replaceAll(' ', '_').toLowerCase(),
+    if (cancelled?.call() == true) return [];
+    final stations = await fetchTrainRouteStations(
+      trainModel: model,
+      departureDate: date,
+      auth: auth,
     );
-    final end = routes.indexWhere(
-      (r) => '${r['city']}'.trim().replaceAll(' ', '_').toLowerCase() ==
-          to.trim().replaceAll(' ', '_').toLowerCase(),
-    );
+    final start = findStationIndex(stations, from);
+    final end = findStationIndex(stations, to);
     if (start < 0 || end <= start) {
       throw StateError(
         'The selected stations were not found in this train route.',
       );
     }
+    final routes = TrainRouteCache.getRoute(
+      model,
+      DateFormat('yyyy-MM-dd').format(journeyDate),
+    )!;
+    String city(int i) => stations[i].city;
 
     TrainRouteCache.setIntermediate(
       train.tripNumber,
@@ -452,8 +474,7 @@ class IntermediateStationSearch {
     TrainTrip? sameRun(TripSearchResponse response) {
       for (final candidate in response.trains) {
         if (candidate.tripNumber == train.tripNumber &&
-            (!isTest ||
-                tripIds.isEmpty ||
+            (tripIds.isEmpty ||
                 candidate.seatTypes.any((s) => tripIds.contains(s.tripId)))) {
           return candidate;
         }
@@ -478,6 +499,7 @@ class IntermediateStationSearch {
         previous = time;
       }
       if (cancelled?.call() == true) break;
+      onProgress?.call(i - start - 1, end - start - 1, stations[i].name);
       if (parseMinutes('${routes[i]['departure_time'] ?? ''}') == null ||
           previous == null) {
         throw StateError(
@@ -517,10 +539,11 @@ class IntermediateStationSearch {
           silent: true,
         ),
       );
+      if (cancelled?.call() == true) break;
       if (second == null) continue;
       for (final seat in first.seatTypes) {
         if (!seat.isAvailable ||
-            (isTest && tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
+            (tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
             (!anyClass && seat.type.toUpperCase() != requested)) {
           continue;
         }
@@ -529,7 +552,7 @@ class IntermediateStationSearch {
               (s) =>
                   s.isAvailable &&
                   s.type == seat.type &&
-                  (!isTest || tripIds.isEmpty || s.tripId == seat.tripId),
+                  (tripIds.isEmpty || s.tripId == seat.tripId),
             )
             .firstOrNull;
         if (other != null) {
@@ -546,6 +569,10 @@ class IntermediateStationSearch {
           );
         }
       }
+      onResults?.call(List.unmodifiable(results));
+    }
+    if (cancelled?.call() != true) {
+      onProgress?.call(end - start - 1, end - start - 1, '');
     }
     return results;
   }
@@ -559,50 +586,47 @@ class IntermediateStationSearch {
     required AuthSession auth,
     String? seatClass,
   }) async {
-    try {
-      final res = await ApiService.searchTrips(
-        fromCity: from.city,
-        toCity: to.city,
-        dateOfJourney: date,
-        seatClass: seatClass,
-        authSession: auth,
-        silent: true,
-      );
-      final targetClean = targetTrain.tripNumber.replaceAll(RegExp(r'\s+'), '').toLowerCase();
-      final targetModel = extractTrainModel(targetTrain);
-
-      TrainTrip? matched;
-      for (final c in res.trains) {
-        if (c.tripNumber.replaceAll(RegExp(r'\s+'), '').toLowerCase() == targetClean) {
-          matched = c;
-          break;
-        }
-        if (targetModel.isNotEmpty && extractTrainModel(c) == targetModel) {
-          matched = c;
-          break;
-        }
-      }
-      matched ??= res.trains.isNotEmpty ? res.trains.first : null;
-
-      final available = matched?.availableSeatTypes ?? [];
-      final count = matched?.totalOnlineSeats ?? 0;
-      return StationPairAvailability(
-        from: from,
-        to: to,
-        train: matched,
-        hasSeats: count > 0,
-        totalSeats: count,
-        seatTypes: available,
-      );
-    } catch (_) {
-      return StationPairAvailability(
-        from: from,
-        to: to,
-        train: null,
-        hasSeats: false,
-        totalSeats: 0,
-        seatTypes: [],
-      );
+    if (from.sequence >= to.sequence) {
+      throw StateError('Choose a destination after your boarding station.');
     }
+    final res = await ApiService.searchTrips(
+      fromCity: from.city,
+      toCity: to.city,
+      dateOfJourney: date,
+      seatClass: seatClass,
+      authSession: auth,
+      silent: true,
+    );
+    final targetClean = targetTrain.tripNumber
+        .replaceAll(RegExp(r'\s+'), '')
+        .toLowerCase();
+    final targetModel = extractTrainModel(targetTrain);
+    final matched = res.trains
+        .where(
+          (c) =>
+              c.tripNumber.replaceAll(RegExp(r'\s+'), '').toLowerCase() ==
+                  targetClean ||
+              (targetModel.isNotEmpty && extractTrainModel(c) == targetModel),
+        )
+        .firstOrNull;
+    final requested = seatClass?.trim().toUpperCase();
+    final anyClass =
+        requested == null ||
+        requested.isEmpty ||
+        requested == 'ALL' ||
+        requested == 'RANDOM';
+    final available = (matched?.availableSeatTypes ?? <SeatType>[])
+        .where((s) => anyClass || s.type.toUpperCase() == requested)
+        .toList();
+    final count = available.fold<int>(0, (sum, s) => sum + s.seatCounts.online);
+    return StationPairAvailability(
+      from: from,
+      to: to,
+      train: matched,
+      hasSeats: count > 0,
+      totalSeats: count,
+      seatTypes: available,
+      date: date,
+    );
   }
 }

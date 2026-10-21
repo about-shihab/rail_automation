@@ -38,9 +38,13 @@ Use `{{field_name}}` for runtime values. An entire placeholder preserves its typ
 including arrays and objects; for example `"ticket_ids": "{{ticket_ids}}"` and
 `"extras": "{{extras}}"`. Missing fields fail locally before sending. Payload
 templates replace the entire payload, so include every field required by the API.
-Seat layout normally omits `cft_response` unless verification is required. Its
-template is omitted in the example to preserve that behavior; if you configure a
-template containing `{{cft_response}}`, every call must provide that field.
+The booking flow supplies a fresh or unused prepared `cft_response` for seat
+layout. Its runtime value is preserved even if a configured payload template
+omits it. If a template explicitly contains `{{cft_response}}`, a caller that
+does not supply the field still fails locally. Configure the independent
+`turnstile_site_keys.sign_in` and `turnstile_site_keys.seat_layout` keys when
+needed. On iOS, CFT-bearing requests use the verification WKWebView's actual
+user agent instead of configured desktop identity headers.
 
 `poll_interval_seconds` controls recurring seat checks (10–86400 seconds).
 `request_timeout_seconds` controls HTTP timeout (5–120 seconds).
@@ -87,6 +91,11 @@ Before an API call, the app recovers a locally expired token. A server 401, or a
 sign-in request and one retry with the replacement token. Concurrent recoveries
 for the same account/device share a login in each isolate. A successful login
 updates the saved session and removes the previous session's action token.
+Seat-layout requests that already submitted `cft_response` do not reuse that
+token after session recovery. The layout guard acquires one fresh token for
+its single retry. Explicit CFT rejection follows the same bounded refresh while
+the app is open; a closed app leaves verification pending and notifies the user.
+Rate limits, timeouts, and server errors do not cause token-refresh loops.
 Generic Cloudflare failures, timeouts, and server errors do not replay mutations.
 Only an explicit incorrect username/password response from sign-in causes an
 automatic redirect to the Login WebView. Other recovery failures show an error

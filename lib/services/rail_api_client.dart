@@ -4,23 +4,42 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/auth_session.dart';
 import 'app_config.dart';
 import 'notification_service.dart';
 import 'login_recovery_required.dart';
 import 'rail_api_config.dart';
+import 'rail_request_pacer.dart';
 import 'railway_credentials_rejected.dart';
 import 'secure_store.dart';
 import 'session_recovery.dart';
 import 'turnstile_gate.dart';
+import 'turnstile_session.dart';
+import 'seat_layout_challenge.dart';
 
 /// One bounded recovery for explicit auth rejections. Unknown mutation outcomes
 /// and generic Cloudflare 403 responses are never replayed.
 class RailApiClient {
   static final _refreshes = <String, Future<AuthSession>>{};
-  static final _queues = <String, Future<void>>{};
-  static final _lastCalls = <String, DateTime>{};
+  static const _cooldownKey = 'rail_api_cooldown_until_v1';
+  @visibleForTesting
+  static RailRequestPacer requestPacer = RailRequestPacer();
+
+  static Duration get cooldownRemaining => requestPacer.cooldownRemaining;
+
+  /// Workers and foreground sessions keep the same server-directed pause,
+  /// including after an app restart. Never start session recovery during it.
+  static Future<void> ensureReady() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final saved = prefs.getInt(_cooldownKey);
+    if (saved != null) {
+      requestPacer.restoreCooldown(DateTime.fromMillisecondsSinceEpoch(saved));
+    }
+    requestPacer.checkCooldown();
+  }
 
   static Future<AuthSession> current(AuthSession auth) async {
     final saved = await AuthSession.load();
@@ -40,11 +59,22 @@ class RailApiClient {
     required AuthSession auth,
     Map<String, String> headers = const {},
   }) async {
+    await ensureReady();
     var session = await current(auth);
     if (!session.isValid) session = await refresh(session);
     var response = await _send(operation, method, payload, session, headers);
     if (_authRejected(response)) {
       session = await refresh(session, rejectedToken: session.token);
+      if (operation == 'seat_layout' &&
+          payload['cft_response'] is String &&
+          (payload['cft_response'] as String).isNotEmpty) {
+        // The rejected request may already have consumed the token. The next
+        // guarded layout retry obtains a different token for the renewed session.
+        throw const SeatLayoutChallenge(
+          verificationAttempted: true,
+          tokenRejected: true,
+        );
+      }
       response = await _send(operation, method, payload, session, headers);
       if (_authRejected(response)) {
         if (!SessionRecovery.instance.canRunWebView) {
@@ -61,6 +91,14 @@ class RailApiClient {
   static bool _authRejected(http.Response response) {
     if (response.statusCode == 401) return true;
     if (response.statusCode != 403) return false;
+    // A CFT error can also say "invalid token". It needs a fresh challenge,
+    // not a login that would consume a different site's verification token.
+    if (SeatLayoutChallenge.isTokenRejection(
+      response.statusCode,
+      response.body,
+    )) {
+      return false;
+    }
     try {
       final body = jsonDecode(response.body);
       if (body is! Map) return false;
@@ -245,6 +283,12 @@ class RailApiClient {
             RailApiConfig.render(settings['payload'], runtime),
           )
         : runtime;
+    if (operation == 'seat_layout' &&
+        runtime['cft_response'] is String &&
+        (runtime['cft_response'] as String).isNotEmpty) {
+      // Remote payload templates must not drop or substitute this one-use value.
+      body['cft_response'] = runtime['cft_response'];
+    }
     var uri = Uri.parse(url);
     if (verb == 'GET' && body.isNotEmpty) {
       uri = uri.replace(
@@ -284,6 +328,21 @@ class RailApiClient {
         headers[entry.key] = entry.value;
       }
     }
+    if (defaultTargetPlatform == TargetPlatform.iOS &&
+        runtime['cft_response'] is String &&
+        (runtime['cft_response'] as String).isNotEmpty) {
+      final browserAgent = TurnstileSession.instance.userAgent;
+      if (browserAgent != null && browserAgent.isNotEmpty) {
+        // Submit the challenge with the WKWebView identity that produced it.
+        // Desktop Chromium hints conflict with iOS's native browser identity.
+        headers.removeWhere(
+          (key, _) =>
+              key.toLowerCase() == 'user-agent' ||
+              key.toLowerCase().startsWith('sec-ch-'),
+        );
+        headers['User-Agent'] = browserAgent;
+      }
+    }
     // Replace captured auth headers after recovery, irrespective of casing.
     headers.removeWhere(
       (key, _) => [
@@ -302,25 +361,6 @@ class RailApiClient {
       'X-Device-Key': auth.deviceKey,
       if (auth.cookie?.isNotEmpty == true) 'Cookie': auth.cookie!,
     });
-    if (authenticated && !AuthSession.useBackgroundStorage) {
-      final action = await SecureStore.read('rail_action_token');
-      headers.removeWhere((key, _) => key.toLowerCase() == 'x-action-token');
-      if (action?.isNotEmpty == true) headers['X-Action-Token'] = action!;
-    }
-    // Serialize interval allocation so concurrent requests respect DB settings.
-    final previous = _queues[operation] ?? Future<void>.value();
-    final slot = previous.then((_) async {
-      final interval = settings['min_interval_seconds'] as int? ?? 0;
-      final last = _lastCalls[operation];
-      if (last != null) {
-        final wait =
-            Duration(seconds: interval) - DateTime.now().difference(last);
-        if (wait > Duration.zero) await Future<void>.delayed(wait);
-      }
-      _lastCalls[operation] = DateTime.now();
-    });
-    _queues[operation] = slot;
-    await slot;
     final timeout = Duration(
       seconds:
           settings['timeout_seconds'] as int? ??
@@ -328,20 +368,68 @@ class RailApiClient {
     );
     // Only idempotent reads are retried; a mutation with an unknown outcome
     // must never be replayed.
-    final retries = verb == 'GET' ? (settings['retries'] as int? ?? 0) : 0;
+    // A layout contains a one-use verification token, even though it uses GET.
+    final retries = verb == 'GET' && operation != 'seat_layout'
+        ? (settings['retries'] as int? ?? 0)
+        : 0;
     final retryDelay = Duration(
       seconds: settings['retry_delay_seconds'] as int? ?? 2,
     );
     for (var attempt = 0; ; attempt++) {
       try {
-        final pendingResponse = switch (verb) {
-          'GET' => http.get(uri, headers: headers),
-          'PATCH' => http.patch(uri, headers: headers, body: jsonEncode(body)),
-          _ => http.post(uri, headers: headers, body: jsonEncode(body)),
-        };
-        final response = await pendingResponse.timeout(timeout);
-        final transient =
-            response.statusCode == 429 || response.statusCode >= 500;
+        final response = await requestPacer.run(
+          operation: operation,
+          minInterval: Duration(
+            seconds: settings['min_interval_seconds'] as int? ?? 0,
+          ),
+          send: () async {
+            await ensureReady();
+            if (authenticated && !AuthSession.useBackgroundStorage) {
+              final action = await SecureStore.read('rail_action_token');
+              headers.removeWhere(
+                (key, _) => key.toLowerCase() == 'x-action-token',
+              );
+              if (action?.isNotEmpty == true) {
+                headers['X-Action-Token'] = action!;
+              }
+            }
+            final client = http.Client();
+            late final http.Response result;
+            try {
+              final pendingResponse = switch (verb) {
+                'GET' => client.get(uri, headers: headers),
+                'PATCH' => client.patch(
+                  uri,
+                  headers: headers,
+                  body: jsonEncode(body),
+                ),
+                _ => client.post(uri, headers: headers, body: jsonEncode(body)),
+              };
+              result = await pendingResponse.timeout(timeout);
+            } finally {
+              // Abort timed-out sockets before releasing the queue slot.
+              client.close();
+            }
+            final nextAction = result.headers['x-action-token'];
+            if (authenticated &&
+                !AuthSession.useBackgroundStorage &&
+                nextAction != null &&
+                _validActionResponse(operation, result)) {
+              await SecureStore.write('rail_action_token', nextAction);
+            }
+            if (result.statusCode == 429) {
+              final until = requestPacer.rateLimited(result.headers);
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setInt(_cooldownKey, until.millisecondsSinceEpoch);
+              throw RailwayRateLimited(until);
+            }
+            if (result.statusCode >= 200 && result.statusCode < 300) {
+              requestPacer.recordSuccess();
+            }
+            return result;
+          },
+        );
+        final transient = response.statusCode >= 500;
         if (transient && attempt < retries) {
           await Future<void>.delayed(retryDelay * (attempt + 1));
           continue;
@@ -357,6 +445,18 @@ class RailApiClient {
         if (attempt >= retries) rethrow;
         await Future<void>.delayed(retryDelay * (attempt + 1));
       }
+    }
+  }
+
+  static bool _validActionResponse(String operation, http.Response response) {
+    if (response.statusCode < 200 || response.statusCode >= 300) return false;
+    try {
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map || decoded['data'] is! Map) return false;
+      return operation != 'seat_layout' ||
+          decoded['data']['seatLayout'] is List;
+    } on FormatException {
+      return false;
     }
   }
 }

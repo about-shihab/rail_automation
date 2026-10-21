@@ -43,6 +43,10 @@ void monitoringEntryPoint(ServiceInstance service) async {
       label,
     );
     TurnstileGate.instance.workerPromptPresented = result.$2;
+    if (result.$1 == null && !result.$2) {
+      // The app may have closed after this monitoring cycle checked visibility.
+      NotificationService().appVisible = false;
+    }
     return result.$1;
   };
   service.on('stop').listen((_) async {
@@ -233,60 +237,38 @@ class ForegroundMonitor {
             'id': id,
             'presented': TurnstileGate.instance.canShowUi,
           });
-          if (_activeVerificationId != null ||
+          if (!TurnstileGate.instance.canShowUi ||
+              _activeVerificationId != null ||
               TurnstileGate.instance.isShowing ||
               TurnstileSession.instance.generating ||
               !TurnstileSession.instance.attached) {
             FlutterBackgroundService().invoke('verification-result', {
               'id': id,
               'presented':
-                  TurnstileGate.instance.isShowing ||
-                  TurnstileSession.instance.generating,
+                  TurnstileGate.instance.canShowUi &&
+                  (TurnstileGate.instance.isShowing ||
+                      TurnstileSession.instance.generating),
             });
             return;
           }
           _activeVerificationId = id;
           final gate = TurnstileGate.instance;
-          final session = TurnstileSession.instance;
-          var presented = gate.canShowUi;
           String? token;
-          void watchInteraction() {
-            if (session.phase != TurnstilePhase.interactive) return;
-            if (!gate.canShowUi) {
-              // A human check stays pending for the notification; never keep
-              // an invisible checkbox waiting in the background.
-              session.cancel();
-            } else if (!gate.isShowing) {
-              presented = true;
-              unawaited(
-                gate.acquire(
-                  label: event?['label'] as String? ?? '',
-                  forceFresh: true,
-                ),
-              );
-            }
-          }
-
           try {
-            if (presented) {
+            if (gate.canShowUi) {
               token = await gate.acquire(
                 label: event?['label'] as String? ?? '',
                 forceFresh: true,
               );
-            } else {
-              // Reuse the retained UI browser for a booking-time check only.
-              session.addListener(watchInteraction);
-              token = await session.generate();
             }
             if (_activeVerificationId == id) {
               FlutterBackgroundService().invoke('verification-result', {
                 'id': id,
-                'token': token,
-                'presented': presented,
+                'token': gate.canShowUi ? token : null,
+                'presented': gate.canShowUi,
               });
             }
           } finally {
-            session.removeListener(watchInteraction);
             if (_activeVerificationId == id) _activeVerificationId = null;
           }
         });

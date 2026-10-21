@@ -106,7 +106,7 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
     _hasPendingRequest = true;
     final supplied = _suppliedRequest;
     _suppliedRequest = null;
-    final token = await (supplied ?? _session.generateWhenAttached());
+    final token = await (supplied ?? _session.retryWhenAttached());
     _hasPendingRequest = false;
     // Return immediately: animation must never delay submitting a fresh token.
     if (mounted && token != null) Navigator.of(context).pop(token);

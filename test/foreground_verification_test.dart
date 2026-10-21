@@ -60,6 +60,33 @@ void main() {
   );
 
   test(
+    'Closed UI result overrides an earlier foreground acknowledgement',
+    () async {
+      final service = _Service();
+      addTearDown(service.close);
+      service.peer = (method, args) {
+        if (method != 'verification-request') return;
+        service.events['verification-ack']!.add({
+          'id': args!['id'],
+          'presented': true,
+        });
+        service.events['verification-result']!.add({
+          'id': args['id'],
+          'presented': false,
+        });
+      };
+      expect(
+        await ForegroundMonitor.requestVerificationToken(service, 'Train'),
+        (null, false),
+      );
+      expect(
+        service.events.values.every((event) => !event.hasListener),
+        isTrue,
+      );
+    },
+  );
+
+  test(
     'Missing UI falls back promptly without a seat-layout request',
     () async {
       final service = _Service();

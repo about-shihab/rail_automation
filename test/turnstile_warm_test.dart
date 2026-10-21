@@ -84,6 +84,34 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'a booking consumes a warming token without leaving a spent copy cached',
+    (tester) async {
+      await mount(tester);
+      final gate = TurnstileGate.instance;
+      gate.warmInBackground();
+      await tester.pump();
+      await tester.pump();
+      final submitted = <String?>[];
+      final booking = gate.guardSeatLayout<void>(
+        run: (token) async => submitted.add(token),
+      );
+      await tester.pump();
+      platform.controller.send('{"status":"SUCCESS","token":"warm-once"}');
+      await tester.pump();
+      await tester.pump();
+      await booking;
+      expect(submitted, ['warm-once']);
+      expect(
+        await gate.cachedToken(),
+        isNull,
+        reason: 'A warmed token submitted to Railway must not be handed to the next booking',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+    variant: TargetPlatformVariant({TargetPlatform.iOS}),
+  );
+
   testWidgets('Consecutive bookings use new tokens in the same warm browser', (
     tester,
   ) async {
@@ -120,6 +148,36 @@ void main() {
     await tester.pumpAndSettle();
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('login and seat layouts use separate pending challenges', (
+    tester,
+  ) async {
+    await mount(tester);
+    final gate = TurnstileGate.instance;
+    final seats = gate.acquire(label: 'Seat layout', forceFresh: true);
+    await tester.pump();
+    await tester.pump();
+    final login = gate.acquire(label: 'Railway login', forceFresh: true);
+    expect(identical(seats, login), isFalse);
+    expect(platform.controller.executions, 1);
+    platform.controller.send(
+      '{"status":"SUCCESS","token":"seat-purpose-token"}',
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(await seats, 'seat-purpose-token');
+    expect(platform.controller.executions, 2);
+    expect(
+      platform.controller.scripts.last,
+      contains('0x4AAAAAAB5VTjZ90pUxRuXR'),
+    );
+    platform.controller.send(
+      '{"status":"SUCCESS","token":"login-purpose-token"}',
+    );
+    await tester.pump();
+    expect(await login, 'login-purpose-token');
+    await tester.pumpWidget(const SizedBox.shrink());
+  }, variant: TargetPlatformVariant({TargetPlatform.iOS}));
 
   testWidgets(
     'Returning to an interactive check reuses its pending execution',

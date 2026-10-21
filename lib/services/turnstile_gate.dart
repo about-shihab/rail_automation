@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../widgets/ticket_processing_overlay.dart';
+import 'app_config.dart';
 import 'notification_service.dart';
 import 'secure_store.dart';
 import 'seat_layout_challenge.dart';
@@ -19,6 +20,7 @@ class TurnstileGate {
 
   static const _tokenKey = 'rail_cft_token';
   static const _timeKey = 'rail_cft_token_time';
+  static const _siteKey = 'rail_cft_site_key';
 
   /// Cloudflare Turnstile tokens are valid for 5 minutes.
   static const maxTokenAge = Duration(minutes: 5);
@@ -26,6 +28,12 @@ class TurnstileGate {
   static bool isChallengeError(Object error) => error is SeatLayoutChallenge;
 
   Future<String?>? _inflight;
+  String? _inflightSiteKey;
+  Future<void>? _warming;
+  final _submittedTokens = <String, DateTime>{};
+
+  @visibleForTesting
+  void resetSubmittedTokensForTesting() => _submittedTokens.clear();
   PageRoute<String>? _route;
   NavigatorState? _navigator;
   bool _takingToken = false;
@@ -46,6 +54,9 @@ class TurnstileGate {
     return life == null || life == AppLifecycleState.resumed;
   }
 
+  bool get _canRefreshWhileOpen =>
+      canShowUi || (workerAcquire != null && NotificationService().appVisible);
+
   // ── Token cache ──────────────────────────────────────────────────────────
 
   Future<String?> cachedToken() async {
@@ -53,7 +64,11 @@ class TurnstileGate {
     final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
     if (token == null || token.isEmpty || ts == null) return null;
     final age = DateTime.now().millisecondsSinceEpoch - ts;
-    if (age < 0 || age > maxTokenAge.inMilliseconds) {
+    final siteKey = await SecureStore.read(_siteKey);
+    if (age < 0 ||
+        age >= (maxTokenAge - const Duration(seconds: 30)).inMilliseconds ||
+        siteKey != _keyFor('', null) ||
+        _submittedTokens.containsKey(token)) {
       await invalidate();
       return null;
     }
@@ -63,14 +78,19 @@ class TurnstileGate {
   Future<void> invalidate() async {
     await SecureStore.delete(_tokenKey);
     await SecureStore.delete(_timeKey);
+    await SecureStore.delete(_siteKey);
   }
 
-  Future<void> storeToken(String token) async {
+  Future<void> storeToken(String token, {String? siteKey}) async {
+    if (token.trim().isEmpty || _submittedTokens.containsKey(token)) return;
     await SecureStore.write(_tokenKey, token);
     await SecureStore.write(
       _timeKey,
       DateTime.now().millisecondsSinceEpoch.toString(),
     );
+    await SecureStore.write(_siteKey, siteKey ?? _keyFor('', null));
+    // A late warming/notification callback must not put a submitted token back.
+    if (_submittedTokens.containsKey(token)) await invalidate();
   }
 
   /// Remove before sending: a timeout does not prove the server left it unused.
@@ -109,30 +129,49 @@ class TurnstileGate {
   /// Silently solve a verification token in the background while the app is open.
   /// Valid for 5 minutes. Never presents any UI unless an interaction is required.
   void warmInBackground() {
-    if (!canShowUi || isShowing) return;
-    unawaited(() async {
-      try {
-        final existing = await cachedToken();
-        if (existing != null && existing.isNotEmpty) {
-          final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
-          if (ts != null) {
-            final age = DateTime.now().millisecondsSinceEpoch - ts;
-            // Token is still fresh (valid for more than 1 minute remaining)
-            if (age < const Duration(seconds: 240).inMilliseconds) return;
+    if (!canShowUi || isShowing || _warming != null || _layoutAccess != null) {
+      return;
+    }
+    late final Future<void> warming;
+    warming =
+        () async {
+          try {
+            final siteKey = _keyFor('', null);
+            final existing = await cachedToken();
+            if (existing != null && existing.isNotEmpty) {
+              final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
+              if (ts != null) {
+                final age = DateTime.now().millisecondsSinceEpoch - ts;
+                // Token is still fresh (valid for more than 1 minute remaining)
+                if (age < const Duration(seconds: 240).inMilliseconds) return;
+              }
+            }
+            final token = await acquire(
+              label: 'Verification',
+              forceFresh: true,
+              allowPrompt: false,
+              siteKey: siteKey,
+            );
+            if (token != null && token.isNotEmpty) {
+              await storeToken(token, siteKey: siteKey);
+            }
+          } catch (_) {
+            // Silent background warm; keep app undisturbed
           }
-        }
-        final token = await acquire(
-          label: 'Verification',
-          forceFresh: true,
-          allowPrompt: false,
-        );
-        if (token != null && token.isNotEmpty) {
-          await storeToken(token);
-        }
-      } catch (_) {
-        // Silent background warm; keep app undisturbed
-      }
-    }());
+        }().whenComplete(() {
+          if (identical(_warming, warming)) _warming = null;
+        });
+    _warming = warming;
+    unawaited(warming);
+  }
+
+  String _keyFor(String label, String? explicitKey) {
+    final purpose = label == 'Railway login' ? 'sign_in' : 'seat_layout';
+    return explicitKey ??
+        AppConfig.instance.siteKey(purpose) ??
+        (purpose == 'sign_in'
+            ? '0x4AAAAAAB5VTjZ90pUxRuXR'
+            : TurnstileSession.defaultSiteKey);
   }
 
   // ── Acquire ──────────────────────────────────────────────────────────────
@@ -149,18 +188,33 @@ class TurnstileGate {
     String? siteKey,
     bool allowPrompt = true,
   }) {
+    final targetKey = _keyFor(label, siteKey);
     final running = _inflight;
-    if (running != null) return running; // one prompt, many waiters
+    if (running != null) {
+      if (_inflightSiteKey == targetKey) return running;
+      // Login and seat-layout tokens belong to different widgets. Sharing a
+      // pending challenge across these purposes submits a token for the wrong key.
+      return running.then(
+        (_) => acquire(
+          label: label,
+          forceFresh: true,
+          siteKey: targetKey,
+          allowPrompt: allowPrompt,
+        ),
+      );
+    }
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh, siteKey, allowPrompt).whenComplete(() {
+    f = _acquire(label, forceFresh, targetKey, allowPrompt).whenComplete(() {
       if (identical(_inflight, f)) {
         _inflight = null;
+        _inflightSiteKey = null;
         _route = null;
         _navigator = null;
       }
     });
     _inflight = f;
+    _inflightSiteKey = targetKey;
     return f;
   }
 
@@ -171,9 +225,7 @@ class TurnstileGate {
     bool allowPrompt = true,
   ]) async {
     // Capture a pending silent execution before any async storage/navigation.
-    final targetKey =
-        siteKey ??
-        (label == 'Railway login' ? '0x4AAAAAAB5VTjZ90pUxRuXR' : null);
+    final targetKey = _keyFor(label, siteKey);
     final session = TurnstileSession.instance;
     final pending = session.generating
         ? session.generate(targetKey)
@@ -183,7 +235,7 @@ class TurnstileGate {
     if (forceFresh) {
       await invalidate();
     } else {
-      final cached = await cachedToken();
+      final cached = label == 'Railway login' ? null : await takeCachedToken();
       if (cached != null) return cached;
     }
     final worker = workerAcquire;
@@ -266,8 +318,8 @@ class TurnstileGate {
   }
 
   /// Generate just before the seat-layout read.
-  /// If a valid token was already pre-solved in the background (< 5 min),
-  /// it is used immediately without showing any challenge to the user.
+  /// An unused prepared token with at least 30 seconds of lifetime is consumed
+  /// immediately. Explicit rejection gets one fresh-token retry while open.
   Future<T> guardSeatLayout<T>({
     String label = '',
     bool allowPrompt = true,
@@ -291,32 +343,68 @@ class TurnstileGate {
     required bool allowPrompt,
     required Future<T> Function(String? token) run,
   }) async {
-    final handedOff = await takeCachedToken();
-    workerPromptPresented = false;
-    final token =
-        handedOff ??
-        (allowPrompt || workerAcquire != null
-            ? await acquire(
-                label: label,
-                forceFresh: true,
-                allowPrompt: allowPrompt,
-              )
-            : null);
-    if (token == null) {
-      throw SeatLayoutChallenge(
-        verificationAttempted:
-            workerPromptPresented || (allowPrompt && canShowUi),
-      );
-    }
-    try {
-      final res = await run(token);
-      if (canShowUi && _refreshTimer != null) {
-        warmInBackground();
+    // The warming owner must finish storing its result before it can be taken.
+    // Joining acquire() directly lets that owner cache a token AFTER submission.
+    final warming = _warming;
+    if (warming != null) await warming;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final handedOff = attempt == 0 ? await takeCachedToken() : null;
+      workerPromptPresented = false;
+      final token =
+          handedOff ??
+          (canShowUi || workerAcquire != null
+              ? await acquire(
+                  label: label,
+                  forceFresh: true,
+                  allowPrompt: allowPrompt,
+                )
+              : null);
+      if (token == null || token.trim().isEmpty) {
+        throw SeatLayoutChallenge(
+          verificationAttempted:
+              attempt > 0 ||
+              workerPromptPresented ||
+              (allowPrompt && canShowUi),
+          requiresForeground: !_canRefreshWhileOpen,
+        );
       }
-      return res;
-    } on SeatLayoutChallenge {
-      await invalidate();
-      throw const SeatLayoutChallenge(verificationAttempted: true);
+      final now = DateTime.now();
+      _submittedTokens.removeWhere(
+        (_, sentAt) => now.difference(sentAt) >= maxTokenAge,
+      );
+      if (_submittedTokens.containsKey(token)) {
+        await invalidate();
+        if (attempt == 0) continue;
+        throw SeatLayoutChallenge(
+          verificationAttempted: true,
+          requiresForeground: !_canRefreshWhileOpen,
+        );
+      }
+      // Claim before I/O: a timeout can still mean Railway consumed the token.
+      _submittedTokens[token] = now;
+      try {
+        return await run(token);
+      } on SeatLayoutChallenge catch (error) {
+        await invalidate();
+        if (error.tokenRejected && attempt == 0) {
+          if (!_canRefreshWhileOpen) {
+            throw const SeatLayoutChallenge(
+              verificationAttempted: true,
+              tokenRejected: true,
+              requiresForeground: true,
+            );
+          }
+          // Refresh only for an explicit token rejection. 429s, network errors
+          // and all booking mutations retain their own backoff/outcome rules.
+          continue;
+        }
+        throw SeatLayoutChallenge(
+          verificationAttempted: true,
+          tokenRejected: error.tokenRejected,
+          requiresForeground: error.requiresForeground || !_canRefreshWhileOpen,
+        );
+      }
     }
+    throw const SeatLayoutChallenge(verificationAttempted: true);
   }
 }

@@ -19,6 +19,7 @@ import 'package:rail_automation/services/railway_credentials_rejected.dart';
 import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/services/sms_service.dart';
 import 'package:rail_automation/services/turnstile_gate.dart';
+import 'package:rail_automation/services/seat_layout_challenge.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -89,6 +90,46 @@ void main() {
     expect((await AuthSession.load())!.token, 'new-session');
     expect(await SecureStore.read('rail_action_token'), isNull);
     expect(calls.last.headers.containsKey('X-Action-Token'), isFalse);
+  });
+
+  test('seat-layout session recovery requires a new CFT token instead of replaying the first', () async {
+    final submitted = <String?>[];
+    await http.runWithClient(
+      () async {
+        Future<http.Response> layout(String token) => RailApiClient.request(
+          operation: 'seat_layout',
+          method: 'GET',
+          payload: {
+            'trip_id': '1',
+            'trip_route_id': '2',
+            'cft_response': token,
+          },
+          auth: auth,
+        );
+        await expectLater(
+          layout('first-one-use-token'),
+          throwsA(isA<SeatLayoutChallenge>()),
+        );
+        expect(submitted, ['first-one-use-token']);
+        expect((await AuthSession.load())!.token, 'renewed-session');
+        expect((await layout('new-explicit-attempt-token')).statusCode, 200);
+        expect(submitted, [
+          'first-one-use-token',
+          'new-explicit-attempt-token',
+        ]);
+      },
+      () => MockClient((req) async {
+        if (req.url.path.endsWith('sign-in')) {
+          return http.Response(
+            '{"data":{"access_token":"renewed-session"}}',
+            200,
+          );
+        }
+        submitted.add(req.url.queryParameters['cft_response']);
+        return http.Response('{}', submitted.length == 1 ? 401 : 200);
+      }),
+    );
+    expect(challenges, 1);
   });
 
   test('only explicit wrong credentials produce the login redirect error', () async {

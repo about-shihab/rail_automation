@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import '../services/language_service.dart';
+import '../services/rail_request_pacer.dart';
+import '../services/seat_layout_challenge.dart';
 
 /// Transforms raw API/network/runtime exceptions and Railway server responses
 /// into clean, user-friendly messages.
@@ -11,6 +13,21 @@ String friendlyErrorMessage(dynamic raw, {bool? isBangla}) {
   final bn = isBangla ?? LanguageService.instance.isBangla;
 
   String pick(String en, String bangla) => bn ? bangla : en;
+
+  if (raw is SeatLayoutChallenge && raw.requiresForeground) {
+    return pick(
+      'Open Rail Pro to refresh verification and load your seats.',
+      'নিরাপত্তা যাচাই হালনাগাদ করে আসন দেখতে Rail Pro খুলুন।',
+    );
+  }
+
+  if (raw is RailwayRateLimited) {
+    final seconds = raw.secondsRemaining();
+    return pick(
+      'Railway is receiving too many requests. Waiting $seconds seconds before trying again.',
+      'রেলওয়েতে অতিরিক্ত অনুরোধ যাচ্ছে। আবার চেষ্টা করার আগে $seconds সেকেন্ড অপেক্ষা করুন।',
+    );
+  }
 
   // 1. Try to extract specific message from embedded JSON or map representations
   final extracted = _extractServerMessage(str);
@@ -138,7 +155,13 @@ String friendlyErrorMessage(dynamic raw, {bool? isBangla}) {
   var clean = str
       .replaceAll(RegExp(r'\{.*?\}', dotAll: true), '')
       .replaceAll(RegExp(r'Bad state:\s*', caseSensitive: false), '')
-      .replaceAll(RegExp(r'Railway request [^\s]+ failed \(\d+\):\s*', caseSensitive: false), '')
+      .replaceAll(
+        RegExp(
+          r'Railway request [^\s]+ failed \(\d+\):\s*',
+          caseSensitive: false,
+        ),
+        '',
+      )
       .replaceAll(RegExp(r'Exception:\s*', caseSensitive: false), '')
       .replaceAll(RegExp(r'StateError:\s*', caseSensitive: false), '')
       .replaceAll(RegExp(r'FormatException:\s*', caseSensitive: false), '')
@@ -146,7 +169,10 @@ String friendlyErrorMessage(dynamic raw, {bool? isBangla}) {
       .replaceAll(RegExp(r'[:\-–—]+$'), '')
       .trim();
 
-  if (clean.isEmpty || clean.length < 4 || clean.contains('{') || clean.contains('}')) {
+  if (clean.isEmpty ||
+      clean.length < 4 ||
+      clean.contains('{') ||
+      clean.contains('}')) {
     return pick(
       'Action could not be completed • Please try again',
       'অনুরোধটি সম্পন্ন করা সম্ভব হয়নি • অনুগ্রহ করে আবার চেষ্টা করুন',
@@ -189,7 +215,9 @@ String? _extractFromMap(Map map) {
     final errors = messages['errors'];
     if (errors is Map && errors.isNotEmpty) {
       final firstVal = errors.values.first;
-      if (firstVal is List && firstVal.isNotEmpty) return firstVal.first.toString();
+      if (firstVal is List && firstVal.isNotEmpty) {
+        return firstVal.first.toString();
+      }
       if (firstVal != null) return firstVal.toString();
     }
   } else if (messages is List && messages.isNotEmpty) {
@@ -206,7 +234,8 @@ String? _extractFromMap(Map map) {
     return error;
   }
 
-  final msg = map['message']?.toString() ??
+  final msg =
+      map['message']?.toString() ??
       map['detail']?.toString() ??
       map['msg']?.toString();
   if (msg != null && msg.isNotEmpty) return msg;
@@ -217,13 +246,19 @@ String? _extractFromMap(Map map) {
 /// Extracts from Dart Map toString output like:
 /// `{code: 422, messages: {errorKey: OtpNotVerified, message: Otp does not match}}`
 String? _extractFromDartMapString(String text) {
-  final messageMatch = RegExp(r'''(?:message|msg)\s*[:=]\s*["']?([^,"'}]+)''', caseSensitive: false).firstMatch(text);
+  final messageMatch = RegExp(
+    r'''(?:message|msg)\s*[:=]\s*["']?([^,"'}]+)''',
+    caseSensitive: false,
+  ).firstMatch(text);
   if (messageMatch != null) {
     final val = messageMatch.group(1)?.trim();
     if (val != null && val.isNotEmpty && !val.startsWith('{')) return val;
   }
 
-  final errorKeyMatch = RegExp(r'''errorKey\s*[:=]\s*["']?([a-zA-Z0-9_]+)''', caseSensitive: false).firstMatch(text);
+  final errorKeyMatch = RegExp(
+    r'''errorKey\s*[:=]\s*["']?([a-zA-Z0-9_]+)''',
+    caseSensitive: false,
+  ).firstMatch(text);
   if (errorKeyMatch != null) {
     return errorKeyMatch.group(1)?.trim();
   }
@@ -243,7 +278,9 @@ String? _translateKnownMessage(String msg, bool bn) {
       'আপনার দেওয়া ওটিপি কোডটি মেলেনি। অনুগ্রহ করে এসএমএস দেখে আবার চেষ্টা করুন।',
     );
   }
-  if (lower.contains('otpexpired') || lower.contains('otp expired') || lower.contains('otp has expired')) {
+  if (lower.contains('otpexpired') ||
+      lower.contains('otp expired') ||
+      lower.contains('otp has expired')) {
     return pick(
       'The OTP code has expired. Please tap "Resend OTP" to request a new code.',
       'ওটিপি কোডের মেয়াদ শেষ হয়ে গেছে। নতুন কোড পেতে "পুনরায় পাঠান" চাপুন।',
@@ -266,7 +303,17 @@ String? _translateKnownMessage(String msg, bool bn) {
       'বুকিং সম্পন্ন করতে এগিয়ে যান',
     );
   }
-  if (lower.contains('quota') || lower.contains('maximum seat') || lower.contains('limit')) {
+  if (lower.contains('429') ||
+      lower.contains('too many requests') ||
+      lower.contains('rate limit')) {
+    return pick(
+      'Railway is busy. Requests are paused; please wait before trying again.',
+      'রেলওয়ে ব্যস্ত। অনুরোধ সাময়িক বন্ধ আছে; আবার চেষ্টা করার আগে অপেক্ষা করুন।',
+    );
+  }
+  if (lower.contains('quota') ||
+      lower.contains('maximum seat') ||
+      lower.contains('limit')) {
     return pick(
       'Maximum seat quota limit reached for this journey.',
       'এই যাত্রার জন্য সর্বোচ্চ আসন কোটার সীমা পূর্ণ হয়েছে।',

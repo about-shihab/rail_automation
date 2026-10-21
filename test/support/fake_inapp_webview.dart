@@ -8,6 +8,7 @@ class FakeInAppWebViewPlatform extends InAppWebViewPlatform {
   late PlatformInAppWebViewWidgetCreationParams parameters;
   bool autoFinishLoad = true;
   bool autoReady = true;
+  String userAgent = 'test-webview-user-agent';
   String origin = 'https://eticket.railway.gov.bd/';
   String loadUrl = 'https://eticket.railway.gov.bd/';
   int creations = 0;
@@ -28,6 +29,7 @@ class FakeInAppWebViewPlatform extends InAppWebViewPlatform {
     controller = FakeInAppWebViewController()
       ..origin = origin
       ..requestUrl = loadUrl
+      ..userAgent = userAgent
       ..autoReady = autoReady;
     return _FakeInAppWebViewWidget(params, controller, this);
   }
@@ -45,6 +47,7 @@ class FakeInAppWebViewController extends PlatformInAppWebViewController {
   String origin = 'https://eticket.railway.gov.bd/';
   String requestUrl = 'https://eticket.railway.gov.bd/';
   bool autoReady = true;
+  String userAgent = 'test-webview-user-agent';
   int get executions =>
       scripts.where((s) => s.startsWith('window.__railBegin(')).length;
 
@@ -71,9 +74,11 @@ class FakeInAppWebViewController extends PlatformInAppWebViewController {
     final bridge = RegExp(r'var bridgeId = ("[^"]*");').firstMatch(source);
     if (bridge != null) bridgeId = jsonDecode(bridge[1]!) as String;
     if (source.contains('window.__railPrepared = true')) {
-      if (autoReady) send('{"status":"READY"}');
+      if (autoReady) {
+        send(jsonEncode({'status': 'READY', 'userAgent': userAgent}));
+      }
     }
-    final match = RegExp(r'^window\.__railBegin\((\d+)\)').firstMatch(source);
+    final match = RegExp(r'^window\.__railBegin\((\d+)[,)]').firstMatch(source);
     if (match != null) requestId = int.parse(match[1]!);
   }
 

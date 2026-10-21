@@ -52,6 +52,7 @@ class BookingService {
       AppConfig.instance.number('reservation_timeout_minutes');
 
   static final _layoutRequests = <(int, int, String), Future<BookingLayout>>{};
+  static bool _reserving = false;
 
   static Future<BookingLayout> loadLayout({
     required SeatType seat,
@@ -70,6 +71,9 @@ class BookingService {
       () => BookingActivity.instance.run(BookingActivityStage.layout, () async {
         try {
           await AppUpdateService.instance.ensureBookingAllowed();
+          await RailApiClient.ensureReady();
+          var session = await RailApiClient.current(auth);
+          if (!session.isValid) session = await RailApiClient.refresh(session);
           return await TurnstileGate.instance.guardSeatLayout(
             label: label,
             allowPrompt: allowPrompt,
@@ -80,7 +84,7 @@ class BookingService {
               await ApiService.fetchSeatLayout(
                 tripId: tripId,
                 tripRouteId: routeId,
-                authSession: auth,
+                authSession: session,
                 cftResponse: token,
               ),
             ),
@@ -257,262 +261,273 @@ class BookingService {
     BookingLayout? preparedLayout,
     bool allowVerificationPrompt = false,
   }) async {
-    return BookingActivity.instance.run(
-      BookingActivityStage.reserving,
-      () async {
-        await AppUpdateService.instance.ensureBookingAllowed();
-        if (await pending() != null) {
-          throw StateError(
-            'An existing reservation needs your attention. Open it before starting another.',
-          );
-        }
-        if (quantity < 1 || quantity > AppConfig.instance.number('max_seats')) {
-          throw StateError('Invalid seat quantity.');
-        }
-        if (seat.tripId == null || seat.tripRouteId == null) {
-          throw StateError(
-            'Trip information is missing. Open the official booking page.',
-          );
-        }
-        final config = await request('POST', '/handshake', {
-          'hash': null,
-          'eticket': true,
-          'shohoz': false,
-          'trainBkash': false,
-          'trainNagad': false,
-        }, auth);
-        final holdDuration = num.tryParse(
-          '${config['release_time_interval_in_minutes']}',
-        );
-        if (holdDuration == null || holdDuration <= 0 || holdDuration > 3600) {
-          throw StateError(
-            'Railway reservation duration is unavailable. Please use the official booking page.',
-          );
-        }
-        // The website rounds this server field to whole minutes after dividing by 60.
-        final holdSeconds = (holdDuration / 60).ceil() * 60;
-        await SecureStore.write('rail_hold_seconds', '$holdSeconds');
-        final prepared =
-            preparedLayout ??
-            await loadLayout(
-              seat: seat,
-              auth: auth,
-              label: '${train.tripNumber} · ${seat.type}',
-              allowPrompt: allowVerificationPrompt,
+    if (_reserving) {
+      throw StateError('A reservation is already in progress. Please wait.');
+    }
+    _reserving = true;
+    try {
+      return await BookingActivity.instance.run(
+        BookingActivityStage.reserving,
+        () async {
+          await AppUpdateService.instance.ensureBookingAllowed();
+          if (await pending() != null) {
+            throw StateError(
+              'An existing reservation needs your attention. Open it before starting another.',
             );
-        if (prepared.tripId != seat.tripId ||
-            prepared.routeId != seat.tripRouteId ||
-            prepared.sessionToken != auth.token) {
-          throw StateError(
-            'Seat selection belongs to another booking. Reload seats.',
-          );
-        }
-        final layout = prepared.layout;
-        final candidates = <(CoachLayout, SeatItem)>[];
-        for (final coach in layout.coaches) {
-          final fare = double.tryParse(coach.seatFare);
-          if (fare == null ||
-              !fare.isFinite ||
-              fare < 0 ||
-              (maxFare != null && fare + seat.vatAmount > maxFare)) {
-            continue;
           }
-          for (final row in coach.layout) {
-            for (final item in row) {
-              if (item.isAvailable &&
-                  item.ticketId > 0 &&
-                  (selectedSeats == null ||
-                      selectedSeats.any((s) => s.ticketId == item.ticketId))) {
-                candidates.add((coach, item));
+          if (quantity < 1 ||
+              quantity > AppConfig.instance.number('max_seats')) {
+            throw StateError('Invalid seat quantity.');
+          }
+          if (seat.tripId == null || seat.tripRouteId == null) {
+            throw StateError(
+              'Trip information is missing. Open the official booking page.',
+            );
+          }
+          final config = await request('POST', '/handshake', {
+            'hash': null,
+            'eticket': true,
+            'shohoz': false,
+            'trainBkash': false,
+            'trainNagad': false,
+          }, auth);
+          final holdDuration = num.tryParse(
+            '${config['release_time_interval_in_minutes']}',
+          );
+          if (holdDuration == null ||
+              holdDuration <= 0 ||
+              holdDuration > 3600) {
+            throw StateError(
+              'Railway reservation duration is unavailable. Please use the official booking page.',
+            );
+          }
+          // The website rounds this server field to whole minutes after dividing by 60.
+          final holdSeconds = (holdDuration / 60).ceil() * 60;
+          await SecureStore.write('rail_hold_seconds', '$holdSeconds');
+          final prepared =
+              preparedLayout ??
+              await loadLayout(
+                seat: seat,
+                auth: auth,
+                label: '${train.tripNumber} · ${seat.type}',
+                allowPrompt: allowVerificationPrompt,
+              );
+          if (prepared.tripId != seat.tripId ||
+              prepared.routeId != seat.tripRouteId ||
+              prepared.sessionToken != auth.token) {
+            throw StateError(
+              'Seat selection belongs to another booking. Reload seats.',
+            );
+          }
+          final layout = prepared.layout;
+          final candidates = <(CoachLayout, SeatItem)>[];
+          for (final coach in layout.coaches) {
+            final fare = double.tryParse(coach.seatFare);
+            if (fare == null ||
+                !fare.isFinite ||
+                fare < 0 ||
+                (maxFare != null && fare + seat.vatAmount > maxFare)) {
+              continue;
+            }
+            for (final row in coach.layout) {
+              for (final item in row) {
+                if (item.isAvailable &&
+                    item.ticketId > 0 &&
+                    (selectedSeats == null ||
+                        selectedSeats.any(
+                          (s) => s.ticketId == item.ticketId,
+                        ))) {
+                  candidates.add((coach, item));
+                }
               }
             }
           }
-        }
-        final List<(CoachLayout, SeatItem)> chosen;
-        if (selectedSeats != null && selectedSeats.isNotEmpty) {
-          if (candidates.length < quantity) {
-            throw StateError(
-              'Selected seats are no longer available. Please select available seats.',
-            );
-          }
-          chosen = candidates.take(quantity).toList();
-        } else {
-          candidates.shuffle(Random.secure());
-          final coaches = candidates.map((c) => c.$1).toSet().toList()
-            ..shuffle(Random.secure());
-          final sameCoach = coaches
-              .where(
-                (c) =>
-                    candidates.where((s) => identical(s.$1, c)).length >=
-                    quantity,
-              )
-              .toList();
-          if (sameCoach.isNotEmpty) {
-            chosen = candidates
-                .where((s) => identical(s.$1, sameCoach.first))
-                .take(quantity)
-                .toList();
-          } else if (candidates.length >= quantity) {
+          final List<(CoachLayout, SeatItem)> chosen;
+          if (selectedSeats != null && selectedSeats.isNotEmpty) {
+            if (candidates.length < quantity) {
+              throw StateError(
+                'Selected seats are no longer available. Please select available seats.',
+              );
+            }
             chosen = candidates.take(quantity).toList();
           } else {
-            throw StateError(
-              'Not enough matching seats remain. Monitoring can continue.',
-            );
-          }
-        }
-        final coachNames = chosen
-            .map(
-              (s) => s.$1.floorName.isNotEmpty
-                  ? s.$1.floorName
-                  : '${s.$1.seatFloor}',
-            )
-            .toSet()
-            .join(', ');
-        final state = <String, dynamic>{
-          'id': AuthSession.generateUuid(),
-          'status': 'reserving',
-          'train': train.toJson(),
-          'seatClass': seat.toJson(),
-          'coach': chosen.first.$1.toJson(),
-          'coach_names': coachNames,
-          'seats': chosen
-              .map(
-                (s) => {
-                  ...s.$2.toJson(),
-                  'floor': s.$1.seatFloor,
-                  'floor_name': s.$1.floorName,
-                  'fare': s.$1.seatFare,
-                  'selected_seat_class': seat.type,
-                },
-              )
-              .toList(),
-          'from': from,
-          'to': to,
-          'date': date,
-          'confirmedTicketIds': <int>[],
-          'autoVerify': autoVerify,
-          'startedAt': DateTime.now().toUtc().toIso8601String(),
-          'expiresAt': DateTime.now()
-              .add(
-                Duration(
-                  seconds: min(holdSeconds, reservationTimeoutMinutes * 60),
-                ),
-              )
-              .toUtc()
-              .toIso8601String(),
-        };
-        if (canReserve != null && !await canReserve()) {
-          throw StateError('This search has been paused or replaced.');
-        }
-        await save(
-          state,
-        ); // Persist before mutation, including unknown/timeout outcomes.
-        try {
-          for (final item in chosen) {
-            final data = await request('PATCH', '/bookings/reserve-seat', {
-              'ticket_id': item.$2.ticketId,
-              'route_id': seat.tripRouteId,
-              'extras': {
-                'seat_number': item.$2.seatNumber,
-                'trip_number': train.tripNumber,
-                'origin_name': from,
-                'destination_name': to,
-              },
-            }, auth);
-            if (data['ack'] != 1) {
-              throw StateError('Seat reservation was not acknowledged.');
+            candidates.shuffle(Random.secure());
+            final coaches = candidates.map((c) => c.$1).toSet().toList()
+              ..shuffle(Random.secure());
+            final sameCoach = coaches
+                .where(
+                  (c) =>
+                      candidates.where((s) => identical(s.$1, c)).length >=
+                      quantity,
+                )
+                .toList();
+            if (sameCoach.isNotEmpty) {
+              chosen = candidates
+                  .where((s) => identical(s.$1, sameCoach.first))
+                  .take(quantity)
+                  .toList();
+            } else if (candidates.length >= quantity) {
+              chosen = candidates.take(quantity).toList();
+            } else {
+              throw StateError(
+                'Not enough matching seats remain. Monitoring can continue.',
+              );
             }
-            (state['confirmedTicketIds'] as List<int>).add(item.$2.ticketId);
-            await save(state);
           }
-          if (autoVerify && !await SmsService().prepareListening()) {
-            state['autoVerify'] = false;
-          }
-          final data = await request(
-            'POST',
-            '/bookings/passenger-details',
-            tripBody(state),
-            auth,
-          );
-          if (data['success'] != true) {
-            throw StateError(
-              'Railway did not confirm the passenger-details step.',
-            );
-          }
-          state['status'] = 'awaitingOtp';
-          BookingActivity.instance.clearWorkerStage();
-          state['seniorCitizenEligible'] =
-              data['senior_citizen_eligible'] == true;
-          // Duration is captured from the official site's handshake, not invented locally.
-          final seconds = int.tryParse(
-            await SecureStore.read('rail_hold_seconds') ?? '',
-          );
-          if (seconds != null && seconds > 0) {
-            state['expiresAt'] = DateTime.parse(state['startedAt'])
+          final coachNames = chosen
+              .map(
+                (s) => s.$1.floorName.isNotEmpty
+                    ? s.$1.floorName
+                    : '${s.$1.seatFloor}',
+              )
+              .toSet()
+              .join(', ');
+          final state = <String, dynamic>{
+            'id': AuthSession.generateUuid(),
+            'status': 'reserving',
+            'train': train.toJson(),
+            'seatClass': seat.toJson(),
+            'coach': chosen.first.$1.toJson(),
+            'coach_names': coachNames,
+            'seats': chosen
+                .map(
+                  (s) => {
+                    ...s.$2.toJson(),
+                    'floor': s.$1.seatFloor,
+                    'floor_name': s.$1.floorName,
+                    'fare': s.$1.seatFare,
+                    'selected_seat_class': seat.type,
+                  },
+                )
+                .toList(),
+            'from': from,
+            'to': to,
+            'date': date,
+            'confirmedTicketIds': <int>[],
+            'autoVerify': autoVerify,
+            'startedAt': DateTime.now().toUtc().toIso8601String(),
+            'expiresAt': DateTime.now()
                 .add(
                   Duration(
-                    seconds: min(seconds, reservationTimeoutMinutes * 60),
+                    seconds: min(holdSeconds, reservationTimeoutMinutes * 60),
                   ),
                 )
                 .toUtc()
-                .toIso8601String();
+                .toIso8601String(),
+          };
+          if (canReserve != null && !await canReserve()) {
+            throw StateError('This search has been paused or replaced.');
           }
-          final seatsList = chosen.map((s) => s.$2.seatNumber).toList();
-          final coachName = coachNames.isNotEmpty
-              ? coachNames
-              : (chosen.first.$1.floorName.isNotEmpty
-                    ? chosen.first.$1.floorName
-                    : '${chosen.first.$1.seatFloor}');
-          final fareNum =
-              double.tryParse(chosen.first.$1.seatFare) ??
-              (double.tryParse(seat.fare) ?? 0.0);
-
-          // When OTP is sent, reservation costs 1 credit. User can proceed to pay with 0 credit.
-          state['credit_deducted'] = true;
-          if (isAutoBook || autoVerify) {
-            state['isAutoBook'] = true;
-          }
-          await CreditService().deductBookingCredit(
-            trainName: train.tripNumber,
-            seatInfo: '$coachName (${seatsList.join(", ")})',
-          );
-          await save(state);
+          await save(
+            state,
+          ); // Persist before mutation, including unknown/timeout outcomes.
           try {
-            await VoiceService.instance.speakBookingConfirmed();
-          } catch (_) {}
-
-          try {
-            await TripHistoryService().recordTrip(
-              TripRecord(
-                id: state['id']?.toString() ?? '',
-                trainName: train.tripNumber,
-                fromCity: from,
-                toCity: to,
-                dateOfJourney: date,
-                seatClass: seat.type,
-                seatNumbers: seatsList,
-                coachName: coachName,
-                totalFare:
-                    fareNum *
-                    (seatsList.isNotEmpty ? seatsList.length : quantity),
-                status: TripBookingStatus.awaitingOtp,
-                createdAt: DateTime.now(),
-                isAutoBook: isAutoBook || autoVerify,
-              ),
+            for (final item in chosen) {
+              final data = await request('PATCH', '/bookings/reserve-seat', {
+                'ticket_id': item.$2.ticketId,
+                'route_id': seat.tripRouteId,
+                'extras': {
+                  'seat_number': item.$2.seatNumber,
+                  'trip_number': train.tripNumber,
+                  'origin_name': from,
+                  'destination_name': to,
+                },
+              }, auth);
+              if (data['ack'] != 1) {
+                throw StateError('Seat reservation was not acknowledged.');
+              }
+              (state['confirmedTicketIds'] as List<int>).add(item.$2.ticketId);
+              await save(state);
+            }
+            if (autoVerify && !await SmsService().prepareListening()) {
+              state['autoVerify'] = false;
+            }
+            final data = await request(
+              'POST',
+              '/bookings/passenger-details',
+              tripBody(state),
+              auth,
             );
-          } catch (_) {}
-          return state;
-        } catch (_) {
-          if (isAutoBook) {
-            await clear();
-          } else {
+            if (data['success'] != true) {
+              throw StateError(
+                'Railway did not confirm the passenger-details step.',
+              );
+            }
+            state['status'] = 'awaitingOtp';
+            BookingActivity.instance.clearWorkerStage();
+            state['seniorCitizenEligible'] =
+                data['senior_citizen_eligible'] == true;
+            // Duration is captured from the official site's handshake, not invented locally.
+            final seconds = int.tryParse(
+              await SecureStore.read('rail_hold_seconds') ?? '',
+            );
+            if (seconds != null && seconds > 0) {
+              state['expiresAt'] = DateTime.parse(state['startedAt'])
+                  .add(
+                    Duration(
+                      seconds: min(seconds, reservationTimeoutMinutes * 60),
+                    ),
+                  )
+                  .toUtc()
+                  .toIso8601String();
+            }
+            final seatsList = chosen.map((s) => s.$2.seatNumber).toList();
+            final coachName = coachNames.isNotEmpty
+                ? coachNames
+                : (chosen.first.$1.floorName.isNotEmpty
+                      ? chosen.first.$1.floorName
+                      : '${chosen.first.$1.seatFloor}');
+            final fareNum =
+                double.tryParse(chosen.first.$1.seatFare) ??
+                (double.tryParse(seat.fare) ?? 0.0);
+
+            // When OTP is sent, reservation costs 1 credit. User can proceed to pay with 0 credit.
+            state['credit_deducted'] = true;
+            if (isAutoBook || autoVerify) {
+              state['isAutoBook'] = true;
+            }
+            await CreditService().deductBookingCredit(
+              trainName: train.tripNumber,
+              seatInfo: '$coachName (${seatsList.join(", ")})',
+            );
+            await save(state);
+            try {
+              await VoiceService.instance.speakBookingConfirmed();
+            } catch (_) {}
+
+            try {
+              await TripHistoryService().recordTrip(
+                TripRecord(
+                  id: state['id']?.toString() ?? '',
+                  trainName: train.tripNumber,
+                  fromCity: from,
+                  toCity: to,
+                  dateOfJourney: date,
+                  seatClass: seat.type,
+                  seatNumbers: seatsList,
+                  coachName: coachName,
+                  totalFare:
+                      fareNum *
+                      (seatsList.isNotEmpty ? seatsList.length : quantity),
+                  status: TripBookingStatus.awaitingOtp,
+                  createdAt: DateTime.now(),
+                  isAutoBook: isAutoBook || autoVerify,
+                ),
+              );
+            } catch (_) {}
+            return state;
+          } catch (_) {
+            // A timeout or rejection after some seats were held must retain the
+            // booking record. Replaying an auto-book could reserve seats twice.
             state['status'] = 'needsReview';
             await save(state);
+            rethrow;
           }
-          rethrow;
-        }
-      },
-    );
+        },
+      );
+    } finally {
+      _reserving = false;
+    }
   }
 
   static Future<Map<String, dynamic>>? _otpVerification;

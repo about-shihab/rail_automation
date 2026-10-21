@@ -180,36 +180,44 @@ void main() {
     },
   );
 
-  testWidgets('A rejected fresh token stops after one prompt and one read', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        builder: (context, child) => TurnstileHost(child: child!),
-        navigatorKey: NotificationService.navigatorKey,
-        home: const Scaffold(),
-      ),
-    );
-    var reads = 0;
-    final future = TurnstileGate.instance.guardSeatLayout<void>(
-      run: (_) async {
-        reads++;
-        throw const SeatLayoutChallenge();
-      },
-    );
-    final assertion = expectLater(future, throwsA(isA<SeatLayoutChallenge>()));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(reads, 0);
-    webview.controller.send('{"status":"SUCCESS","token":"fresh-token"}');
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 500));
-    await tester.pumpAndSettle();
-    await assertion;
-    expect(reads, 1);
-    expect(find.byType(TicketProcessingOverlay), findsNothing);
-    expect(await TurnstileGate.instance.cachedToken(), isNull);
-  });
+  testWidgets(
+    'Rejected tokens get one automatic refresh without repeated prompts',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => TurnstileHost(child: child!),
+          navigatorKey: NotificationService.navigatorKey,
+          home: const Scaffold(),
+        ),
+      );
+      var reads = 0;
+      final future = TurnstileGate.instance.guardSeatLayout<void>(
+        run: (_) async {
+          reads++;
+          throw const SeatLayoutChallenge(tokenRejected: true);
+        },
+      );
+      final assertion = expectLater(
+        future,
+        throwsA(isA<SeatLayoutChallenge>()),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(reads, 0);
+      webview.controller.send('{"status":"SUCCESS","token":"fresh-token"}');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(reads, 1);
+      expect(webview.controller.executions, 2);
+      webview.controller.send('{"status":"SUCCESS","token":"refreshed-token"}');
+      await tester.pump();
+      await tester.pumpAndSettle();
+      await assertion;
+      expect(reads, 2);
+      expect(find.byType(TicketProcessingOverlay), findsNothing);
+      expect(await TurnstileGate.instance.cachedToken(), isNull);
+    },
+  );
 
   group('Turnstile Verification Popup Tests', () {
     testWidgets(

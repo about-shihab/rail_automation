@@ -35,6 +35,7 @@ import 'turnstile_gate.dart';
 import 'seat_layout_challenge.dart';
 import 'intermediate_station_search.dart';
 import '../views/reservation_screen.dart';
+import '../utils/friendly_error.dart';
 
 class MonitorLog {
   final DateTime time;
@@ -1092,7 +1093,9 @@ class MonitorService extends ChangeNotifier {
   /// boost, error backoff and jitter (see [SearchScheduler]).
   Duration nextCheckDelay() {
     if (isScheduled) return scheduledStartAt!.difference(_now());
-    return _scheduler.nextDelay(departure: _expiresAt, now: _now());
+    final scheduled = _scheduler.nextDelay(departure: _expiresAt, now: _now());
+    final cooldown = RailApiClient.cooldownRemaining;
+    return cooldown > scheduled ? cooldown : scheduled;
   }
 
   /// Single-shot timer, re-armed after every check, so a changed database
@@ -1248,7 +1251,6 @@ class MonitorService extends ChangeNotifier {
           notifyListeners();
           return;
         }
-        _scheduler.recordSuccess();
 
         session = await RailApiClient.current(session);
         if (!_isMonitoring || generation != _generation || _disposed) return;
@@ -1282,7 +1284,7 @@ class MonitorService extends ChangeNotifier {
           stopMonitoring();
           return;
         }
-        var upcomingTrains = response.trains.where((t) {
+        final upcomingTrains = response.trains.where((t) {
           final departure = _departureForTrain(t);
           return departure == null || departure.isAfter(_now());
         }).toList();
@@ -1382,14 +1384,6 @@ class MonitorService extends ChangeNotifier {
           _addLog(
             '#$_totalChecksCount checked at ${_formatTime(_lastCheckedAt!)}: No online seats yet. Next in ${_intervalSeconds}s.',
           );
-          if (!_iosBackgroundSearch) {
-            await _checkIntermediateSeats(
-              upcomingTrains: upcomingTrains,
-              auth: session,
-              current: current,
-              previous: previous,
-            );
-          }
         } else {
           if (_viaJourneys.isNotEmpty) {
             _viaJourneys = [];
@@ -1405,159 +1399,138 @@ class MonitorService extends ChangeNotifier {
         if (!_iosBackgroundSearch &&
             bookingIntent.autoReserve &&
             await BookingService.pending() == null) {
-          int autoBookRetries = 0;
-          const maxAutoBookRetries = 4;
-          bool autoBookSuccess = false;
+          final chosen = bookingIntent.choose(
+            upcomingTrains,
+            train: _targetTrain,
+            targetTrains: _targetTrains,
+            seatClass: _targetSeatClass,
+          );
+          if (chosen == null) {
+            _lastBookingError = null;
+            _scheduler.recordSuccess();
+            return;
+          }
 
-          while (autoBookRetries < maxAutoBookRetries &&
-              !_iosBackgroundSearch &&
-              !autoBookSuccess &&
-              _isMonitoring &&
-              !_disposed &&
-              generation == _generation &&
-              await _savedSearchIsActive()) {
-            final chosen = bookingIntent.choose(
-              upcomingTrains,
-              train: _targetTrain,
-              targetTrains: _targetTrains,
-              seatClass: _targetSeatClass,
+          if (_turnstileRequestedForBooking &&
+              await TurnstileGate.instance.cachedToken() == null) {
+            return;
+          }
+
+          try {
+            final reservation = await BookingService.reserve(
+              train: chosen.$1,
+              seat: chosen.$2,
+              from: _fromCity,
+              to: _toCity,
+              date: _dateOfJourney,
+              auth: session,
+              quantity: bookingIntent.quantity,
+              maxFare: bookingIntent.maxFare,
+              autoVerify: bookingIntent.autoVerify,
+              isAutoBook: true,
+              canReserve: () async =>
+                  !_disposed &&
+                  _isMonitoring &&
+                  (_departureForTrain(chosen.$1)?.isAfter(_now()) ?? true) &&
+                  generation == _generation &&
+                  await _savedSearchIsActive(),
+              allowVerificationPrompt: !backgroundWorker,
             );
-            if (chosen == null) {
-              // No matching available seats in current train list
-              break;
-            }
 
-            if (_turnstileRequestedForBooking &&
-                await TurnstileGate.instance.cachedToken() == null) {
-              return;
-            }
-
-            try {
-              final reservation = await BookingService.reserve(
-                train: chosen.$1,
-                seat: chosen.$2,
-                from: _fromCity,
-                to: _toCity,
-                date: _dateOfJourney,
-                auth: session,
-                quantity: bookingIntent.quantity,
-                maxFare: bookingIntent.maxFare,
-                autoVerify: bookingIntent.autoVerify,
-                isAutoBook: true,
-                canReserve: () async =>
-                    !_disposed &&
-                    _isMonitoring &&
-                    (_departureForTrain(chosen.$1)?.isAfter(_now()) ?? true) &&
-                    generation == _generation &&
-                    await _savedSearchIsActive(),
-                allowVerificationPrompt: !backgroundWorker,
+            // ── SUCCESS: OTP sent, seats held ─────────────────────
+            _turnstileRequestedForBooking = false;
+            _lastReservationExpired = false;
+            _lastError = null;
+            _lastBookingError = null;
+            // Each auto-book books only ONE time. Disable autoReserve so it never re-books without explicit user re-autobook
+            _resumeAutoReserve = bookingIntent.autoReserve;
+            _lastReservationId = reservation['id']?.toString();
+            bookingIntent = bookingIntent.copyWith(autoReserve: false);
+            stopMonitoring();
+            await _saveAndSchedule();
+            await _notificationService.showReservation(reservation);
+            await OtpVerifier.listen();
+            _scheduleReservationExpiryWatch();
+            // Sequence Rule: after OTP is sent, directly present user with verify & pay process
+            final nav = NotificationService.navigatorKey.currentState;
+            if (nav != null && nav.mounted) {
+              nav.push(
+                MaterialPageRoute(builder: (_) => const ReservationScreen()),
               );
-
-              // ── SUCCESS: OTP sent, seats held ─────────────────────
-              autoBookSuccess = true;
-              _turnstileRequestedForBooking = false;
-              _lastReservationExpired = false;
-              _lastError = null;
-              _lastBookingError = null;
-              // Each auto-book books only ONE time. Disable autoReserve so it never re-books without explicit user re-autobook
-              _resumeAutoReserve = bookingIntent.autoReserve;
-              _lastReservationId = reservation['id']?.toString();
-              bookingIntent = bookingIntent.copyWith(autoReserve: false);
-              stopMonitoring();
-              await _saveAndSchedule();
-              await _notificationService.showReservation(reservation);
-              await OtpVerifier.listen();
-              _scheduleReservationExpiryWatch();
-              // Sequence Rule: after OTP is sent, directly present user with verify & pay process
-              final nav = NotificationService.navigatorKey.currentState;
-              if (nav != null && nav.mounted) {
-                nav.push(
-                  MaterialPageRoute(builder: (_) => const ReservationScreen()),
-                );
-              }
-              notifyListeners();
+            }
+            notifyListeners();
+            return;
+          } catch (error) {
+            if (_disposed ||
+                !_isMonitoring ||
+                generation != _generation ||
+                !await _savedSearchIsActive()) {
               return;
-            } catch (error) {
-              await BookingService.clear();
-              if (_disposed ||
-                  !_isMonitoring ||
-                  generation != _generation ||
-                  !await _savedSearchIsActive()) {
-                return;
-              }
+            }
 
-              final isTurnstile = error is SeatLayoutChallenge;
-              if (isTurnstile) {
-                _bookingNeedsVerification = true;
-                if (error.verificationAttempted) {
-                  _turnstileRequestedForBooking = true;
-                  _turnstileWaitingForUi = false;
-                }
-                if (_turnstileRequestedForBooking) {
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setString(_verificationKey, 'presented');
-                  await _notificationService
-                      .cancelVerificationAndSearchAlerts();
-                }
-                _addLog(
-                  'To complete booking, open app for ${chosen.$1.tripNumber}',
-                );
-                // Security check is raised only ONCE per booking attempt
-                if (!_turnstileRequestedForBooking) {
-                  _turnstileRequestedForBooking = true;
-                  final label = '${chosen.$1.tripNumber} · ${chosen.$2.type}';
-                  await SecureStore.write('rail_turnstile_context', label);
+            final isTurnstile = error is SeatLayoutChallenge;
+            if (isTurnstile) {
+              _bookingNeedsVerification = true;
+              if (error.requiresForeground) {
+                final label = '${chosen.$1.tripNumber} · ${chosen.$2.type}';
+                await SecureStore.write('rail_turnstile_context', label);
+                if (!_turnstileWaitingForUi) {
                   await _raiseTurnstile(
                     label,
                     chosen.$1.tripNumber,
                     chosen.$2.type,
                   );
                 }
+                _turnstileRequestedForBooking = true;
                 notifyListeners();
                 return;
               }
-
-              // Server error / seat already booked / rate limit / 8-9am peak hour rush:
-              // Per requirement: Ignore error, don't annoy user with error banner,
-              // automatically search for new seat and retry booking.
-              autoBookRetries++;
-              _lastBookingError =
-                  null; // Suppress error banner so user isn't annoyed
-              _addLog(
-                'Auto-booking retry #$autoBookRetries: Seat unavailable or server busy. Retrying automatically...',
-                isAlert: false,
-              );
-
-              // Brief pause before re-fetching fresh layout/trips
-              await Future.delayed(const Duration(milliseconds: 500));
-
-              try {
-                final refreshed = await ApiService.searchTrips(
-                  fromCity: _fromCity,
-                  toCity: _toCity,
-                  dateOfJourney: _dateOfJourney,
-                  seatClass: _targetSeatClass,
-                  authSession: session,
-                  silent: true,
-                );
-                upcomingTrains = refreshed.trains.where((t) {
-                  final departure = _departureForTrain(t);
-                  return departure == null || departure.isAfter(_now());
-                }).toList();
-                _lastTrains = refreshed.trains;
-              } catch (_) {
-                // If search trips temporarily glitches during peak hour, continue next attempt
+              if (error.verificationAttempted) {
+                _turnstileRequestedForBooking = true;
+                _turnstileWaitingForUi = false;
               }
+              if (_turnstileRequestedForBooking) {
+                final prefs = await SharedPreferences.getInstance();
+                await prefs.setString(_verificationKey, 'presented');
+                await _notificationService.cancelVerificationAndSearchAlerts();
+              }
+              _addLog(
+                'To complete booking, open app for ${chosen.$1.tripNumber}',
+              );
+              // Security check is raised only ONCE per booking attempt
+              if (!_turnstileRequestedForBooking) {
+                _turnstileRequestedForBooking = true;
+                final label = '${chosen.$1.tripNumber} · ${chosen.$2.type}';
+                await SecureStore.write('rail_turnstile_context', label);
+                await _raiseTurnstile(
+                  label,
+                  chosen.$1.tripNumber,
+                  chosen.$2.type,
+                );
+              }
+              notifyListeners();
+              return;
             }
-          }
 
-          if (!autoBookSuccess) {
-            // "if no seat available then do normal procedure. keep searching if found do as before."
-            _lastBookingError = null;
+            // One attempt per monitoring cycle. The shared limiter and
+            // scheduler choose the next safe check instead of looping here.
+            _scheduler.recordFailure(error);
+            _lastBookingError = friendlyErrorMessage(error);
+            _lastError = _lastBookingError;
+            _addLog('Auto-booking paused: $_lastBookingError', isError: true);
+            if (await BookingService.pending() != null) {
+              // Keep a partial/unknown reservation for review; never replay it.
+              stopMonitoring();
+              _scheduleReservationExpiryWatch();
+            }
+            notifyListeners();
+            return;
           }
         }
+        _scheduler.recordSuccess();
       } catch (e) {
-        _lastError = e.toString();
+        _scheduler.recordFailure(e);
+        _lastError = friendlyErrorMessage(e);
         _addLog('Check error: $e', isError: true);
       }
 
@@ -1577,71 +1550,6 @@ class MonitorService extends ChangeNotifier {
         );
         notifyListeners();
       }
-    }
-  }
-
-  Future<void> _checkIntermediateSeats({
-    required List<TrainTrip> upcomingTrains,
-    required AuthSession auth,
-    required Map<String, dynamic> current,
-    required Map<String, dynamic> previous,
-  }) async {
-    final trainsToCheck = upcomingTrains.where((t) {
-      if (_targetTrains.isNotEmpty) {
-        return _targetTrains.contains(t.tripNumber);
-      }
-      if (_targetTrain != null && _targetTrain!.isNotEmpty) {
-        return t.tripNumber == _targetTrain;
-      }
-      return true;
-    }).take(2).toList();
-
-    final List<IntermediateJourney> discovered = [];
-
-    for (final train in trainsToCheck) {
-      if (!_isMonitoring || _disposed) break;
-      try {
-        final viaResults = await IntermediateStationSearch.search(
-          train: train,
-          from: _fromCity,
-          to: _toCity,
-          date: _dateOfJourney,
-          auth: auth,
-          seatClass: _targetSeatClass,
-          cancelled: () => !_isMonitoring || _disposed,
-        );
-
-        if (viaResults.isNotEmpty) {
-          discovered.addAll(viaResults);
-          final best = viaResults.first;
-          final viaKey = 'via_${train.tripNumber}_${best.via}_${best.firstSeat.type}';
-          current[viaKey] = best.seats;
-          final prevCount = (previous[viaKey] as num? ?? 0);
-
-          if (prevCount == 0 && best.seats > 0) {
-            _addLog(
-              '🔀 VIA TICKETS FOUND! ${train.tripNumber} via ${best.via} (${best.seats} [${best.firstSeat.type}] seats)',
-              isAlert: true,
-            );
-            await _notificationService.triggerViaSeatAvailableAlert(
-              trainName: train.tripNumber,
-              viaStation: best.via,
-              fromCity: _fromCity,
-              toCity: _toCity,
-              travelDate: _dateOfJourney,
-              seatType: best.firstSeat.displayName,
-              seatCount: best.seats,
-            );
-          }
-        }
-      } catch (_) {
-        // Silently continue if intermediate search is not applicable or busy
-      }
-    }
-
-    if (discovered.isNotEmpty || _viaJourneys.isNotEmpty) {
-      _viaJourneys = discovered;
-      notifyListeners();
     }
   }
 

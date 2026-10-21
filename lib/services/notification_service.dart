@@ -11,6 +11,9 @@ import '../views/announcement_screen.dart';
 import '../views/webview_login_screen.dart';
 import '../views/intermediate_station_screen.dart';
 import '../models/train_trip.dart';
+import '../models/auth_session.dart';
+import '../views/seat_booking_screen.dart';
+import 'seat_layout_continuation.dart';
 import 'booking_service.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
@@ -31,6 +34,7 @@ class NotificationService {
   bool _isInitialized = false;
   static final navigatorKey = GlobalKey<NavigatorState>();
   String? _pendingBooking;
+  bool _openingSeatLayout = false;
   // Workers receive this from the live UI before each monitoring tick.
   bool appVisible = false;
 
@@ -47,6 +51,7 @@ class NotificationService {
   static const int idOtp = 802;
   static const int idPurchaseSuccess = 803;
   static const int idIosSearchStatus = 805;
+  static const int idSeatLayout = 806;
 
   Future<void> showIosSearchStatus({
     required String from,
@@ -149,6 +154,20 @@ class NotificationService {
 
   void openBooking(String? payload) {
     if (payload == null) return;
+    final continuation = Uri.tryParse(payload);
+    if (continuation?.scheme == 'rail' && continuation?.host == 'seat-layout') {
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (navigatorKey.currentState == null ||
+          (life != null && life != AppLifecycleState.resumed)) {
+        _pendingBooking = payload;
+        return;
+      }
+      _pendingBooking = null;
+      unawaited(
+        _openSeatLayout(continuation!.queryParameters['id'], retryOpen: true),
+      );
+      return;
+    }
     if (!kIsWeb &&
         defaultTargetPlatform == TargetPlatform.iOS &&
         payload == 'rail://search-status') {
@@ -539,10 +558,124 @@ class NotificationService {
   }
 
   void openPendingBooking() {
+    final life = WidgetsBinding.instance.lifecycleState;
+    if (life != null && life != AppLifecycleState.resumed) return;
     if (_pendingBooking != null) {
       openBooking(_pendingBooking);
     } else {
-      unawaited(openActiveReservation());
+      unawaited(_resumeSeatLayoutOrReservation());
+    }
+  }
+
+  Future<void> _resumeSeatLayoutOrReservation() async {
+    if (!SeatBookingScreen.hasOpenContinuation && await _openSeatLayout(null)) {
+      return;
+    }
+    await openActiveReservation();
+  }
+
+  Future<bool> _openSeatLayout(String? id, {bool retryOpen = false}) async {
+    if (_openingSeatLayout) return true;
+    _openingSeatLayout = true;
+    try {
+      final request = await SeatLayoutContinuation.load();
+      if (request == null || (id != null && request.id != id)) return false;
+      final auth = await AuthSession.load();
+      if (auth == null) return false;
+      if (request.account != SeatLayoutContinuation.accountFor(auth)) {
+        await SeatLayoutContinuation.clear(request.id);
+        return false;
+      }
+      if (SeatBookingScreen.isContinuationOpen(request.id)) {
+        if (retryOpen) SeatBookingScreen.retryContinuation(request.id);
+        return true;
+      }
+      if (await BookingService.pending() != null) {
+        await openActiveReservation();
+        return true;
+      }
+      final nav = navigatorKey.currentState;
+      final life = WidgetsBinding.instance.lifecycleState;
+      if (nav == null ||
+          !nav.mounted ||
+          (life != null && life != AppLifecycleState.resumed)) {
+        return false;
+      }
+      nav.push(
+        MaterialPageRoute(
+          builder: (_) => SeatBookingScreen(
+            train: request.train,
+            seatType: request.seat,
+            fromCity: request.from,
+            toCity: request.to,
+            dateOfJourney: request.date,
+            authSession: auth,
+            continuationId: request.id,
+          ),
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      _openingSeatLayout = false;
+    }
+  }
+
+  Future<bool> showSeatLayoutRequired(SeatLayoutContinuation request) async {
+    final bn = await prefersBangla();
+    final title = bn
+        ? 'আসন দেখতে Rail Pro খুলুন'
+        : 'Open Rail Pro to load seats';
+    final body =
+        '${request.train.tripNumber}\n${request.from} → ${request.to} · ${request.date}';
+    try {
+      await initialize(background: true);
+      await _notificationsPlugin.show(
+        id: idSeatLayout,
+        title: title,
+        body: body,
+        payload: Uri(
+          scheme: 'rail',
+          host: 'seat-layout',
+          queryParameters: {'id': request.id},
+        ).toString(),
+        notificationDetails: NotificationDetails(
+          android: _alertDetails(
+            channel: 'br_verification_alerts_v2',
+            channelName: 'Booking verification',
+            title: title,
+            body: body,
+            stage: bn ? 'আসন' : 'Seats',
+            color: const Color(0xFF009B78),
+            onlyAlertOnce: true,
+            actions: [
+              AndroidNotificationAction(
+                'load_seats',
+                bn ? 'অ্যাপ খুলুন' : 'Open app',
+                showsUserInterface: true,
+              ),
+            ],
+          ),
+          iOS: const DarwinNotificationDetails(
+            presentAlert: true,
+            presentSound: true,
+            presentBanner: true,
+            presentList: true,
+          ),
+        ),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> clearSeatLayoutRequired() async {
+    try {
+      await _notificationsPlugin.cancel(id: idSeatLayout);
+    } catch (_) {
+      /* Older/test hosts. */
     }
   }
 

@@ -1,3 +1,4 @@
+import '../services/rail_api_client.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -719,8 +720,28 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
                             const SizedBox(height: 12),
 
+                          if (RailApiClient.cooldownRemaining > Duration.zero) ...[
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: AppColors.warning.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(14),
+                              ),
+                              child: Row(children: [
+                                const Icon(Icons.hourglass_top_rounded, color: AppColors.warning),
+                                const SizedBox(width: 10),
+                                Expanded(child: Text(lang.tr(
+                                  'Railway is busy. Requests paused for ${(RailApiClient.cooldownRemaining.inMilliseconds / 1000).ceil()}s. Please wait before trying again.',
+                                  'রেলওয়ে ব্যস্ত। ${(RailApiClient.cooldownRemaining.inMilliseconds / 1000).ceil()} সেকেন্ড অপেক্ষা করে আবার চেষ্টা করুন।',
+                                ), style: TextStyle(color: AppColors.textPrimary(isDark), fontSize: 13))),
+                              ]),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
+
                           // ── Exact Error Banner (if any) ──
-                          if (exactError != null && exactError.isNotEmpty && !isReservationExpired) ...[
+                          if (exactError != null && exactError.isNotEmpty && !isReservationExpired && RailApiClient.cooldownRemaining == Duration.zero) ...[
                             _ErrorBanner(
                               message: friendlyErrorMessage(exactError, isBangla: lang.isBangla),
                               onVerifyTurnstile: _handleSolveTurnstile,

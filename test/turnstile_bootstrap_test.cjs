@@ -18,6 +18,7 @@ const context = vm.createContext({
     createElement: () => ({ remove() {} }),
     head: { appendChild: element => { loads++; element.onload(); } },
   },
+  navigator: { userAgent: 'test-webview-user-agent' },
   turnstile: {
     render: (selector, config) => {
       renders++; options = config;
@@ -29,6 +30,7 @@ const context = vm.createContext({
     },
     execute: id => { assert.equal(id, 7); executions++; },
     reset: id => { assert.equal(id, 7); resets++; },
+    remove: id => { assert.equal(id, 7); },
   },
 });
 
@@ -58,3 +60,11 @@ assert.equal(loads, 1);
 assert.equal(executions, 3);
 assert.equal(resets, 2);
 console.log('Turnstile script: idle preload, explicit execution, reset and cancellation passed.');
+
+context.window.__railBegin(4, 'changed-seat-layout-key');
+options.callback('changed-key-token');
+context.window.__railBegin(5, 'changed-seat-layout-key');
+assert.equal(renders, 2, 'A new purpose/site key renders its own widget');
+assert.equal(resets, 3, 'The first token from a replacement widget is consumed and must be reset');
+options.callback('fresh-changed-key-token');
+assert.equal(messages.at(-1).requestId, 5);

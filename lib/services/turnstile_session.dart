@@ -9,6 +9,7 @@ enum TurnstilePhase { idle, connecting, interactive, success, error }
 /// runs. The service isolate requests tokens through ForegroundMonitor's bridge;
 /// it must never construct another browser or share a token between bookings.
 class TurnstileSession extends ChangeNotifier {
+  static const defaultSiteKey = '0x4AAAAAACNkZ_TxQr_zpcZW';
   static final instance = TurnstileSession();
   final challengeLink = LayerLink();
   TurnstilePhase phase = TurnstilePhase.idle;
@@ -19,12 +20,15 @@ class TurnstileSession extends ChangeNotifier {
   Completer<String?>? _pending;
   Timer? _timeout;
   int _requestId = 0;
+  String? userAgent;
+  String _siteKey = defaultSiteKey;
 
   bool get attached => _evaluate != null;
   bool get generating => _pending != null;
 
   void attach(Future<void> Function(String source) evaluate) {
     _evaluate = evaluate;
+    userAgent = null;
     _ready = Completer<void>();
     final waiter = _attachmentWaiter;
     _attachmentWaiter = null;
@@ -35,19 +39,25 @@ class TurnstileSession extends ChangeNotifier {
     cancel();
     _evaluate = null;
     _ready = null;
+    userAgent = null;
   }
 
   Future<String?> generate([String? siteKey]) {
-    if (_pending != null) return _pending!.future;
+    final target = siteKey ?? defaultSiteKey;
+    if (_pending != null) {
+      if (target == _siteKey) return _pending!.future;
+      return _pending!.future.then((_) => generate(target));
+    }
     if (!attached) return Future.value(null);
     final pending = Completer<String?>();
     _pending = pending;
+    _siteKey = target;
     final id = ++_requestId;
     phase = TurnstilePhase.connecting;
     error = null;
     notifyListeners();
     _armTimeout();
-    unawaited(_execute(id, siteKey));
+    unawaited(_execute(id, target));
     return pending.future;
   }
 
@@ -69,6 +79,9 @@ class TurnstileSession extends ChangeNotifier {
     }
     return generate(siteKey);
   }
+
+  /// An explicit Retry keeps the purpose of the challenge being displayed.
+  Future<String?> retryWhenAttached() => generateWhenAttached(_siteKey);
 
   Future<void> _execute(int id, [String? siteKey]) async {
     try {
@@ -100,6 +113,8 @@ class TurnstileSession extends ChangeNotifier {
 
   void receive(Map<String, dynamic> data) {
     if (data['status'] == 'READY') {
+      final agent = data['userAgent'];
+      if (agent is String && agent.trim().isNotEmpty) userAgent = agent;
       if (_ready != null && !_ready!.isCompleted) _ready!.complete();
       return;
     }
@@ -183,7 +198,7 @@ class TurnstileSession extends ChangeNotifier {
   var widget = null, active = null, used = false;
   function post(status, extra, id) {
     window.flutter_inappwebview.callHandler('TurnstileBridge',
-      Object.assign({status: status, requestId: id}, extra || {}));
+      Object.assign({status: status, requestId: id, userAgent: navigator.userAgent}, extra || {}));
   }
   function render(key) {
     try {
@@ -222,6 +237,7 @@ class TurnstileSession extends ChangeNotifier {
     if (widget === null) {
       active = id;
       render(target);
+      used = true;
       turnstile.execute(widget);
     } else {
       if (used) turnstile.reset(widget);

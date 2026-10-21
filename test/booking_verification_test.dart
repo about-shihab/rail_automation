@@ -65,6 +65,18 @@ void main() {
     }
   });
 
+  test('a submitted token cannot be cached again by a late callback', () async {
+    final gate = TurnstileGate.instance;
+    await gate.storeToken('late-callback-token');
+    await gate.guardSeatLayout<void>(
+      run: (token) async {
+        expect(token, 'late-callback-token');
+      },
+    );
+    await gate.storeToken('late-callback-token');
+    expect(await gate.cachedToken(), isNull);
+  });
+
   test(
     'Only an explicit seat-layout challenge requests verification',
     () async {
