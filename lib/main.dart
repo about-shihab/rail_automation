@@ -124,7 +124,12 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       if (!mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && !AppUpdateService.instance.required) {
-          TurnstileGate.instance.warmInBackground();
+          final monitor = context.read<MonitorService>();
+          if (monitor.needsTurnstile) {
+            monitor.resumePendingTurnstile();
+          } else {
+            TurnstileGate.instance.startBackgroundRefresh();
+          }
         }
       });
     } finally {
@@ -159,6 +164,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      TurnstileGate.instance.startBackgroundRefresh();
       BookingActivity.instance.reset();
       unawaited(AdminPushService.instance.refresh());
       unawaited(ForegroundMonitor.syncBookingActivity());
@@ -175,6 +181,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
       CreditService().syncFromFirestore();
       AppConfig.instance.syncFromFirestore();
     } else if (state == AppLifecycleState.paused) {
+      TurnstileGate.instance.stopBackgroundRefresh();
       monitor.suspendForegroundTimers();
       unawaited(IosSearchContinuation.run(monitor));
       firebaseUser.setUserActive(false);
@@ -183,6 +190,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
 
   @override
   void dispose() {
+    TurnstileGate.instance.stopBackgroundRefresh();
     _monitorUpdates?.cancel();
     unawaited(ForegroundMonitor.disconnectVerificationUi());
     WidgetsBinding.instance.removeObserver(this);

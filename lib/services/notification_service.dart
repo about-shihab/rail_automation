@@ -674,7 +674,13 @@ class NotificationService {
     bool reservationHeld = false,
   }) async {
     final bn = await prefersBangla();
-    final title = reservationHeld
+    final isHumanCheck =
+        needsHumanVerification || bookingLink == 'rail://turnstile';
+    final title = isHumanCheck
+        ? (bn
+              ? 'মানব যাচাইকরণ প্রয়োজন · সম্পূর্ণ করতে অ্যাপ খুলুন'
+              : 'Human check required · Open app to verify')
+        : reservationHeld
         ? (bn
               ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · আসন সংরক্ষিত'
               : 'Seats held · Booking in progress')
@@ -688,12 +694,16 @@ class NotificationService {
     final number = bn
         ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()
         : '$seatCount';
-    final description = [
-      if (seatType.isNotEmpty) seatType,
-      if (travelDate.isNotEmpty) travelDate,
-      if (seatCount > 0)
-        '$number ${bn ? 'আসন' : (seatCount == 1 ? 'seat' : 'seats')}',
-    ].join(' · ');
+    final description = isHumanCheck
+        ? (bn
+              ? '$seatType আসন সংরক্ষণের জন্য রেলওয়ে নিরাপত্তা যাচাইকরণ প্রয়োজন। অ্যাপ খুলুন।'
+              : 'Railway security verification needed for $seatType. Open app to complete human check.')
+        : [
+            if (seatType.isNotEmpty) seatType,
+            if (travelDate.isNotEmpty) travelDate,
+            if (seatCount > 0)
+              '$number ${bn ? 'আসন' : (seatCount == 1 ? 'seat' : 'seats')}',
+          ].join(' · ');
     final body = '$trainName\n$description';
     final androidDetails = _alertDetails(
       channel: 'br_seat_found_v2',
@@ -706,8 +716,10 @@ class NotificationService {
       color: const Color(0xFF009B78),
       actions: [
         AndroidNotificationAction(
-          'book',
-          automaticBooking
+          isHumanCheck ? 'verify_human' : 'book',
+          isHumanCheck
+              ? (bn ? 'অ্যাপ খুলুন ও যাচাই করুন' : 'Open app to verify')
+              : automaticBooking
               ? (bn ? 'অগ্রগতি দেখুন' : 'View progress')
               : (bn ? 'বুক করুন' : 'Book now'),
           showsUserInterface: true,
@@ -865,6 +877,7 @@ class NotificationService {
       seatCount: 0,
       travelDate: '',
       bookingLink: 'rail://turnstile',
+      needsHumanVerification: true,
     );
   }
 

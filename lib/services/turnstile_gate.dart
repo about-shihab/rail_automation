@@ -86,6 +86,26 @@ class TurnstileGate {
     }
   }
 
+  Timer? _refreshTimer;
+
+  /// Starts refreshing the turnstile token periodically in the background while
+  /// the app is in the foreground, ensuring a fresh 5-minute token is always ready.
+  void startBackgroundRefresh() {
+    _refreshTimer?.cancel();
+    warmInBackground();
+    _refreshTimer = Timer.periodic(const Duration(minutes: 4), (_) {
+      if (canShowUi) {
+        warmInBackground();
+      }
+    });
+  }
+
+  /// Stops background refresh when the app is paused or inactive.
+  void stopBackgroundRefresh() {
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+  }
+
   /// Silently solve a verification token in the background while the app is open.
   /// Valid for 5 minutes. Never presents any UI unless an interaction is required.
   void warmInBackground() {
@@ -93,8 +113,19 @@ class TurnstileGate {
     unawaited(() async {
       try {
         final existing = await cachedToken();
-        if (existing != null && existing.isNotEmpty) return;
-        final token = await acquire(label: 'Verification', forceFresh: false);
+        if (existing != null && existing.isNotEmpty) {
+          final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
+          if (ts != null) {
+            final age = DateTime.now().millisecondsSinceEpoch - ts;
+            // Token is still fresh (valid for more than 1 minute remaining)
+            if (age < const Duration(seconds: 240).inMilliseconds) return;
+          }
+        }
+        final token = await acquire(
+          label: 'Verification',
+          forceFresh: true,
+          allowPrompt: false,
+        );
         if (token != null && token.isNotEmpty) {
           await storeToken(token);
         }
@@ -110,17 +141,19 @@ class TurnstileGate {
   ///  * [forceFresh] false → a still-valid cached token is returned instantly,
   ///    no UI at all.
   ///  * [forceFresh] true → execute the preloaded widget for this booking.
+  ///  * [allowPrompt] false → do not present interactive dialog if human check required.
   /// Returns null when the user cancelled or the UI isn't available.
   Future<String?> acquire({
     String label = '',
     bool forceFresh = false,
     String? siteKey,
+    bool allowPrompt = true,
   }) {
     final running = _inflight;
     if (running != null) return running; // one prompt, many waiters
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh, siteKey).whenComplete(() {
+    f = _acquire(label, forceFresh, siteKey, allowPrompt).whenComplete(() {
       if (identical(_inflight, f)) {
         _inflight = null;
         _route = null;
@@ -135,6 +168,7 @@ class TurnstileGate {
     String label,
     bool forceFresh, [
     String? siteKey,
+    bool allowPrompt = true,
   ]) async {
     // Capture a pending silent execution before any async storage/navigation.
     final targetKey =
@@ -179,7 +213,7 @@ class TurnstileGate {
         interactive.future.then((_) => (interactive: true, token: null)),
       ]);
       if (!result.interactive) return result.token;
-      if (!canShowUi) {
+      if (!allowPrompt || !canShowUi) {
         session.cancel();
         return null;
       }
@@ -262,7 +296,11 @@ class TurnstileGate {
     final token =
         handedOff ??
         (allowPrompt || workerAcquire != null
-            ? await acquire(label: label, forceFresh: true)
+            ? await acquire(
+                label: label,
+                forceFresh: true,
+                allowPrompt: allowPrompt,
+              )
             : null);
     if (token == null) {
       throw SeatLayoutChallenge(
@@ -271,7 +309,11 @@ class TurnstileGate {
       );
     }
     try {
-      return await run(token);
+      final res = await run(token);
+      if (canShowUi && _refreshTimer != null) {
+        warmInBackground();
+      }
+      return res;
     } on SeatLayoutChallenge {
       await invalidate();
       throw const SeatLayoutChallenge(verificationAttempted: true);
