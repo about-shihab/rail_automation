@@ -32,6 +32,132 @@ class IntermediateJourney {
       min(firstSeat.seatCounts.online, secondSeat.seatCounts.online);
 }
 
+/// Seat availability and pricing for a specific seat class across both legs of a via route.
+class ViaClassOption {
+  final String type;
+  final String displayName;
+  final int leg1Seats;
+  final int leg2Seats;
+  final int minSeats;
+  final double totalFare;
+  final SeatType firstSeat;
+  final SeatType secondSeat;
+
+  const ViaClassOption({
+    required this.type,
+    required this.displayName,
+    required this.leg1Seats,
+    required this.leg2Seats,
+    required this.minSeats,
+    required this.totalFare,
+    required this.firstSeat,
+    required this.secondSeat,
+  });
+}
+
+/// Unified via split route grouped by intermediate station.
+/// Cleanly presents seat availability categorized by seat type (not bogi numbers).
+class ViaRouteGroup {
+  final String via;
+  final TrainTrip first;
+  final TrainTrip second;
+  final String firstDate;
+  final String secondDate;
+  final List<ViaClassOption> classOptions;
+
+  const ViaRouteGroup({
+    required this.via,
+    required this.first,
+    required this.second,
+    required this.firstDate,
+    required this.secondDate,
+    required this.classOptions,
+  });
+
+  int get maxAvailableSeats => classOptions.fold<int>(
+        0,
+        (maxVal, opt) => opt.minSeats > maxVal ? opt.minSeats : maxVal,
+      );
+
+  int? get layoverMinutes {
+    final arr = IntermediateStationSearch.parseMinutes(first.arrivalDateTime);
+    final dep = IntermediateStationSearch.parseMinutes(second.departureDateTime);
+    if (arr != null && dep != null) {
+      var diff = dep - arr;
+      if (diff < 0) diff += 24 * 60;
+      return diff;
+    }
+    return null;
+  }
+
+  String layoverText({required bool isBangla}) {
+    final mins = layoverMinutes;
+    if (mins == null) return isBangla ? '$via-এ যাত্রাবিরতি' : 'Transfer at $via';
+    if (mins >= 60) {
+      final h = mins ~/ 60;
+      final m = mins % 60;
+      return isBangla
+          ? '$via-এ $h ঘণ্টা ${m > 0 ? "$m মি. " : ""}যাত্রাবিরতি'
+          : '$h hr ${m > 0 ? "$m min " : ""}layover at $via';
+    }
+    return isBangla
+        ? '$via-এ $mins মিনিট যাত্রাবিরতি'
+        : '$mins min layover at $via';
+  }
+
+  static List<ViaRouteGroup> fromJourneys(List<IntermediateJourney> journeys) {
+    final Map<String, List<IntermediateJourney>> byVia = {};
+    for (final j in journeys) {
+      byVia.putIfAbsent(j.via, () => []).add(j);
+    }
+
+    final groups = <ViaRouteGroup>[];
+    for (final entry in byVia.entries) {
+      final via = entry.key;
+      final list = entry.value;
+      if (list.isEmpty) continue;
+
+      final firstJourney = list.first;
+      final classOptions = <ViaClassOption>[];
+      final seenTypes = <String>{};
+
+      for (final j in list) {
+        if (seenTypes.contains(j.firstSeat.type)) continue;
+        seenTypes.add(j.firstSeat.type);
+
+        final fare1 = double.tryParse(j.firstSeat.fare) ?? 0;
+        final fare2 = double.tryParse(j.secondSeat.fare) ?? 0;
+
+        classOptions.add(
+          ViaClassOption(
+            type: j.firstSeat.type,
+            displayName: j.firstSeat.displayName,
+            leg1Seats: j.firstSeat.seatCounts.online,
+            leg2Seats: j.secondSeat.seatCounts.online,
+            minSeats: j.seats,
+            totalFare: fare1 + fare2,
+            firstSeat: j.firstSeat,
+            secondSeat: j.secondSeat,
+          ),
+        );
+      }
+
+      groups.add(
+        ViaRouteGroup(
+          via: via,
+          first: firstJourney.first,
+          second: firstJourney.second,
+          firstDate: firstJourney.firstDate,
+          secondDate: firstJourney.secondDate,
+          classOptions: classOptions,
+        ),
+      );
+    }
+    return groups;
+  }
+}
+
+
 /// In-memory cache for train routes and sliced intermediate stations.
 /// Once a train's route stops are loaded for a date, subsequent monitor cycles
 /// and searches re-use them directly without repeated POST /train-routes calls.

@@ -3217,7 +3217,11 @@ class _ReservationExpiredCard extends StatelessWidget {
 // In-Between / Via Station Monitor Card
 // ─────────────────────────────────────────────────────────────────────────────
 
-class _ViaStationMonitorCard extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+// In-Between / Via Station Monitor Card
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ViaStationMonitorCard extends StatefulWidget {
   final List<IntermediateJourney> viaJourneys;
   final String fromCity;
   final String toCity;
@@ -3241,12 +3245,20 @@ class _ViaStationMonitorCard extends StatelessWidget {
   });
 
   @override
+  State<_ViaStationMonitorCard> createState() => _ViaStationMonitorCardState();
+}
+
+class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
+  final Map<String, String> _selectedClassByVia = {};
+
+  @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
-    final borderColor = isDark
+    final groups = ViaRouteGroup.fromJourneys(widget.viaJourneys);
+    final borderColor = widget.isDark
         ? const Color(0xFF10B981).withValues(alpha: 0.35)
         : const Color(0xFF10B981).withValues(alpha: 0.45);
-    final bgColor = isDark
+    final bgColor = widget.isDark
         ? const Color(0xFF062319)
         : const Color(0xFFF0FDF4);
 
@@ -3289,24 +3301,24 @@ class _ViaStationMonitorCard extends StatelessWidget {
                   children: [
                     Text(
                       lang.tr(
-                        'In-Between Station Tickets Available',
+                        'In-Between Station Options Available',
                         'বিকল্প রুট আসন পাওয়া গেছে',
                       ),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : const Color(0xFF065F46),
+                        color: widget.isDark ? Colors.white : const Color(0xFF065F46),
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       lang.tr(
-                        'Direct tickets are sold out. Book via intermediate stops below:',
-                        'সরাসরি টিকিট শেষ। নিচে বিকল্প স্টেশন হয়ে বুক করুন:',
+                        'Direct seats are sold out. Book split tickets below:',
+                        'সরাসরি টিকিট শেষ। নিচে বিকল্প রুটে বুক করুন:',
                       ),
                       style: TextStyle(
                         fontSize: 11,
-                        color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF047857),
+                        color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF047857),
                       ),
                     ),
                   ],
@@ -3316,21 +3328,38 @@ class _ViaStationMonitorCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          // Discovered Via Journeys
-          ...viaJourneys.take(3).map((journey) {
-            final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0;
-            final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0;
-            final totalFare = fare1 + fare2;
+          // Grouped Via Routes
+          ...groups.take(3).map((group) {
+            final selectedType = _selectedClassByVia[group.via] ?? group.classOptions.first.type;
+            final selectedOpt = group.classOptions.firstWhere(
+              (o) => o.type == selectedType,
+              orElse: () => group.classOptions.first,
+            );
+
+            final matchingJourney = widget.viaJourneys.firstWhere(
+              (j) => j.via == group.via && j.firstSeat.type == selectedOpt.type,
+              orElse: () => widget.viaJourneys.firstWhere(
+                (j) => j.via == group.via,
+                orElse: () => widget.viaJourneys.first,
+              ),
+            );
 
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : Colors.white,
+                color: widget.isDark ? const Color(0xFF0F172A) : Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                  color: widget.isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
                 ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: widget.isDark ? 0.2 : 0.04),
+                    blurRadius: 6,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3345,7 +3374,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          journey.first.tripNumber,
+                          group.first.tripNumber,
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -3361,7 +3390,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          'Via ${journey.via}',
+                          'Via ${group.via}',
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -3370,75 +3399,181 @@ class _ViaStationMonitorCard extends StatelessWidget {
                         ),
                       ),
                       const Spacer(),
-                      if (totalFare > 0)
+                      if (selectedOpt.totalFare > 0)
                         Text(
-                          '৳${totalFare.toStringAsFixed(0)}',
+                          '৳${selectedOpt.totalFare.toStringAsFixed(0)}',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: isDark ? Colors.white : AppColors.lightTextPrimary,
+                            color: widget.isDark ? Colors.white : AppColors.lightTextPrimary,
                           ),
                         ),
                     ],
                   ),
+                  const SizedBox(height: 8),
+
+                  // Route Flow & Layover
+                  Row(
+                    children: [
+                      Text(
+                        widget.fromCity,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: widget.isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Icon(Icons.arrow_forward_rounded, size: 13, color: Color(0xFF10B981)),
+                      ),
+                      Text(
+                        group.via,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF10B981),
+                        ),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 6),
+                        child: Icon(Icons.arrow_forward_rounded, size: 13, color: Color(0xFF10B981)),
+                      ),
+                      Text(
+                        widget.toCity,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                          color: widget.isDark ? Colors.white : const Color(0xFF0F172A),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    group.layoverText(isBangla: lang.isBangla),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                  ),
                   const SizedBox(height: 10),
+
+                  // Seat availability by seat type
+                  Text(
+                    lang.tr('Available Seat Classes:', 'উপলব্ধ আসন শ্রেণি:'),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w600,
+                      color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: group.classOptions.map((opt) {
+                      final isSel = (opt.type == selectedOpt.type);
+                      return InkWell(
+                        onTap: () {
+                          setState(() {
+                            _selectedClassByVia[group.via] = opt.type;
+                          });
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: isSel
+                                ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                                : (widget.isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSel
+                                  ? const Color(0xFF10B981)
+                                  : (widget.isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
+                              width: isSel ? 1.4 : 1.0,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                opt.displayName,
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: isSel ? FontWeight.bold : FontWeight.w600,
+                                  color: isSel
+                                      ? const Color(0xFF10B981)
+                                      : (widget.isDark ? Colors.white70 : const Color(0xFF334155)),
+                                ),
+                              ),
+                              const SizedBox(width: 5),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  '${opt.minSeats} ${lang.tr("seats", "আসন")}',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Color(0xFF10B981),
+                                  ),
+                                ),
+                              ),
+                              if (opt.totalFare > 0) ...[
+                                const SizedBox(width: 5),
+                                Text(
+                                  '৳${opt.totalFare.toStringAsFixed(0)}',
+                                  style: TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.bold,
+                                    color: isSel
+                                        ? (widget.isDark ? Colors.white : Colors.black87)
+                                        : (widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 12),
 
                   // Leg 1 Card
                   _buildLegSection(
                     context: context,
                     lang: lang,
-                    isDark: isDark,
-                    title: '${lang.tr("Leg 1", "১ম অংশ")}: $fromCity ➔ ${journey.via}',
-                    time: '${IntermediateStationSearch.cleanTime(journey.first.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.first.arrivalDateTime)}',
-                    seatClass: journey.firstSeat.displayName,
-                    seats: journey.firstSeat.seatCounts.online,
-                    onAutoBook: () => onAutoBookLeg(journey, true),
-                    onSelectSeats: () => onSelectSeatsLeg(journey, true),
+                    isDark: widget.isDark,
+                    title: '${lang.tr("Leg 1", "১ম অংশ")}: ${widget.fromCity} ➔ ${group.via}',
+                    time: '${IntermediateStationSearch.cleanTime(group.first.departureDateTime)} - ${IntermediateStationSearch.cleanTime(group.first.arrivalDateTime)}',
+                    seatClass: selectedOpt.displayName,
+                    seats: selectedOpt.leg1Seats,
+                    onAutoBook: () => widget.onAutoBookLeg(matchingJourney, true),
+                    onSelectSeats: () => widget.onSelectSeatsLeg(matchingJourney, true),
                   ),
 
-                  // Layover Station Indicator
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 1,
-                          height: 14,
-                          color: isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1),
-                        ),
-                        const SizedBox(width: 8),
-                        const Icon(
-                          Icons.swap_vert_rounded,
-                          size: 14,
-                          color: Color(0xFF10B981),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${lang.tr("Transfer / Layover at", "যাত্রাবিরতি")}: ${journey.via}',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  const SizedBox(height: 8),
 
                   // Leg 2 Card
                   _buildLegSection(
                     context: context,
                     lang: lang,
-                    isDark: isDark,
-                    title: '${lang.tr("Leg 2", "২য় অংশ")}: ${journey.via} ➔ $toCity',
-                    time: '${IntermediateStationSearch.cleanTime(journey.second.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.second.arrivalDateTime)}',
-                    seatClass: journey.secondSeat.displayName,
-                    seats: journey.secondSeat.seatCounts.online,
-                    onAutoBook: () => onAutoBookLeg(journey, false),
-                    onSelectSeats: () => onSelectSeatsLeg(journey, false),
+                    isDark: widget.isDark,
+                    title: '${lang.tr("Leg 2", "২য় অংশ")}: ${group.via} ➔ ${widget.toCity}',
+                    time: '${IntermediateStationSearch.cleanTime(group.second.departureDateTime)} - ${IntermediateStationSearch.cleanTime(group.second.arrivalDateTime)}',
+                    seatClass: selectedOpt.displayName,
+                    seats: selectedOpt.leg2Seats,
+                    onAutoBook: () => widget.onAutoBookLeg(matchingJourney, false),
+                    onSelectSeats: () => widget.onSelectSeatsLeg(matchingJourney, false),
                   ),
 
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   // Open full matrix button
                   Align(
                     alignment: Alignment.centerRight,
@@ -3447,7 +3582,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                       ),
-                      onPressed: () => onOpenFullMatrix(journey.first),
+                      onPressed: () => widget.onOpenFullMatrix(group.first),
                       icon: const Icon(Icons.open_in_new_rounded, size: 13),
                       label: Text(
                         lang.tr('All Via Options', 'সব বিকল্প অপশন'),
