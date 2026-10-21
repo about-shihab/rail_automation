@@ -1,4 +1,5 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'app_shell.dart';
 import 'package:provider/provider.dart';
 
@@ -17,6 +18,8 @@ import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'watch_options_dialog.dart';
 import 'intermediate_station_screen.dart';
+import '../services/intermediate_station_search.dart';
+import '../services/login_flow.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
   final TripSearchResponse searchResponse;
@@ -817,6 +820,10 @@ class TrainSelectionScreen extends StatelessWidget {
                             monitor.isTrainMonitored(trains[i].tripNumber);
                         return _TrainCard(
                           train: trains[i],
+                          from: fromCity,
+                          to: toCity,
+                          date: dateOfJourney,
+                          seatClass: initialClass,
                           isDark: isDark,
                           isMonitored: isMon,
                           onWatch: () => _watch(ctx, train: trains[i].tripNumber),
@@ -864,6 +871,10 @@ class TrainSelectionScreen extends StatelessWidget {
 
 class _TrainCard extends StatelessWidget {
   final TrainTrip train;
+  final String from;
+  final String to;
+  final String date;
+  final String? seatClass;
   final bool isDark;
   final bool isMonitored;
   final VoidCallback onWatch, onBook, onIntermediateSearch;
@@ -872,6 +883,10 @@ class _TrainCard extends StatelessWidget {
 
   const _TrainCard({
     required this.train,
+    required this.from,
+    required this.to,
+    required this.date,
+    this.seatClass,
     required this.isDark,
     this.isMonitored = false,
     required this.onWatch,
@@ -1063,15 +1078,18 @@ class _TrainCard extends StatelessWidget {
             ],
 
             const SizedBox(height: 12),
-            if (showIntermediateSearch)
-              TextButton.icon(
-                icon: const Icon(Icons.alt_route_rounded),
-                label: Text(lang.tr(
-                  'Search via intermediate station',
-                  'মধ্যবর্তী স্টেশন হয়ে খুঁজুন',
-                )),
-                onPressed: onIntermediateSearch,
+            if (showIntermediateSearch) ...[
+              _ViaLazySection(
+                train: train,
+                from: from,
+                to: to,
+                date: date,
+                seatClass: seatClass,
+                isDark: isDark,
+                onOpenFull: onIntermediateSearch,
               ),
+              const SizedBox(height: 8),
+            ],
             // ── Action row: icon buttons ─────────────────────────────────
             Row(
               children: [
@@ -1104,6 +1122,324 @@ class _TrainCard extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ViaLazySection extends StatefulWidget {
+  final TrainTrip train;
+  final String from;
+  final String to;
+  final String date;
+  final String? seatClass;
+  final bool isDark;
+  final VoidCallback onOpenFull;
+
+  const _ViaLazySection({
+    required this.train,
+    required this.from,
+    required this.to,
+    required this.date,
+    this.seatClass,
+    required this.isDark,
+    required this.onOpenFull,
+  });
+
+  @override
+  State<_ViaLazySection> createState() => _ViaLazySectionState();
+}
+
+class _ViaLazySectionState extends State<_ViaLazySection> {
+  bool _loading = true;
+  List<IntermediateJourney> _viaJourneys = [];
+  bool _searched = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadViaTickets();
+  }
+
+  Future<void> _loadViaTickets() async {
+    try {
+      final auth = await AuthSession.load();
+      if (auth == null) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+      final results = await IntermediateStationSearch.search(
+        train: widget.train,
+        from: widget.from,
+        to: widget.to,
+        date: widget.date,
+        auth: auth,
+        seatClass: widget.seatClass,
+        cancelled: () => !mounted,
+      );
+      if (mounted) {
+        setState(() {
+          _viaJourneys = results;
+          _loading = false;
+          _searched = true;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _searched = true;
+        });
+      }
+    }
+  }
+
+  Future<void> _bookDirect(
+    TrainTrip legTrain,
+    SeatType seat,
+    String legFrom,
+    String legTo,
+    String legDate,
+  ) async {
+    HapticFeedback.selectionClick();
+    var auth = await AuthSession.load();
+    if (auth == null || !auth.isLoggedIn) {
+      final success = await LoginFlow.openManualLogin();
+      if (!success) return;
+      auth = await AuthSession.load();
+      if (auth == null) return;
+    }
+
+    final readyTrain = TrainTrip.fromJson({
+      ...legTrain.toJson(),
+      'boarding_points': legTrain.boardingPoints.isNotEmpty
+          ? legTrain.boardingPoints.map((e) => e.toJson()).toList()
+          : [
+              BoardingPoint(
+                locationName: legFrom,
+                locationTime: legTrain.departureDateTime,
+                locationDate: legDate,
+              ).toJson(),
+            ],
+    });
+
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatBookingScreen(
+          train: readyTrain,
+          seatType: seat,
+          fromCity: legFrom,
+          toCity: legTo,
+          dateOfJourney: legDate,
+          authSession: auth!,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>();
+
+    return Container(
+      margin: const EdgeInsets.only(top: 8, bottom: 6),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: widget.isDark
+            ? AppColors.darkSurface.withValues(alpha: 0.6)
+            : AppColors.primary.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: _viaJourneys.isNotEmpty
+              ? AppColors.success.withValues(alpha: 0.4)
+              : AppColors.cardBorder(widget.isDark),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                Icons.alt_route_rounded,
+                size: 16,
+                color: _viaJourneys.isNotEmpty
+                    ? AppColors.success
+                    : AppColors.primary,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  _loading
+                      ? lang.tr(
+                          'Checking intermediate stations…',
+                          'মধ্যবর্তী স্টেশন খোঁজা হচ্ছে…',
+                        )
+                      : _viaJourneys.isNotEmpty
+                          ? '${lang.tr("Via Split Tickets Found", "ভায়া টিকিট পাওয়া গেছে")} (${_viaJourneys.length})'
+                          : lang.tr(
+                              'Intermediate Stations',
+                              'মধ্যবর্তী স্টেশন',
+                            ),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: _viaJourneys.isNotEmpty
+                        ? AppColors.success
+                        : AppColors.textPrimary(widget.isDark),
+                  ),
+                ),
+              ),
+              if (_loading)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                TextButton(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
+                  onPressed: widget.onOpenFull,
+                  child: Text(
+                    lang.tr(
+                      'Search via intermediate station',
+                      'মধ্যবর্তী স্টেশন হয়ে খুঁজুন',
+                    ),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ),
+            ],
+          ),
+          if (_viaJourneys.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            ..._viaJourneys.take(2).map((journey) {
+              final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0;
+              final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: widget.isDark ? AppColors.darkCard : Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: AppColors.cardBorder(widget.isDark),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: AppColors.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'Via ${journey.via}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${journey.firstSeat.displayName} · ${journey.seats} ${lang.tr("seats", "আসন")}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.success,
+                          ),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '৳${(fare1 + fare2).toStringAsFixed(0)}',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                            ),
+                            onPressed: () => _bookDirect(
+                              journey.first,
+                              journey.firstSeat,
+                              widget.from,
+                              journey.via,
+                              journey.firstDate,
+                            ),
+                            child: Text(
+                              '${lang.tr("Book Leg 1", "১ম অংশ")}: ${widget.from}→${journey.via}',
+                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              visualDensity: VisualDensity.compact,
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                            ),
+                            onPressed: () => _bookDirect(
+                              journey.second,
+                              journey.secondSeat,
+                              journey.via,
+                              widget.to,
+                              journey.secondDate,
+                            ),
+                            child: Text(
+                              '${lang.tr("Book Leg 2", "২য় অংশ")}: ${journey.via}→${widget.to}',
+                              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ] else if (_searched && _viaJourneys.isEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              lang.tr(
+                'No split journeys available currently.',
+                'বর্তমানে কোনো ভায়া টিকিট পাওয়া যায়নি।',
+              ),
+              style: TextStyle(
+                fontSize: 11,
+                color: AppColors.textMuted(widget.isDark),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

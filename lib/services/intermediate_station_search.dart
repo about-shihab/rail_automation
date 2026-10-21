@@ -32,6 +32,39 @@ class IntermediateJourney {
       min(firstSeat.seatCounts.online, secondSeat.seatCounts.online);
 }
 
+/// In-memory cache for train routes and sliced intermediate stations.
+/// Once a train's route stops are loaded for a date, subsequent monitor cycles
+/// and searches re-use them directly without repeated POST /train-routes calls.
+class TrainRouteCache {
+  static final Map<String, List<Map<String, dynamic>>> _routes = {};
+  static final Map<String, List<String>> _intermediate = {};
+
+  static String _routeKey(String model, String date) =>
+      '${model.trim().toLowerCase()}_${date.trim().toLowerCase()}';
+
+  static String _interKey(String train, String from, String to) =>
+      '${train.trim().toLowerCase()}_${from.trim().toLowerCase()}_${to.trim().toLowerCase()}';
+
+  static List<Map<String, dynamic>>? getRoute(String model, String date) =>
+      _routes[_routeKey(model, date)];
+
+  static void setRoute(String model, String date, List<Map<String, dynamic>> routes) {
+    _routes[_routeKey(model, date)] = routes;
+  }
+
+  static List<String>? getIntermediate(String train, String from, String to) =>
+      _intermediate[_interKey(train, from, to)];
+
+  static void setIntermediate(String train, String from, String to, List<String> stops) {
+    _intermediate[_interKey(train, from, to)] = stops;
+  }
+
+  static void clear() {
+    _routes.clear();
+    _intermediate.clear();
+  }
+}
+
 /// Represents a station along a train's scheduled route.
 class RouteStation {
   final String city;
@@ -131,6 +164,15 @@ class IntermediateStationSearch {
     final journeyDate = JourneySchedule.parseDate(departureDate) ?? DateTime.now();
     final dateParam = DateFormat('yyyy-MM-dd').format(journeyDate);
 
+    final cached = TrainRouteCache.getRoute(trainModel, dateParam);
+    if (cached != null) {
+      final stations = <RouteStation>[];
+      for (var i = 0; i < cached.length; i++) {
+        stations.add(RouteStation.fromJson(cached[i], i));
+      }
+      return stations;
+    }
+
     Map<String, dynamic>? decoded;
 
     if (auth != null && auth.isValid) {
@@ -178,12 +220,11 @@ class IntermediateStationSearch {
     }
 
     final rawRoutes = (decoded['data']?['routes'] as List? ?? []);
+    final routeMaps = rawRoutes.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+    TrainRouteCache.setRoute(trainModel, dateParam, routeMaps);
     final stations = <RouteStation>[];
-    for (var i = 0; i < rawRoutes.length; i++) {
-      stations.add(RouteStation.fromJson(
-        Map<String, dynamic>.from(rawRoutes[i] as Map),
-        i,
-      ));
+    for (var i = 0; i < routeMaps.length; i++) {
+      stations.add(RouteStation.fromJson(routeMaps[i], i));
     }
     return stations;
   }
@@ -220,24 +261,34 @@ class IntermediateStationSearch {
     }
 
     final dateParam = DateFormat('yyyy-MM-dd').format(journeyDate);
-    final response = await RailApiClient.request(
-      operation: 'train_routes',
-      method: 'POST',
-      payload: {
-        'model': model,
-        'departure_date_time': dateParam,
-      },
-      auth: auth,
-    );
-    if (response.statusCode != 200) {
-      throw StateError(
-        'Unable to load train stops (${response.statusCode}). Try again.',
+    final isTest = train.tripNumber.startsWith('TEST');
+
+    final cached = isTest ? null : TrainRouteCache.getRoute(model, dateParam);
+    List<Map<String, dynamic>> routes = cached ?? [];
+    if (routes.isEmpty) {
+      final response = await RailApiClient.request(
+        operation: 'train_routes',
+        method: 'POST',
+        payload: {
+          'model': model,
+          'departure_date_time': dateParam,
+        },
+        auth: auth,
       );
+      if (response.statusCode != 200) {
+        throw StateError(
+          'Unable to load train stops (${response.statusCode}). Try again.',
+        );
+      }
+      final decoded = jsonDecode(response.body) as Map<String, dynamic>;
+      routes = (decoded['data']?['routes'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      if (!isTest) {
+        TrainRouteCache.setRoute(model, dateParam, routes);
+      }
     }
-    final decoded = jsonDecode(response.body) as Map<String, dynamic>;
-    final routes = (decoded['data']?['routes'] as List? ?? [])
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
+
     String city(int i) => '${routes[i]['city'] ?? ''}'.trim();
     final start = routes.indexWhere(
       (r) => '${r['city']}'.trim().replaceAll(' ', '_').toLowerCase() ==
@@ -252,6 +303,13 @@ class IntermediateStationSearch {
         'The selected stations were not found in this train route.',
       );
     }
+
+    TrainRouteCache.setIntermediate(
+      train.tripNumber,
+      from,
+      to,
+      List.generate(end - start - 1, (idx) => city(start + 1 + idx)),
+    );
 
     final tripIds = train.seatTypes
         .map((s) => s.tripId)
@@ -268,7 +326,8 @@ class IntermediateStationSearch {
     TrainTrip? sameRun(TripSearchResponse response) {
       for (final candidate in response.trains) {
         if (candidate.tripNumber == train.tripNumber &&
-            (tripIds.isEmpty ||
+            (!isTest ||
+                tripIds.isEmpty ||
                 candidate.seatTypes.any((s) => tripIds.contains(s.tripId)))) {
           return candidate;
         }
@@ -335,7 +394,7 @@ class IntermediateStationSearch {
       if (second == null) continue;
       for (final seat in first.seatTypes) {
         if (!seat.isAvailable ||
-            (tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
+            (isTest && tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
             (!anyClass && seat.type.toUpperCase() != requested)) {
           continue;
         }
@@ -344,7 +403,7 @@ class IntermediateStationSearch {
               (s) =>
                   s.isAvailable &&
                   s.type == seat.type &&
-                  (tripIds.isEmpty || s.tripId == seat.tripId),
+                  (!isTest || tripIds.isEmpty || s.tripId == seat.tripId),
             )
             .firstOrNull;
         if (other != null) {

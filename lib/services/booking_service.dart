@@ -269,11 +269,9 @@ class BookingService {
         if (quantity < 1 || quantity > AppConfig.instance.number('max_seats')) {
           throw StateError('Invalid seat quantity.');
         }
-        if (seat.tripId == null ||
-            seat.tripRouteId == null ||
-            train.boardingPoints.isEmpty) {
+        if (seat.tripId == null || seat.tripRouteId == null) {
           throw StateError(
-            'Trip or boarding information is missing. Open the official booking page.',
+            'Trip information is missing. Open the official booking page.',
           );
         }
         final config = await request('POST', '/handshake', {

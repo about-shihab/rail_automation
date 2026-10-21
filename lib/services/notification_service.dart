@@ -9,6 +9,8 @@ import 'package:provider/provider.dart';
 import '../views/booking_screen.dart';
 import '../views/announcement_screen.dart';
 import '../views/webview_login_screen.dart';
+import '../views/intermediate_station_screen.dart';
+import '../models/train_trip.dart';
 import 'booking_service.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
@@ -248,6 +250,43 @@ class NotificationService {
       _pendingBooking = null;
       _handleTurnstileRequest(payload);
       return;
+    }
+    if (payload.startsWith('rail://via-ticket')) {
+      final uri = Uri.tryParse(payload);
+      if (uri != null) {
+        final navigator = navigatorKey.currentState;
+        if (navigator == null) {
+          _pendingBooking = payload;
+          return;
+        }
+        _pendingBooking = null;
+        final from = uri.queryParameters['from'] ?? '';
+        final to = uri.queryParameters['to'] ?? '';
+        final date = uri.queryParameters['date'] ?? '';
+        final trainName = uri.queryParameters['train'] ?? '';
+        final seatClass = uri.queryParameters['class'];
+        final train = TrainTrip.fromJson({
+          'trip_number': trainName,
+          'train_model': trainName,
+          'departure_date_time': '',
+          'arrival_date_time': '',
+          'departure_full_date': date,
+          'seat_types': [],
+          'boarding_points': [],
+        });
+        navigator.push(
+          MaterialPageRoute(
+            builder: (_) => IntermediateStationScreen(
+              train: train,
+              from: from,
+              to: to,
+              date: date,
+              seatClass: seatClass,
+            ),
+          ),
+        );
+        return;
+      }
     }
     final uri = Uri.tryParse(payload);
     if (uri == null ||
@@ -879,6 +918,69 @@ class NotificationService {
       bookingLink: 'rail://turnstile',
       needsHumanVerification: true,
     );
+  }
+
+  Future<void> triggerViaSeatAvailableAlert({
+    required String trainName,
+    required String viaStation,
+    required String fromCity,
+    required String toCity,
+    required String travelDate,
+    required String seatType,
+    required int seatCount,
+  }) async {
+    final bn = await prefersBangla();
+    final title = bn
+        ? 'ভায়া টিকেট পাওয়া গেছে · $trainName'
+        : 'Via tickets available · $trainName';
+    final number = bn
+        ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()
+        : '$seatCount';
+    final body = bn
+        ? '$viaStation হয়ে $numberটি $seatType আসন ($fromCity → $viaStation → $toCity)। বুক করতে চাপুন।'
+        : 'Split journey via $viaStation ($number $seatType seats: $fromCity → $viaStation → $toCity). Tap to book.';
+
+    final payload =
+        'rail://via-ticket?from=${Uri.encodeComponent(fromCity)}&to=${Uri.encodeComponent(toCity)}&date=${Uri.encodeComponent(travelDate)}&train=${Uri.encodeComponent(trainName)}&via=${Uri.encodeComponent(viaStation)}&class=${Uri.encodeComponent(seatType)}';
+
+    final androidDetails = _alertDetails(
+      channel: 'br_seat_found_v2',
+      channelName: 'Seats found',
+      seatAlert: true,
+      onlyAlertOnce: false,
+      title: title,
+      body: body,
+      stage: bn ? 'ভায়া আসন' : 'Via Seats',
+      color: const Color(0xFF009B78),
+      actions: [
+        AndroidNotificationAction(
+          'book_via',
+          bn ? 'ভায়া টিকেট দেখুন' : 'View via ticket',
+          showsUserInterface: true,
+        ),
+      ],
+    );
+
+    final notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: const DarwinNotificationDetails(
+        presentAlert: true,
+        presentBadge: true,
+        presentSound: true,
+        presentBanner: true,
+        presentList: true,
+      ),
+    );
+
+    try {
+      await _notificationsPlugin.show(
+        id: idSeatFound,
+        title: title,
+        body: body,
+        payload: payload,
+        notificationDetails: notificationDetails,
+      );
+    } catch (_) {}
   }
 
   Future<void> testNotification() async {

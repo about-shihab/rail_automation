@@ -181,19 +181,41 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     );
   }
 
-  void _bookLegDirect(TrainTrip legTrain, SeatType seat, String legFrom, String legTo, String legDate) {
-    if (_auth == null) return;
+  Future<void> _bookLegDirect(TrainTrip legTrain, SeatType seat, String legFrom, String legTo, String legDate) async {
     HapticFeedback.selectionClick();
+    var auth = _auth ?? await AuthSession.load();
+    if (auth == null || !auth.isLoggedIn) {
+      final success = await LoginFlow.openManualLogin();
+      if (!success) return;
+      auth = await AuthSession.load();
+      if (auth == null) return;
+    }
+    _auth = auth;
+
+    final readyTrain = TrainTrip.fromJson({
+      ...legTrain.toJson(),
+      'boarding_points': legTrain.boardingPoints.isNotEmpty
+          ? legTrain.boardingPoints.map((e) => e.toJson()).toList()
+          : [
+              BoardingPoint(
+                locationName: legFrom,
+                locationTime: legTrain.departureDateTime,
+                locationDate: legDate,
+              ).toJson(),
+            ],
+    });
+
+    if (!mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => SeatBookingScreen(
-          train: legTrain,
+          train: readyTrain,
           seatType: seat,
           fromCity: legFrom,
           toCity: legTo,
           dateOfJourney: legDate,
-          authSession: _auth!,
+          authSession: auth!,
         ),
       ),
     );

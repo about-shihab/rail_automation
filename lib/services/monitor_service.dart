@@ -33,6 +33,7 @@ import 'package:flutter/material.dart';
 
 import 'turnstile_gate.dart';
 import 'seat_layout_challenge.dart';
+import 'intermediate_station_search.dart';
 import '../views/reservation_screen.dart';
 
 class MonitorLog {
@@ -1377,6 +1378,14 @@ class MonitorService extends ChangeNotifier {
           _addLog(
             '#$_totalChecksCount checked at ${_formatTime(_lastCheckedAt!)}: No online seats yet. Next in ${_intervalSeconds}s.',
           );
+          if (!_iosBackgroundSearch) {
+            await _checkIntermediateSeats(
+              upcomingTrains: upcomingTrains,
+              auth: session,
+              current: current,
+              previous: previous,
+            );
+          }
         }
         if (!_isMonitoring ||
             _disposed ||
@@ -1558,6 +1567,63 @@ class MonitorService extends ChangeNotifier {
           }),
         );
         notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _checkIntermediateSeats({
+    required List<TrainTrip> upcomingTrains,
+    required AuthSession auth,
+    required Map<String, dynamic> current,
+    required Map<String, dynamic> previous,
+  }) async {
+    final trainsToCheck = upcomingTrains.where((t) {
+      if (_targetTrains.isNotEmpty) {
+        return _targetTrains.contains(t.tripNumber);
+      }
+      if (_targetTrain != null && _targetTrain!.isNotEmpty) {
+        return t.tripNumber == _targetTrain;
+      }
+      return true;
+    }).take(2).toList();
+
+    for (final train in trainsToCheck) {
+      if (!_isMonitoring || _disposed) break;
+      try {
+        final viaResults = await IntermediateStationSearch.search(
+          train: train,
+          from: _fromCity,
+          to: _toCity,
+          date: _dateOfJourney,
+          auth: auth,
+          seatClass: _targetSeatClass,
+          cancelled: () => !_isMonitoring || _disposed,
+        );
+
+        if (viaResults.isNotEmpty) {
+          final best = viaResults.first;
+          final viaKey = 'via_${train.tripNumber}_${best.via}_${best.firstSeat.type}';
+          current[viaKey] = best.seats;
+          final prevCount = (previous[viaKey] as num? ?? 0);
+
+          if (prevCount == 0 && best.seats > 0) {
+            _addLog(
+              '🔀 VIA TICKETS FOUND! ${train.tripNumber} via ${best.via} (${best.seats} [${best.firstSeat.type}] seats)',
+              isAlert: true,
+            );
+            await _notificationService.triggerViaSeatAvailableAlert(
+              trainName: train.tripNumber,
+              viaStation: best.via,
+              fromCity: _fromCity,
+              toCity: _toCity,
+              travelDate: _dateOfJourney,
+              seatType: best.firstSeat.displayName,
+              seatCount: best.seats,
+            );
+          }
+        }
+      } catch (_) {
+        // Silently continue if intermediate search is not applicable or busy
       }
     }
   }
