@@ -579,8 +579,8 @@ class NotificationService {
           ),
           const AndroidNotificationChannel(
             'br_verification_alerts_v2',
-            'Human Verification',
-            description: 'Notifications when human verification is required to reserve seats',
+            'Complete Booking',
+            description: 'Notifications to open app and complete seat booking',
             importance: Importance.high,
             playSound: true,
             enableVibration: true,
@@ -678,8 +678,8 @@ class NotificationService {
         needsHumanVerification || bookingLink == 'rail://turnstile';
     final title = isHumanCheck
         ? (bn
-              ? 'মানব যাচাইকরণ প্রয়োজন · সম্পূর্ণ করতে অ্যাপ খুলুন'
-              : 'Human check required · Open app to verify')
+              ? 'বুকিং সম্পন্ন করতে অ্যাপ খুলুন'
+              : 'To complete booking, open app')
         : reservationHeld
         ? (bn
               ? 'আপনার ট্রেনের টিকেট পাওয়া গেছে · আসন সংরক্ষিত'
@@ -696,8 +696,8 @@ class NotificationService {
         : '$seatCount';
     final description = isHumanCheck
         ? (bn
-              ? '$seatType আসন সংরক্ষণের জন্য রেলওয়ে নিরাপত্তা যাচাইকরণ প্রয়োজন। অ্যাপ খুলুন।'
-              : 'Railway security verification needed for $seatType. Open app to complete human check.')
+              ? '$trainName · $seatType · বুকিং সম্পন্ন করতে অ্যাপ খুলুন।'
+              : '$trainName · $seatType · Open app to complete booking.')
         : [
             if (seatType.isNotEmpty) seatType,
             if (travelDate.isNotEmpty) travelDate,
@@ -718,7 +718,7 @@ class NotificationService {
         AndroidNotificationAction(
           isHumanCheck ? 'verify_human' : 'book',
           isHumanCheck
-              ? (bn ? 'অ্যাপ খুলুন ও যাচাই করুন' : 'Open app to verify')
+              ? (bn ? 'অ্যাপ খুলুন' : 'Open app')
               : automaticBooking
               ? (bn ? 'অগ্রগতি দেখুন' : 'View progress')
               : (bn ? 'বুক করুন' : 'Book now'),

@@ -48,8 +48,8 @@ String friendlyErrorMessage(dynamic raw, {bool? isBangla}) {
       lower.contains('human verification') ||
       lower.contains('security verification')) {
     return pick(
-      'Human verification required • Tap to verify and proceed',
-      'নিরাপত্তা যাচাই প্রয়োজন • এগিয়ে যেতে যাচাই সম্পন্ন করুন',
+      'To complete booking, proceed in app',
+      'বুকিং সম্পন্ন করতে এগিয়ে যান',
     );
   }
 
@@ -262,8 +262,8 @@ String? _translateKnownMessage(String msg, bool bn) {
   }
   if (lower.contains('turnstile') || lower.contains('human')) {
     return pick(
-      'Human verification required • Tap to verify and proceed',
-      'নিরাপত্তা যাচাই প্রয়োজন • এগিয়ে যেতে যাচাই সম্পন্ন করুন',
+      'To complete booking, proceed in app',
+      'বুকিং সম্পন্ন করতে এগিয়ে যান',
     );
   }
   if (lower.contains('quota') || lower.contains('maximum seat') || lower.contains('limit')) {

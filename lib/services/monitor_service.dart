@@ -1482,7 +1482,7 @@ class MonitorService extends ChangeNotifier {
                       .cancelVerificationAndSearchAlerts();
                 }
                 _addLog(
-                  'Human check needed to reserve seats for ${chosen.$1.tripNumber}',
+                  'To complete booking, open app for ${chosen.$1.tripNumber}',
                 );
                 // Security check is raised only ONCE per booking attempt
                 if (!_turnstileRequestedForBooking) {

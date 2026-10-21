@@ -667,7 +667,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
             const SizedBox(height: 16),
             Text(
               needsVerification
-                  ? 'Railway Security Verification'
+                  ? 'Complete Booking'
                   : 'Failed to load seat layout',
               style: TextStyle(
                 color: AppColors.textPrimary(isDark),
@@ -678,7 +678,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
             const SizedBox(height: 8),
             Text(
               needsVerification
-                  ? 'Railway requires a quick Cloudflare security check before displaying real-time seats.'
+                  ? 'Please continue to confirm and reserve your seats.'
                   : (_error ?? ''),
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -689,8 +689,8 @@ class _SeatBookingScreenState extends State<SeatBookingScreen> {
             const SizedBox(height: 24),
             if (needsVerification) ...[
               PrimaryButton(
-                label: 'Verify with Security Check',
-                icon: Icons.shield_rounded,
+                label: 'Continue to Complete Booking',
+                icon: Icons.check_circle_rounded,
                 onPressed: _verifyAndRetry,
               ),
               const SizedBox(height: 12),
