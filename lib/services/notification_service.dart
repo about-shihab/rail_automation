@@ -18,7 +18,6 @@ import 'booking_service.dart';
 import '../views/reservation_screen.dart';
 import '../views/app_shell.dart';
 import 'monitor_service.dart';
-import 'voice_service.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -52,6 +51,7 @@ class NotificationService {
   static const int idPurchaseSuccess = 803;
   static const int idIosSearchStatus = 805;
   static const int idSeatLayout = 806;
+  static const int idViaSeatFound = 807;
 
   Future<void> showIosSearchStatus({
     required String from,
@@ -131,7 +131,7 @@ class NotificationService {
         : null,
     onlyAlertOnce: onlyAlertOnce,
     enableVibration: true,
-    vibrationPattern: Int64List.fromList([0, 800, 400, 800]),
+    vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
     visibility: NotificationVisibility.public,
     category: seatAlert
         ? AndroidNotificationCategory.alarm
@@ -147,7 +147,7 @@ class NotificationService {
         .inMilliseconds
         .clamp(1, 3600000),
     autoCancel: true,
-    fullScreenIntent: false,
+    fullScreenIntent: seatAlert,
     actions: actions,
     styleInformation: BigTextStyleInformation(body, contentTitle: title),
   );
@@ -393,9 +393,7 @@ class NotificationService {
               : (state['autoVerify'] == true
                     ? 'Waiting for automatic OTP verification. Open the app to enter it manually if needed. Payment is still required.'
                     : 'Open the app to verify your OTP, then purchase your ticket.'));
-    if (!ready && state['status'] == 'awaitingOtp') {
-      unawaited(VoiceService.instance.speakBookingConfirmed());
-    }
+    // Audio voice disabled per requirement; loud train whistle and vibration are used for alerts.
     final body =
         "${[trainName, if (seatType.isNotEmpty) seatType].join(' · ')}\n$description";
     final androidDetails = _alertDetails(
@@ -732,6 +730,16 @@ class NotificationService {
           >();
       if (androidImpl != null) {
         final channels = [
+          AndroidNotificationChannel(
+            'br_seat_found_v3',
+            'Seats found (High Alert Whistle)',
+            description: 'Instant seat alert with loud train whistle and vibration',
+            importance: Importance.max,
+            sound: const RawResourceAndroidNotificationSound('seat_found'),
+            playSound: true,
+            enableVibration: true,
+            vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+          ),
           const AndroidNotificationChannel(
             'br_seat_found_v2',
             'Seats found',
@@ -883,8 +891,8 @@ class NotificationService {
           ].join(' · ');
     final body = '$trainName\n$description';
     final androidDetails = _alertDetails(
-      channel: 'br_seat_found_v2',
-      channelName: 'Seats found',
+      channel: 'br_seat_found_v3',
+      channelName: 'Seats found (High Alert Whistle)',
       seatAlert: true,
       onlyAlertOnce: true,
       title: title,
@@ -1082,8 +1090,8 @@ class NotificationService {
         'rail://via-ticket?from=${Uri.encodeComponent(fromCity)}&to=${Uri.encodeComponent(toCity)}&date=${Uri.encodeComponent(travelDate)}&train=${Uri.encodeComponent(trainName)}&via=${Uri.encodeComponent(viaStation)}&class=${Uri.encodeComponent(seatType)}';
 
     final androidDetails = _alertDetails(
-      channel: 'br_seat_found_v2',
-      channelName: 'Seats found',
+      channel: 'br_seat_found_v3',
+      channelName: 'Seats found (High Alert Whistle)',
       seatAlert: true,
       onlyAlertOnce: false,
       title: title,
@@ -1112,7 +1120,7 @@ class NotificationService {
 
     try {
       await _notificationsPlugin.show(
-        id: idSeatFound,
+        id: idViaSeatFound,
         title: title,
         body: body,
         payload: payload,

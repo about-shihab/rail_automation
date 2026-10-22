@@ -95,9 +95,11 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         final started = DateTime.tryParse('${value['startedAt'] ?? ''}');
         final expiry = DateTime.tryParse('${value['expiresAt'] ?? ''}');
         final now = DateTime.now();
-        final is5MinElapsed =
-            (started != null && now.difference(started).inMinutes >= 5) ||
-            (expiry != null && !now.isBefore(expiry));
+        final isReady = value['status'] == 'readyForPayment';
+        final is5MinElapsed = isReady
+            ? (expiry != null && !now.isBefore(expiry))
+            : ((started != null && now.difference(started).inMinutes >= 5) ||
+               (expiry != null && !now.isBefore(expiry)));
         if (is5MinElapsed) {
           await BookingService.clear();
           if (mounted) {
@@ -631,18 +633,19 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final isBookingBusy = activity.busy;
     final step = _step(m, p, activity);
     final hasActiveContent =
-        hasSearch || hasReservation || isBookingBusy || credit.credits <= 0;
+        hasSearch || hasReservation || isBookingBusy || credit.credits <= 0 || p != null;
     final isActive =
         (m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin) ||
         (isBookingBusy && p == null);
     final exactError =
         m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
     final isReservationExpired =
-        !m.isMonitoring &&
-        (m.lastReservationExpired ||
-            (p != null && expired) ||
-            (m.bookingFailureReason != null &&
-                m.bookingFailureReason!.isNotEmpty));
+        (p != null && expired) ||
+        (p == null &&
+            !m.isMonitoring &&
+            (m.lastReservationExpired ||
+                (m.bookingFailureReason != null &&
+                    m.bookingFailureReason!.isNotEmpty)));
 
     if (_sessionExpired) {
       return Scaffold(
@@ -810,6 +813,36 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
                             const SizedBox(height: 14),
 
+                            // ── 2a. Ticket Processing / Ready to Pay Step Card ──
+                            if (ready && p != null) ...[
+                              _TicketProcessingCard(
+                                reservation: p,
+                                isDark: isDark,
+                                pulseCtrl: _pulseCtrl,
+                                onPayNow: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => BookingScreen(
+                                        url: BookingService.tripInfoUrl,
+                                      ),
+                                    ),
+                                  );
+                                  await _refresh();
+                                },
+                                onViewDetails: () async {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const ReservationScreen(),
+                                    ),
+                                  );
+                                  await _refresh();
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                            ],
+
                             // ── 2b. 5-Min Payment Countdown Timer ──
                             if (p != null && !expired)
                               _PaymentTimerBar(
@@ -839,12 +872,23 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               isBookingBusy: isBookingBusy,
                               credits: credit.credits,
                               onReservation: () async {
-                                await Navigator.push(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const ReservationScreen(),
-                                  ),
-                                );
+                                if (ready) {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => BookingScreen(
+                                        url: BookingService.tripInfoUrl,
+                                      ),
+                                    ),
+                                  );
+                                } else {
+                                  await Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => const ReservationScreen(),
+                                    ),
+                                  );
+                                }
                                 await _refresh();
                               },
                               onRailway: () => Navigator.push(
@@ -2148,6 +2192,313 @@ class _CoachCoupler extends StatelessWidget {
             ? primaryColor.withValues(alpha: 0.6)
             : (isDark ? const Color(0xFF1E3A55) : const Color(0xFFD9E6F5)),
         borderRadius: BorderRadius.circular(1),
+      ),
+    );
+  }
+}
+
+// ─── Ticket Processing / Ready for Payment Card (Step 4) ──────────────────────
+class _TicketProcessingCard extends StatelessWidget {
+  final Map<String, dynamic> reservation;
+  final bool isDark;
+  final AnimationController pulseCtrl;
+  final VoidCallback onPayNow;
+  final VoidCallback onViewDetails;
+
+  const _TicketProcessingCard({
+    required this.reservation,
+    required this.isDark,
+    required this.pulseCtrl,
+    required this.onPayNow,
+    required this.onViewDetails,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final train = reservation['train'] as Map<String, dynamic>?;
+    final trainName = train?['trip_number']?.toString() ??
+        train?['train_name']?.toString() ??
+        'Train';
+    final from = canonicalStation('${reservation['from'] ?? ''}');
+    final to = canonicalStation('${reservation['to'] ?? ''}');
+    final date = '${reservation['date'] ?? ''}';
+    final rawSeats = reservation['seats'] as List?;
+    final coach = rawSeats?.firstOrNull is Map
+        ? (rawSeats!.first['floor_name']?.toString() ?? '')
+        : '';
+    final seatNumbers = rawSeats != null
+        ? rawSeats
+            .map((s) => s is Map ? s['seat_number']?.toString() ?? '' : '')
+            .where((s) => s.isNotEmpty)
+            .join(', ')
+        : '';
+    final seatClass = rawSeats?.firstOrNull is Map
+        ? (rawSeats!.first['selected_seat_class']?.toString() ?? '')
+        : (reservation['seatClass'] is Map
+            ? reservation['seatClass']['type']?.toString() ?? ''
+            : '');
+    final totalFare = reservation['total_fare'] != null
+        ? double.tryParse('${reservation['total_fare']}') ?? 0.0
+        : (rawSeats != null
+            ? rawSeats.fold<double>(
+                0.0,
+                (sum, s) =>
+                    sum +
+                    (s is Map ? (double.tryParse('${s['fare']}') ?? 0.0) : 0.0),
+              )
+            : 0.0);
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1C1917) : const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFF59E0B),
+          width: 1.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Step 4 Processing Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF59E0B).withValues(alpha: 0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.credit_card_rounded,
+                  color: Color(0xFFD97706),
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          lang.tr('STEP 4 · READY TO PAY', 'ধাপ ৪ • পেমেন্ট প্রস্তুত'),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.8,
+                            color: Color(0xFFD97706),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            lang.tr('OTP Verified', 'ওটিপি যাচাইকৃত'),
+                            style: const TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF10B981),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      lang.tr(
+                        'Seats held securely. Complete payment to finalize.',
+                        'আসন সংরক্ষিত আছে। টিকিট নিশ্চিত করতে পেমেন্ট করুন।',
+                      ),
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary(isDark),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          // Ticket summary box
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF292524) : Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+              ),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      trainName,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      date,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.textMuted(isDark),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    const Icon(Icons.route_rounded, size: 14, color: AppColors.primary),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$from ➔ $to',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const Divider(height: 16),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          lang.tr('COACH & SEATS', 'কোচ ও আসন'),
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textMuted(isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          coach.isNotEmpty ? '$coach ($seatNumbers)' : (seatNumbers.isNotEmpty ? seatNumbers : 'Confirmed'),
+                          style: const TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (seatClass.isNotEmpty)
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            lang.tr('CLASS', 'শ্রেণি'),
+                            style: TextStyle(
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.textMuted(isDark),
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            seatClass,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          lang.tr('TOTAL FARE', 'মোট ভাড়া'),
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textMuted(isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '৳${totalFare.toStringAsFixed(0)}',
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w900,
+                            color: Color(0xFFD97706),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          // Action Buttons
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFF59E0B),
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    elevation: 3,
+                  ),
+                  onPressed: onPayNow,
+                  icon: const Icon(Icons.payment_rounded, size: 18),
+                  label: Text(
+                    lang.tr('Pay Now (Official)', 'পেমেন্ট সম্পন্ন করুন'),
+                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.textPrimary(isDark),
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  onPressed: onViewDetails,
+                  icon: const Icon(Icons.receipt_outlined, size: 16),
+                  label: Text(
+                    lang.tr('Details', 'বিবরণ'),
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -3752,36 +4103,32 @@ class _MonitorActivityLogCard extends StatefulWidget {
 
 class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
   bool _showAllLogs = false;
-  bool _filterViaOnly = false;
+
+  bool _isRoutineCheck(MonitorLog l) {
+    if (l.viaJourney != null) return false;
+    final msg = l.message.toLowerCase();
+    return msg.contains('check') ||
+        msg.contains('checked') ||
+        msg.contains('monitoring check') ||
+        msg.contains('scanning') ||
+        msg.contains('direct seats found');
+  }
 
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
     final isDark = widget.isDark;
 
-    final displayedLogs = _filterViaOnly
-        ? widget.logs
-            .where(
-              (l) =>
-                  l.viaJourney != null ||
-                  l.message.contains('VIA') ||
-                  l.message.contains('ভায়া'),
-            )
-            .toList()
-        : widget.logs;
+    // Filter out check logs completely. Keep only via tickets and critical notifications.
+    final viaLogs = widget.logs
+        .where((l) => l.viaJourney != null || l.message.contains('VIA') || l.message.contains('ভায়া'))
+        .toList();
 
-    final logSlice = _showAllLogs
-        ? displayedLogs
-        : displayedLogs.take(8).toList();
+    final displayedLogs = widget.logs
+        .where((l) => !_isRoutineCheck(l) || l.isAlert || l.isError)
+        .toList();
 
-    final viaCount = widget.logs
-        .where(
-          (l) =>
-              l.viaJourney != null ||
-              l.message.contains('VIA') ||
-              l.message.contains('ভায়া'),
-        )
-        .length;
+    final logSlice = _showAllLogs ? displayedLogs : displayedLogs.take(6).toList();
 
     return Container(
       decoration: BoxDecoration(
@@ -3885,114 +4232,100 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
 
           const SizedBox(height: 10),
 
-          // Filter toggles
+          // ── Header: In-Between / Via Tickets Discovered ──
           Row(
             children: [
-              InkWell(
-                onTap: () => setState(() => _filterViaOnly = false),
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              const Icon(
+                Icons.alt_route_rounded,
+                size: 18,
+                color: Color(0xFF10B981),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                lang.tr(
+                  'In-Between Station Tickets',
+                  'ভায়া / মধ্যবর্তী স্টেশনের টিকেট',
+                ),
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                  color: AppColors.textPrimary(isDark),
+                ),
+              ),
+              const Spacer(),
+              if (viaLogs.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
                   decoration: BoxDecoration(
-                    color: !_filterViaOnly
-                        ? AppColors.primary.withValues(alpha: 0.15)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: !_filterViaOnly
-                          ? AppColors.primary
-                          : (isDark
-                              ? Colors.grey.shade800
-                              : Colors.grey.shade300),
-                    ),
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
-                    lang.tr(
-                      'All activity (${widget.logs.length})',
-                      'সকল কার্যকলাপ (${widget.logs.length})',
-                    ),
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight:
-                          !_filterViaOnly ? FontWeight.bold : FontWeight.normal,
-                      color: !_filterViaOnly
-                          ? AppColors.primary
-                          : AppColors.textMuted(isDark),
+                    '${viaLogs.length} ${lang.tr("Found", "পাওয়া গেছে")}',
+                    style: const TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF10B981),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 6),
-              InkWell(
-                onTap: () => setState(() => _filterViaOnly = true),
-                borderRadius: BorderRadius.circular(6),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: _filterViaOnly
-                        ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                        : Colors.transparent,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(
-                      color: _filterViaOnly
-                          ? const Color(0xFF10B981)
-                          : (isDark
-                              ? Colors.grey.shade800
-                              : Colors.grey.shade300),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        Icons.alt_route_rounded,
-                        size: 12,
-                        color: Color(0xFF10B981),
-                      ),
-                      const SizedBox(width: 3),
-                      Text(
-                        lang.tr(
-                          'In-Between only ($viaCount)',
-                          'শুধু ভায়া টিকিট ($viaCount)',
-                        ),
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: _filterViaOnly
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                          color: _filterViaOnly
-                              ? const Color(0xFF10B981)
-                              : AppColors.textMuted(isDark),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             ],
           ),
 
-          const Divider(height: 16),
+          const SizedBox(height: 10),
 
-          // Log list or empty state
-          if (logSlice.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              child: Center(
-                child: Text(
-                  lang.tr(
-                    'No in-between tickets found yet. Monitoring runs regularly.',
-                    'এখনও কোনো বিকল্প টিকিট পাওয়া যায়নি। অনুসন্ধান চলছে।',
-                  ),
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textMuted(isDark),
-                    fontStyle: FontStyle.italic,
-                  ),
+          // ── Discovered Tickets Content or Running Waiting State ──
+          if (displayedLogs.isEmpty) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
                 ),
               ),
-            )
-          else
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.radar_rounded,
+                    size: 24,
+                    color: Color(0xFF10B981),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          lang.tr(
+                            'Scanning intermediate stations in background…',
+                            'ব্যাকগ্রাউন্ডে ভায়া স্টেশনের আসন খোঁজা হচ্ছে…',
+                          ),
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary(isDark),
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          lang.tr(
+                            'Instant loud train whistle notification will fire as soon as tickets are found.',
+                            'কোনো ভায়া আসন পেলে তাৎক্ষণিক জোরে ট্রেনের বাঁশি ও কম্পন নোটিফিকেশন পাবেন।',
+                          ),
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            color: AppColors.textMuted(isDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else
             ...logSlice.map((log) => _buildLogItem(log, lang, isDark)),
 
           if (displayedLogs.length > 8)
@@ -4179,6 +4512,8 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
         ),
       );
     }
+
+    if (_isRoutineCheck(log)) return const SizedBox.shrink();
 
     Color iconColor = Colors.grey;
     IconData icon = Icons.circle_outlined;

@@ -20,7 +20,6 @@ import 'notification_service.dart';
 import 'secure_store.dart';
 import 'trip_history_service.dart';
 import 'turnstile_gate.dart';
-import 'voice_service.dart';
 import '../utils/friendly_error.dart';
 import '../utils/railway_stations.dart';
 
@@ -106,8 +105,10 @@ class BookingService {
       final expires = DateTime.tryParse(map['expiresAt'] ?? '');
       final now = DateTime.now();
 
-      // Automatically clear after 5 minutes (300 seconds) from start or when expired
-      final bool isExpiredByStartedAt =
+      // Automatically clear after 5 minutes (300 seconds) from start or when expired.
+      // Once OTP is verified (readyForPayment), only the payment expiration deadline (expiresAt) applies.
+      final bool isReadyForPayment = map['status'] == 'readyForPayment';
+      final bool isExpiredByStartedAt = !isReadyForPayment &&
           started != null &&
           now.difference(started).inSeconds >= (reservationTimeoutMinutes * 60);
       final bool isExpiredByExpiresAt =
@@ -492,9 +493,7 @@ class BookingService {
               seatInfo: '$coachName (${seatsList.join(", ")})',
             );
             await save(state);
-            try {
-              await VoiceService.instance.speakBookingConfirmed();
-            } catch (_) {}
+            // Audio voice disabled per requirement; loud train whistle and vibration are used for alerts.
 
             try {
               await TripHistoryService().recordTrip(
@@ -582,6 +581,12 @@ class BookingService {
     await SecureStore.write('rail_user', jsonEncode(user));
     state['status'] = 'readyForPayment';
     state['otp'] = otp;
+    state['verifiedAt'] = DateTime.now().toUtc().toIso8601String();
+    // Grant fresh 5-minute payment window after OTP verification
+    state['expiresAt'] = DateTime.now()
+        .add(Duration(minutes: reservationTimeoutMinutes))
+        .toUtc()
+        .toIso8601String();
     await save(state);
     // OTP verified: Status is ready for payment.
     // Remember: Credit is NOT deducted on OTP verification, only on successful booking!

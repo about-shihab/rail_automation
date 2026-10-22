@@ -8,8 +8,6 @@ class VoiceService {
 
   FlutterTts? _tts;
   bool _initialized = false;
-  DateTime? _lastSpokenTime;
-  String? _lastSpokenText;
 
   FlutterTts get _client => _tts ??= FlutterTts();
 
@@ -81,32 +79,14 @@ class VoiceService {
     }
   }
 
-  /// Announces ticket booking confirmation and prompt to pay in natural Bangla female voice:
-  /// "আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন"
+  /// Audio voice disabled per requirement; loud train whistle and vibration are used for alerts.
   Future<void> speakBookingConfirmed({bool force = false}) async {
-    const text = 'আপনার টিকেট বুকিং কনফার্ম করা হয়েছে, টিকেটের মূল্য পরিশোধ করুন';
-    await speak(text, force: force);
+    return;
   }
 
-  /// Speaks the provided text in natural Bangla.
-  /// Deduplicates calls within 8 seconds unless forced.
+  /// Audio voice disabled per requirement; loud train whistle and vibration are used for alerts.
   Future<void> speak(String text, {bool force = false}) async {
-    if (!force &&
-        _lastSpokenText == text &&
-        _lastSpokenTime != null &&
-        DateTime.now().difference(_lastSpokenTime!).inSeconds < 8) {
-      return;
-    }
-    _lastSpokenTime = DateTime.now();
-    _lastSpokenText = text;
-
-    try {
-      await initialize();
-      await _client.speak(text);
-      debugPrint('🔊 [VoiceService] Spoke: "$text"');
-    } catch (e) {
-      debugPrint('⚠️ [VoiceService] Speak error: $e');
-    }
+    return;
   }
 
   Future<void> stop() async {

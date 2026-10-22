@@ -17,6 +17,9 @@ import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'watch_options_dialog.dart';
 import 'intermediate_station_screen.dart';
+import '../services/login_flow.dart';
+import '../services/intermediate_station_search.dart';
+import '../utils/railway_stations.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
   final TripSearchResponse searchResponse;
@@ -1076,7 +1079,12 @@ class _TrainCard extends StatelessWidget {
 
             const SizedBox(height: 12),
             if (showIntermediateSearch) ...[
-              _IntermediateSearchCard(
+              _LazyIntermediateSearchCard(
+                train: train,
+                from: from,
+                to: to,
+                date: date,
+                seatClass: seatClass,
                 isDark: isDark,
                 onOpenFull: onIntermediateSearch,
               ),
@@ -1119,41 +1127,349 @@ class _TrainCard extends StatelessWidget {
   }
 }
 
-/// Intermediate searches start only after the user opens a train. Rendering
-/// a list of sold-out trains must never fan out into dozens of seat requests.
-class _IntermediateSearchCard extends StatelessWidget {
-  const _IntermediateSearchCard({required this.isDark, required this.onOpenFull});
+/// Fast, automatic lazy loading intermediate station search card.
+/// Automatically scans in-between stations progressively without blocking the main UI.
+class _LazyIntermediateSearchCard extends StatefulWidget {
+  final TrainTrip train;
+  final String from;
+  final String to;
+  final String date;
+  final String? seatClass;
   final bool isDark;
   final VoidCallback onOpenFull;
+
+  const _LazyIntermediateSearchCard({
+    required this.train,
+    required this.from,
+    required this.to,
+    required this.date,
+    this.seatClass,
+    required this.isDark,
+    required this.onOpenFull,
+  });
+
+  @override
+  State<_LazyIntermediateSearchCard> createState() => _LazyIntermediateSearchCardState();
+}
+
+class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard> {
+  static final Map<String, List<IntermediateJourney>> _cache = {};
+  bool _loading = false;
+  List<IntermediateJourney> _results = [];
+
+  String get _key =>
+      '${widget.train.tripNumber}_${canonicalStation(widget.from)}_${canonicalStation(widget.to)}_${widget.date}_${widget.seatClass ?? 'ALL'}';
+
+  @override
+  void initState() {
+    super.initState();
+    final cached = _cache[_key];
+    if (cached != null) {
+      _results = cached;
+    } else {
+      _startLazySearch();
+    }
+  }
+
+  Future<void> _startLazySearch() async {
+    if (_loading) return;
+    setState(() {
+      _loading = true;
+    });
+
+    try {
+      final auth = await AuthSession.load();
+      if (auth == null || !auth.isValid) {
+        if (mounted) setState(() { _loading = false; });
+        return;
+      }
+
+      final res = await IntermediateStationSearch.search(
+        train: widget.train,
+        from: widget.from,
+        to: widget.to,
+        date: widget.date,
+        auth: auth,
+        seatClass: widget.seatClass,
+        cancelled: () => !mounted,
+        onResults: (partial) {
+          if (mounted && partial.isNotEmpty) {
+            setState(() {
+              _results = List.from(partial);
+              _cache[_key] = _results;
+            });
+          }
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _results = res;
+          _cache[_key] = res;
+          _loading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _bookLeg(IntermediateJourney journey, bool isFirstLeg) async {
+    final legTrain = isFirstLeg ? journey.first : journey.second;
+    final legSeat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
+    final legFrom = isFirstLeg ? canonicalStation(widget.from) : journey.canonicalVia;
+    final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(widget.to);
+    final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
+
+    var auth = await AuthSession.load();
+    if (auth == null || !auth.isValid) {
+      final ok = await LoginFlow.openManualLogin();
+      if (!ok) return;
+      auth = await AuthSession.load();
+      if (auth == null || !auth.isValid) return;
+    }
+
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SeatBookingScreen(
+          train: legTrain,
+          seatType: legSeat,
+          fromCity: legFrom,
+          toCity: legTo,
+          dateOfJourney: legDate,
+          authSession: auth!,
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.alt_route_rounded, size: 20, color: AppColors.primary),
-          const SizedBox(width: 8),
-          Expanded(child: Text(lang.tr('Try an intermediate station', 'মধ্যবর্তী স্টেশন দিয়ে চেষ্টা করুন'),
-            style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary(isDark)))),
-        ]),
-        const SizedBox(height: 6),
-        Text(lang.tr('Check two-ticket options or seats between specific stops.',
-          'দুই টিকিটের বিকল্প বা নির্দিষ্ট স্টেশনের মধ্যে আসন দেখুন।'),
-          style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark))),
-        const SizedBox(height: 8),
-        TextButton.icon(
-          onPressed: onOpenFull,
-          icon: const Icon(Icons.search_rounded, size: 18),
-          label: Text(lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন')),
+    final isDark = widget.isDark;
+
+    if (_results.isNotEmpty) {
+      final best = _results.first;
+      final fare1 = double.tryParse(best.firstSeat.fare) ?? 0;
+      final fare2 = double.tryParse(best.secondSeat.fare) ?? 0;
+      final totalFare = fare1 + fare2;
+
+      return Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF042017) : const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: const Color(0xFF10B981).withValues(alpha: 0.4),
+            width: 1.2,
+          ),
         ),
-      ]),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.alt_route_rounded, size: 18, color: Color(0xFF10B981)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    '${lang.tr("Seat Available via", "ভায়া")} ${best.via} ${lang.tr("Station", "স্টেশন")}!',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Color(0xFF10B981),
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${best.seats} ${lang.tr("seats", "আসন")}',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF10B981),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              '${widget.from} ➔ ${best.via} ➔ ${widget.to}',
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary(isDark),
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Availability cleanly displayed by seat type
+            Row(
+              children: [
+                Text(
+                  '${best.firstSeat.displayName}: ${best.firstSeat.seatCounts.online} · ${best.secondSeat.displayName}: ${best.secondSeat.seatCounts.online}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted(isDark),
+                  ),
+                ),
+                const Spacer(),
+                if (totalFare > 0)
+                  Text(
+                    '৳${totalFare.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.textPrimary(isDark),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () => _bookLeg(best, true),
+                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  label: Text(
+                    '${lang.tr("Book Leg 1", "১ম অংশ বুক")}: ${best.via}',
+                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () => _bookLeg(best, false),
+                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  label: Text(
+                    '${lang.tr("Book Leg 2", "২য় অংশ বুক")}: ${widget.to}',
+                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  onPressed: widget.onOpenFull,
+                  child: Text(
+                    lang.tr('All options', 'সব বিকল্প'),
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_loading) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.primary.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: AppColors.primary.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                lang.tr(
+                  'Auto-searching in-between station tickets…',
+                  'স্বয়ংক্রিয়ভাবে মধ্যবর্তী স্টেশনের আসন খোঁজা হচ্ছে…',
+                ),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Finished searching, no via seats found for this train
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.grey.shade900 : Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.info_outline_rounded, size: 14, color: Colors.grey),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              lang.tr('No via seats found', 'মধ্যবর্তী স্টেশনেও আসন খালি নেই'),
+              style: TextStyle(fontSize: 11, color: AppColors.textMuted(isDark)),
+            ),
+          ),
+          InkWell(
+            onTap: widget.onOpenFull,
+            child: Text(
+              lang.tr('View route', 'রুট দেখুন'),
+              style: const TextStyle(
+                fontSize: 11,
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
