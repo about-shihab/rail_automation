@@ -31,7 +31,9 @@ class _TurnstileHostState extends State<TurnstileHost> {
   bool _isLocalDocument(String? url) =>
       url == 'https://eticket.railway.gov.bd/' ||
       url == 'https://eticket.railway.gov.bd' ||
-      (_isIos && url == 'about:blank');
+      (_isIos &&
+          (url == 'about:blank' ||
+              (url != null && url.startsWith('applewebdata:'))));
 
   Future<void> _evaluate(
     InAppWebViewController controller,
@@ -143,7 +145,7 @@ class _TurnstileHostState extends State<TurnstileHost> {
                   opacity: visible ? 1 : 0,
                   child: CompositedTransformFollower(
                     link: session.challengeLink,
-                    showWhenUnlinked: false,
+                    showWhenUnlinked: true,
                     child: child,
                   ),
                 ),

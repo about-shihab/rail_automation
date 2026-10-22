@@ -483,6 +483,10 @@ class IntermediateStationSearch {
     }
 
     final results = <IntermediateJourney>[];
+    final totalCandidateStops = end - start - 1;
+    if (totalCandidateStops <= 0) return results;
+
+    final dayOffsets = <int, int>{};
     var day = 0;
     int? previous = parseMinutes('${routes[start]['departure_time'] ?? ''}');
     if (previous == null) {
@@ -498,18 +502,21 @@ class IntermediateStationSearch {
         if (previous != null && time < previous) day++;
         previous = time;
       }
-      if (cancelled?.call() == true) break;
-      onProgress?.call(i - start - 1, end - start - 1, stations[i].name);
       if (parseMinutes('${routes[i]['departure_time'] ?? ''}') == null ||
           previous == null) {
         throw StateError(
           'Departure time for ${city(i)} is unavailable. Cannot safely search this connection.',
         );
       }
+      dayOffsets[i] = day;
+    }
+
+    Future<List<IntermediateJourney>> checkStation(int i) async {
+      if (cancelled?.call() == true) return const [];
       final secondDate = DateFormat(
         'dd-MMM-yyyy',
         'en_US',
-      ).format(journeyDate.add(Duration(days: day)));
+      ).format(journeyDate.add(Duration(days: dayOffsets[i] ?? 0)));
       final first = sameRun(
         await ApiService.searchTrips(
           fromCity: from,
@@ -520,14 +527,14 @@ class IntermediateStationSearch {
           silent: true,
         ),
       );
-      if (cancelled?.call() == true) break;
+      if (cancelled?.call() == true) return const [];
       if (first == null ||
           !first.seatTypes.any(
             (s) =>
                 s.isAvailable &&
                 (anyClass || s.type.toUpperCase() == requested),
           )) {
-        continue;
+        return const [];
       }
       final second = sameRun(
         await ApiService.searchTrips(
@@ -539,8 +546,9 @@ class IntermediateStationSearch {
           silent: true,
         ),
       );
-      if (cancelled?.call() == true) break;
-      if (second == null) continue;
+      if (cancelled?.call() == true) return const [];
+      if (second == null) return const [];
+      final stationJourneys = <IntermediateJourney>[];
       for (final seat in first.seatTypes) {
         if (!seat.isAvailable ||
             (tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
@@ -556,7 +564,7 @@ class IntermediateStationSearch {
             )
             .firstOrNull;
         if (other != null) {
-          results.add(
+          stationJourneys.add(
             IntermediateJourney(
               via: city(i).replaceAll('_', ' '),
               firstDate: date,
@@ -569,12 +577,63 @@ class IntermediateStationSearch {
           );
         }
       }
-      onResults?.call(List.unmodifiable(results));
+      return stationJourneys;
     }
+
+    final stationResults = List<List<IntermediateJourney>>.filled(
+      totalCandidateStops,
+      const [],
+    );
+    var completedCount = 0;
+
+    if (totalCandidateStops == 1) {
+      if (cancelled?.call() == true) return [];
+      onProgress?.call(0, 1, stations[start + 1].name);
+      final list = await checkStation(start + 1);
+      stationResults[0] = list;
+      completedCount++;
+      if (list.isNotEmpty && onResults != null) {
+        onResults(List.unmodifiable(list));
+      }
+    } else {
+      final queue = List.generate(totalCandidateStops, (idx) => idx);
+      Future<void> worker() async {
+        while (queue.isNotEmpty) {
+          if (cancelled?.call() == true) break;
+          final idx = queue.removeAt(0);
+          final stationIdx = start + 1 + idx;
+          onProgress?.call(
+            completedCount,
+            totalCandidateStops,
+            stations[stationIdx].name,
+          );
+          final list = await checkStation(stationIdx);
+          stationResults[idx] = list;
+          completedCount++;
+          onProgress?.call(
+            completedCount,
+            totalCandidateStops,
+            stations[stationIdx].name,
+          );
+          if (list.isNotEmpty && onResults != null) {
+            final current = [
+              for (final items in stationResults) ...items,
+            ];
+            onResults(List.unmodifiable(current));
+          }
+        }
+      }
+
+      final concurrency = min(3, totalCandidateStops);
+      await Future.wait(List.generate(concurrency, (_) => worker()));
+    }
+
     if (cancelled?.call() != true) {
-      onProgress?.call(end - start - 1, end - start - 1, '');
+      onProgress?.call(totalCandidateStops, totalCandidateStops, '');
     }
-    return results;
+    return [
+      for (final items in stationResults) ...items,
+    ];
   }
 
   /// Searches live availability between any specific pair of stations on this train.

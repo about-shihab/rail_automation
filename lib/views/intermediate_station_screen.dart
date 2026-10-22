@@ -228,6 +228,8 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
   void _openLeg(IntermediateJourney journey, bool first) {
     final train = first ? journey.first : journey.second;
     final seat = first ? journey.firstSeat : journey.secondSeat;
+    final legFrom = first ? widget.from : journey.via;
+    final legTo = first ? journey.via : widget.to;
     HapticFeedback.selectionClick();
     Navigator.push(
       context,
@@ -237,12 +239,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             trains: [
               TrainTrip.fromJson({
                 ...train.toJson(),
+                'origin_city_name': legFrom,
+                'destination_city_name': legTo,
                 'seat_types': [seat.toJson()],
               }),
             ],
           ),
-          fromCity: first ? widget.from : journey.via,
-          toCity: first ? journey.via : widget.to,
+          fromCity: legFrom,
+          toCity: legTo,
           dateOfJourney: first ? journey.firstDate : journey.secondDate,
           initialClass: journey.firstSeat.type,
         ),
@@ -269,6 +273,8 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
 
     final readyTrain = TrainTrip.fromJson({
       ...legTrain.toJson(),
+      'origin_city_name': legFrom,
+      'destination_city_name': legTo,
       'boarding_points': legTrain.boardingPoints.isNotEmpty
           ? legTrain.boardingPoints.map((e) => e.toJson()).toList()
           : [
@@ -364,7 +370,7 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
             child: TabBarView(
               controller: _tabController,
               children: [
-                _loading
+                _loading && _splitJourneys.isEmpty
                     ? _buildLoadingView(isDark, lang)
                     : _buildSplitJourneyTab(isDark, lang),
                 _buildMatrixTab(isDark, lang),
@@ -512,6 +518,60 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
           style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark)),
         ),
         const SizedBox(height: 12),
+        if (_loading) ...[
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _totalStops > 0
+                            ? lang.tr(
+                                'Checking more stops ($_checkedStops/$_totalStops)${_currentStation.isEmpty ? '' : ' · $_currentStation'}…',
+                                'আরও স্টেশন যাচাই করা হচ্ছে ($_checkedStops/$_totalStops)${_currentStation.isEmpty ? '' : ' · $_currentStation'}…',
+                              )
+                            : lang.tr(
+                                'Searching remaining intermediate stops…',
+                                'বাকি মধ্যবর্তী স্টেশনগুলো খোঁজা হচ্ছে…',
+                              ),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                LinearProgressIndicator(
+                  value: _totalStops > 0 ? _checkedStops / _totalStops : null,
+                  backgroundColor: AppColors.primary.withValues(alpha: 0.15),
+                  color: AppColors.primary,
+                  minHeight: 3,
+                ),
+              ],
+            ),
+          ),
+        ],
         if (_error != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
