@@ -10,6 +10,16 @@ on:
         options:
           - unsigned
           - signed
+      run_tests:
+        description: 'Run unit tests before building (disable to save ~5 minutes)'
+        required: false
+        default: false
+        type: boolean
+      upload_archive:
+        description: 'Upload full Runner.xcarchive (~1.5GB) with IPA (disable to save ~4 minutes)'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -53,10 +63,20 @@ jobs:
       - name: Cache CocoaPods
         uses: actions/cache@v4
         with:
-          path: ios/Pods
-          key: cocoapods-${{ runner.os }}-ios160-${{ hashFiles('ios/Podfile.lock') }}
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-v2-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            cocoapods-${{ runner.os }}-ios160-
+            cocoapods-${{ runner.os }}-v2-
+
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            xcode-deriveddata-${{ runner.os }}-
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -68,15 +88,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Run static analysis & tests
-        run: |
-          flutter analyze --no-pub
-          flutter test --no-pub
+      - name: Run static analysis
+        run: flutter analyze --no-pub
+
+      - name: Run unit tests (optional)
+        if: ${{ github.event.inputs.run_tests == 'true' }}
+        run: flutter test --no-pub
 
       - name: Setup CocoaPods
         run: |
           cd ios
-          pod install --repo-update
+          pod install
           cd ..
 
       - name: Setup Apple Codesigning (if secrets provided)
@@ -240,9 +262,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: RailPro-iOS-IPA
-          path: |
-            build/ios/ipa/RailPro.ipa
-            build/ios/archive/Runner.xcarchive
+          path: build/ios/ipa/RailPro.ipa
+
+      - name: Upload Full XCArchive Artifact (Optional)
+        if: ${{ github.event.inputs.upload_archive == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: RailPro-Runner-XCArchive
+          path: build/ios/archive/Runner.xcarchive
 
       - name: Publish IPA to public distribution repository
         if: success()

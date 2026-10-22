@@ -59,10 +59,20 @@ jobs:
       - name: Cache CocoaPods
         uses: actions/cache@v4
         with:
-          path: ios/Pods
-          key: cocoapods-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          path: |
+            ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: cocoapods-${{ runner.os }}-v2-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            cocoapods-${{ runner.os }}-
+            cocoapods-${{ runner.os }}-v2-
+
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          restore-keys: |
+            xcode-deriveddata-${{ runner.os }}-
 
       - uses: subosito/flutter-action@v2
         with:
@@ -76,7 +86,7 @@ jobs:
       - name: Setup CocoaPods
         run: |
           cd ios
-          pod install --repo-update
+          pod install
           cd ..
 
       - name: Build and Package iOS IPA

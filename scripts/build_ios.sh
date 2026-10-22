@@ -24,7 +24,7 @@ flutter pub get
 
 # 2. CocoaPods setup
 cd ios
-pod install --repo-update
+pod install
 cd ..
 
 # 3. Build iOS Archive (Unsigned)
