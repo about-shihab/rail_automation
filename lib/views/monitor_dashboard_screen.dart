@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:intl/intl.dart';
 
 import 'package:flutter/material.dart';
 
@@ -29,8 +30,9 @@ import '../models/seat_type.dart';
 import '../models/train_trip.dart';
 import '../services/intermediate_station_search.dart';
 import '../services/otp_verifier.dart';
+import '../services/app_config.dart';
+import '../services/login_flow.dart';
 import 'intermediate_station_screen.dart';
-import 'login_flow.dart';
 import 'seat_booking_screen.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
@@ -401,7 +403,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
     var session = await AuthSession.load();
     if (session == null || !session.isValid) {
-      session = await LoginFlow.openManualLogin();
+      final ok = await LoginFlow.openManualLogin();
+      if (!ok) return;
+      session = await AuthSession.load();
       if (session == null || !session.isValid) return;
     }
 
@@ -553,7 +557,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
     var session = await AuthSession.load();
     if (session == null || !session.isValid) {
-      session = await LoginFlow.openManualLogin();
+      final ok = await LoginFlow.openManualLogin();
+      if (!ok) return;
+      session = await AuthSession.load();
       if (session == null || !session.isValid) return;
     }
 
@@ -753,10 +759,10 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                             ],
 
                             // ── In-Between / Via Station Available Tickets ──
-                            if (m.viaJourneys.isNotEmpty &&
+                            if (m.recentViaJourneys.isNotEmpty &&
                                 !isReservationExpired) ...[
                               _ViaStationMonitorCard(
-                                viaJourneys: m.viaJourneys,
+                                viaJourneys: m.recentViaJourneys,
                                 fromCity: fromCity,
                                 toCity: toCity,
                                 dateOfJourney: dateOfJourney,
@@ -860,6 +866,46 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               onClear: _handleStopAndClear,
                               pulseCtrl: _pulseCtrl,
                               isDark: isDark,
+                            ),
+                            const SizedBox(height: 16),
+                            // ── 4. Live Monitor & In-Between Station Log ──
+                            _MonitorActivityLogCard(
+                              logs: m.logs,
+                              recentVia: m.recentViaJourneys,
+                              isMonitoring: m.isMonitoring,
+                              searchIntervalSeconds: m.intervalSeconds,
+                              viaIntervalMinutes:
+                                  AppConfig.instance.viaSearchIntervalMinutes,
+                              fromCity: fromCity,
+                              toCity: toCity,
+                              dateOfJourney: dateOfJourney,
+                              isDark: isDark,
+                              onAutoBookLeg: (journey, isFirstLeg) =>
+                                  _handleAutoBookLeg(
+                                journey: journey,
+                                isFirstLeg: isFirstLeg,
+                                fromCity: fromCity,
+                                toCity: toCity,
+                              ),
+                              onSelectSeatsLeg: (journey, isFirstLeg) =>
+                                  _handleManualSeatSelect(
+                                journey: journey,
+                                isFirstLeg: isFirstLeg,
+                                fromCity: fromCity,
+                                toCity: toCity,
+                              ),
+                              onOpenFullMatrix: (train) => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => IntermediateStationScreen(
+                                    train: train,
+                                    from: fromCity,
+                                    to: toCity,
+                                    date: dateOfJourney,
+                                    seatClass: m.targetSeatClass,
+                                  ),
+                                ),
+                              ),
                             ),
                           ],
                         ] else ...[
@@ -3439,7 +3485,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                             fontWeight: FontWeight.bold,
                             color: isDark
                                 ? Colors.white
-                                : AppColors.textPrimaryLight,
+                                : AppColors.textPrimary(isDark),
                           ),
                         ),
                     ],
@@ -3574,7 +3620,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
+                    color: AppColors.textPrimary(isDark),
                   ),
                 ),
               ),
@@ -3640,7 +3686,7 @@ class _ViaStationMonitorCard extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: isDark
                         ? Colors.white70
-                        : AppColors.textPrimaryLight,
+                        : AppColors.textPrimary(isDark),
                     visualDensity: VisualDensity.compact,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 6,
@@ -3663,6 +3709,520 @@ class _ViaStationMonitorCard extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─── Live Monitor & In-Between Discovery Logs ──────────────────────────────────
+class _MonitorActivityLogCard extends StatefulWidget {
+  final List<MonitorLog> logs;
+  final List<IntermediateJourney> recentVia;
+  final bool isMonitoring;
+  final int searchIntervalSeconds;
+  final int viaIntervalMinutes;
+  final String fromCity;
+  final String toCity;
+  final String dateOfJourney;
+  final bool isDark;
+  final void Function(IntermediateJourney journey, bool isFirstLeg) onAutoBookLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg) onSelectSeatsLeg;
+  final void Function(TrainTrip train) onOpenFullMatrix;
+
+  const _MonitorActivityLogCard({
+    required this.logs,
+    required this.recentVia,
+    required this.isMonitoring,
+    required this.searchIntervalSeconds,
+    required this.viaIntervalMinutes,
+    required this.fromCity,
+    required this.toCity,
+    required this.dateOfJourney,
+    required this.isDark,
+    required this.onAutoBookLeg,
+    required this.onSelectSeatsLeg,
+    required this.onOpenFullMatrix,
+  });
+
+  @override
+  State<_MonitorActivityLogCard> createState() => _MonitorActivityLogCardState();
+}
+
+class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
+  bool _showAllLogs = false;
+  bool _filterViaOnly = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final isDark = widget.isDark;
+
+    final displayedLogs = _filterViaOnly
+        ? widget.logs
+            .where(
+              (l) =>
+                  l.viaJourney != null ||
+                  l.message.contains('VIA') ||
+                  l.message.contains('ভায়া'),
+            )
+            .toList()
+        : widget.logs;
+
+    final logSlice = _showAllLogs
+        ? displayedLogs
+        : displayedLogs.take(8).toList();
+
+    final viaCount = widget.logs
+        .where(
+          (l) =>
+              l.viaJourney != null ||
+              l.message.contains('VIA') ||
+              l.message.contains('ভায়া'),
+        )
+        .length;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkSurface : Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: AppColors.cardBorder(isDark),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header Row
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_rounded,
+                  size: 18,
+                  color: AppColors.primary,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lang.tr(
+                        'Monitor & In-Between Tickets Log',
+                        'মনিটর ও ভায়া টিকিট লগ',
+                      ),
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary(isDark),
+                      ),
+                    ),
+                    Text(
+                      '${widget.fromCity} ➔ ${widget.toCity} · ${lang.tr("Main every", "মূল প্রতি")} ${widget.searchIntervalSeconds}s · ${lang.tr("Via every", "ভায়া প্রতি")} ${widget.viaIntervalMinutes}m',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: AppColors.textMuted(isDark),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: widget.isMonitoring
+                      ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                      : Colors.grey.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: widget.isMonitoring
+                            ? const Color(0xFF10B981)
+                            : Colors.grey,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      widget.isMonitoring
+                          ? lang.tr('LIVE', 'চলছে')
+                          : lang.tr('IDLE', 'স্থগিত'),
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        color: widget.isMonitoring
+                            ? const Color(0xFF10B981)
+                            : Colors.grey,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          // Filter toggles
+          Row(
+            children: [
+              InkWell(
+                onTap: () => setState(() => _filterViaOnly = false),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: !_filterViaOnly
+                        ? AppColors.primary.withValues(alpha: 0.15)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: !_filterViaOnly
+                          ? AppColors.primary
+                          : (isDark
+                              ? Colors.grey.shade800
+                              : Colors.grey.shade300),
+                    ),
+                  ),
+                  child: Text(
+                    lang.tr(
+                      'All activity (${widget.logs.length})',
+                      'সকল কার্যকলাপ (${widget.logs.length})',
+                    ),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight:
+                          !_filterViaOnly ? FontWeight.bold : FontWeight.normal,
+                      color: !_filterViaOnly
+                          ? AppColors.primary
+                          : AppColors.textMuted(isDark),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              InkWell(
+                onTap: () => setState(() => _filterViaOnly = true),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: _filterViaOnly
+                        ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: _filterViaOnly
+                          ? const Color(0xFF10B981)
+                          : (isDark
+                              ? Colors.grey.shade800
+                              : Colors.grey.shade300),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        Icons.alt_route_rounded,
+                        size: 12,
+                        color: Color(0xFF10B981),
+                      ),
+                      const SizedBox(width: 3),
+                      Text(
+                        lang.tr(
+                          'In-Between only ($viaCount)',
+                          'শুধু ভায়া টিকিট ($viaCount)',
+                        ),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          fontWeight: _filterViaOnly
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                          color: _filterViaOnly
+                              ? const Color(0xFF10B981)
+                              : AppColors.textMuted(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const Divider(height: 16),
+
+          // Log list or empty state
+          if (logSlice.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: Text(
+                  lang.tr(
+                    'No in-between tickets found yet. Monitoring runs regularly.',
+                    'এখনও কোনো বিকল্প টিকিট পাওয়া যায়নি। অনুসন্ধান চলছে।',
+                  ),
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textMuted(isDark),
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            )
+          else
+            ...logSlice.map((log) => _buildLogItem(log, lang, isDark)),
+
+          if (displayedLogs.length > 8)
+            Align(
+              alignment: Alignment.center,
+              child: TextButton(
+                onPressed: () => setState(() => _showAllLogs = !_showAllLogs),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                ),
+                child: Text(
+                  _showAllLogs
+                      ? lang.tr('Show fewer', 'কম দেখুন')
+                      : lang.tr(
+                          'Show all ${displayedLogs.length} logs',
+                          'সব ${displayedLogs.length}টি লগ দেখুন',
+                        ),
+                  style: const TextStyle(fontSize: 11),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLogItem(MonitorLog log, LanguageService lang, bool isDark) {
+    final timeStr = DateFormat('hh:mm:ss a').format(log.time);
+    final journey = log.viaJourney;
+
+    if (journey != null) {
+      final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0;
+      final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0;
+      final totalFare = fare1 + fare2;
+
+      return Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF062319) : const Color(0xFFF0FDF4),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: const Color(0xFF10B981).withValues(alpha: 0.35),
+            width: 1.2,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.alt_route_rounded,
+                  size: 14,
+                  color: Color(0xFF10B981),
+                ),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    '${journey.first.tripNumber} · ${journey.firstSeat.displayName} (${journey.seats} ${lang.tr("seats", "আসন")})',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF10B981),
+                    ),
+                  ),
+                ),
+                Text(
+                  timeStr,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: AppColors.textMuted(isDark),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Text(
+                  '${widget.fromCity} ➔ ${journey.via} ➔ ${widget.toCity}',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: isDark ? Colors.white70 : Colors.black87,
+                  ),
+                ),
+                const Spacer(),
+                if (totalFare > 0)
+                  Text(
+                    '৳${totalFare.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: isDark ? Colors.white : Colors.black87,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            // Direct manual booking actions right on the log item
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () => widget.onAutoBookLeg(journey, true),
+                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  label: Text(
+                    '${lang.tr("Book Leg 1", "১ম অংশ বুক")}: ${widget.fromCity} ➔ ${journey.via}',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF10B981),
+                    foregroundColor: Colors.white,
+                    visualDensity: VisualDensity.compact,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    elevation: 0,
+                  ),
+                  onPressed: () => widget.onAutoBookLeg(journey, false),
+                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  label: Text(
+                    '${lang.tr("Book Leg 2", "২য় অংশ বুক")}: ${journey.via} ➔ ${widget.toCity}',
+                    style: const TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  onPressed: () => widget.onSelectSeatsLeg(journey, true),
+                  icon: const Icon(Icons.event_seat_rounded, size: 12),
+                  label: Text(
+                    lang.tr('Select Seats', 'আসন বাছুন'),
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                ),
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  ),
+                  onPressed: () => widget.onOpenFullMatrix(journey.first),
+                  icon: const Icon(Icons.open_in_new_rounded, size: 12),
+                  label: Text(
+                    lang.tr('Details', 'বিস্তারিত'),
+                    style: const TextStyle(fontSize: 10.5),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    }
+
+    Color iconColor = Colors.grey;
+    IconData icon = Icons.circle_outlined;
+    if (log.isAlert) {
+      iconColor = const Color(0xFF10B981);
+      icon = Icons.check_circle_rounded;
+    } else if (log.isError) {
+      iconColor = Colors.redAccent;
+      icon = Icons.error_outline_rounded;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Icon(icon, size: 11, color: iconColor),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              log.message,
+              style: TextStyle(
+                fontSize: 11,
+                color: log.isError
+                    ? Colors.redAccent
+                    : (log.isAlert
+                        ? (isDark ? Colors.white : Colors.black87)
+                        : AppColors.textMuted(isDark)),
+                fontWeight: (log.isAlert || log.isError)
+                    ? FontWeight.w600
+                    : FontWeight.normal,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            timeStr,
+            style: TextStyle(
+              fontSize: 10,
+              color: AppColors.textMuted(isDark),
+            ),
           ),
         ],
       ),

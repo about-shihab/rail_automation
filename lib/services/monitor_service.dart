@@ -20,6 +20,7 @@ import 'package:intl/intl.dart';
 
 import '../models/auth_session.dart';
 import '../models/train_trip.dart';
+import '../models/seat_type.dart';
 import 'api_service.dart';
 import 'notification_service.dart';
 import 'pro_service.dart';
@@ -42,12 +43,14 @@ class MonitorLog {
   final String message;
   final bool isAlert;
   final bool isError;
+  final IntermediateJourney? viaJourney;
 
   MonitorLog({
     required this.time,
     required this.message,
     this.isAlert = false,
     this.isError = false,
+    this.viaJourney,
   });
 }
 
@@ -162,6 +165,7 @@ class MonitorService extends ChangeNotifier {
     bookingIntent = const BookingIntent();
     _lastTrains = [];
     _viaJourneys = [];
+    _recentViaJourneys = [];
     _lastViaSearchAt = null;
     _lastNotifiedViaKey = null;
     _isSearchingVia = false;
@@ -301,6 +305,26 @@ class MonitorService extends ChangeNotifier {
             )
             .fold(0, (sum, seat) => sum + seat.seatCounts.online);
       }
+      final viaResult = prefs.getString('via_results_$_searchId');
+      if (viaResult != null) {
+        try {
+          final list = (jsonDecode(viaResult) as List).map((e) {
+            final map = Map<String, dynamic>.from(e);
+            return IntermediateJourney(
+              via: map['via'] ?? '',
+              viaCity: map['viaCity'] ?? '',
+              firstDate: map['firstDate'] ?? '',
+              secondDate: map['secondDate'] ?? '',
+              first: TrainTrip.fromJson(Map<String, dynamic>.from(map['first'])),
+              second: TrainTrip.fromJson(Map<String, dynamic>.from(map['second'])),
+              firstSeat: SeatType.fromJson(Map<String, dynamic>.from(map['firstSeat'])),
+              secondSeat: SeatType.fromJson(Map<String, dynamic>.from(map['secondSeat'])),
+            );
+          }).toList();
+          _viaJourneys = list;
+          _recentViaJourneys = list;
+        } catch (_) {}
+      }
       if (_expiresAt != null && !_now().isBefore(_expiresAt!)) {
         _isMonitoring = false;
         _isLimitReached = true;
@@ -425,6 +449,7 @@ class MonitorService extends ChangeNotifier {
   String? _lastBookingError;
   List<TrainTrip> _lastTrains = [];
   List<IntermediateJourney> _viaJourneys = [];
+  List<IntermediateJourney> _recentViaJourneys = [];
   DateTime? _lastViaSearchAt;
   String? _lastNotifiedViaKey;
   bool _isSearchingVia = false;
@@ -741,6 +766,8 @@ class MonitorService extends ChangeNotifier {
 
   List<TrainTrip> get lastTrains => List.unmodifiable(_lastTrains);
   List<IntermediateJourney> get viaJourneys => List.unmodifiable(_viaJourneys);
+  List<IntermediateJourney> get recentViaJourneys =>
+      List.unmodifiable(_recentViaJourneys.isNotEmpty ? _recentViaJourneys : _viaJourneys);
   List<MonitorLog> get logs => List.unmodifiable(_logs);
 
   /// Parses departure date and time from various Bangladesh Railway formats.
@@ -960,6 +987,7 @@ class MonitorService extends ChangeNotifier {
     _elapsedMonitoringSeconds = 0;
     _lastTrains = [];
     _viaJourneys = [];
+    _recentViaJourneys = [];
     _lastViaSearchAt = null;
     _lastNotifiedViaKey = null;
     _isSearchingVia = false;
@@ -1402,6 +1430,7 @@ class MonitorService extends ChangeNotifier {
         } else {
           if (_viaJourneys.isNotEmpty) {
             _viaJourneys = [];
+    _recentViaJourneys = [];
     _lastViaSearchAt = null;
     _lastNotifiedViaKey = null;
     _isSearchingVia = false;
@@ -1599,7 +1628,27 @@ class MonitorService extends ChangeNotifier {
 
       if (allVia.isNotEmpty) {
         _viaJourneys = allVia;
+        _recentViaJourneys = allVia;
         notifyListeners();
+
+        try {
+          final viaJson = allVia
+              .map(
+                (j) => {
+                  'via': j.via,
+                  'viaCity': j.viaCity,
+                  'firstDate': j.firstDate,
+                  'secondDate': j.secondDate,
+                  'first': j.first.toJson(),
+                  'second': j.second.toJson(),
+                  'firstSeat': j.firstSeat.toJson(),
+                  'secondSeat': j.secondSeat.toJson(),
+                },
+              )
+              .toList();
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('via_results_$_searchId', jsonEncode(viaJson));
+        } catch (_) {}
 
         final best = allVia.first;
         final viaKey =
@@ -1609,6 +1658,7 @@ class MonitorService extends ChangeNotifier {
           _addLog(
             '🔍 VIA TICKET FOUND! ${best.first.tripNumber} via ${best.via} has ${best.seats} [${best.firstSeat.type}] seats!',
             isAlert: true,
+            viaJourney: best,
           );
           try {
             await _notificationService.triggerViaSeatAvailableAlert(
@@ -1632,7 +1682,12 @@ class MonitorService extends ChangeNotifier {
     }
   }
 
-  void _addLog(String message, {bool isAlert = false, bool isError = false}) {
+  void _addLog(
+    String message, {
+    bool isAlert = false,
+    bool isError = false,
+    IntermediateJourney? viaJourney,
+  }) {
     _logs.insert(
       0,
       MonitorLog(
@@ -1640,11 +1695,13 @@ class MonitorService extends ChangeNotifier {
         message: message,
         isAlert: isAlert,
         isError: isError,
+        viaJourney: viaJourney,
       ),
     );
     if (_logs.length > 200) {
       _logs.removeLast();
     }
+    notifyListeners();
   }
 
   DateTime? _departureForTrain(TrainTrip train) => parseDepartureDateTime(
