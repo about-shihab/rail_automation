@@ -1,4 +1,3 @@
-import '../services/rail_api_client.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -31,7 +30,7 @@ import '../models/train_trip.dart';
 import '../services/intermediate_station_search.dart';
 import '../services/otp_verifier.dart';
 import 'intermediate_station_screen.dart';
-import '../services/login_flow.dart';
+import 'login_flow.dart';
 import 'seat_booking_screen.dart';
 
 enum _BookingStep { searching, reserving, verifying, paying, done }
@@ -105,12 +104,19 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
           }
           return;
         }
-        if (value['status'] == 'awaitingOtp' && !ReservationScreen.isActive && !_openingReservation && mounted) {
-          final elapsedSeconds = started != null ? now.difference(started).inSeconds : 0;
+        if (value['status'] == 'awaitingOtp' &&
+            !ReservationScreen.isActive &&
+            !_openingReservation &&
+            mounted) {
+          final elapsedSeconds = started != null
+              ? now.difference(started).inSeconds
+              : 0;
           if (value['autoVerify'] != true || elapsedSeconds >= 20) {
             _openingReservation = true;
             Navigator.of(context, rootNavigator: true)
-                .push(MaterialPageRoute(builder: (_) => const ReservationScreen()))
+                .push(
+                  MaterialPageRoute(builder: (_) => const ReservationScreen()),
+                )
                 .then((_) => _openingReservation = false);
           }
         }
@@ -355,7 +361,11 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     return fallback;
   }
 
-  _BookingStep _step(MonitorService m, Map<String, dynamic>? p, BookingActivity activity) {
+  _BookingStep _step(
+    MonitorService m,
+    Map<String, dynamic>? p,
+    BookingActivity activity,
+  ) {
     if (p != null) {
       final s = p['status']?.toString() ?? '';
       if (s == 'readyForPayment') return _BookingStep.paying;
@@ -377,7 +387,6 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     return _BookingStep.searching;
   }
 
-
   Future<void> _handleAutoBookLeg({
     required IntermediateJourney journey,
     required bool isFirstLeg,
@@ -392,9 +401,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
     var session = await AuthSession.load();
     if (session == null || !session.isValid) {
-      final ok = await LoginFlow.openManualLogin();
-      if (!ok) return;
-      session = await AuthSession.load();
+      session = await LoginFlow.openManualLogin();
       if (session == null || !session.isValid) return;
     }
 
@@ -516,7 +523,14 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
               label: lang.tr('Choose Seats', 'আসন বাছুন'),
               textColor: Colors.white,
               onPressed: () {
-                _openSeatBooking(bookingTrain, seat, legFrom, legTo, legDate, session!);
+                _openSeatBooking(
+                  bookingTrain,
+                  seat,
+                  legFrom,
+                  legTo,
+                  legDate,
+                  session!,
+                );
               },
             ),
           ),
@@ -539,9 +553,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
     var session = await AuthSession.load();
     if (session == null || !session.isValid) {
-      final ok = await LoginFlow.openManualLogin();
-      if (!ok) return;
-      session = await AuthSession.load();
+      session = await LoginFlow.openManualLogin();
       if (session == null || !session.isValid) return;
     }
 
@@ -619,7 +631,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         (isBookingBusy && p == null);
     final exactError =
         m.lastBookingError ?? (!m.isMonitoring ? m.lastError : null);
-    final isReservationExpired = !m.isMonitoring &&
+    final isReservationExpired =
+        !m.isMonitoring &&
         (m.lastReservationExpired ||
             (p != null && expired) ||
             (m.bookingFailureReason != null &&
@@ -685,10 +698,12 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               dateOfJourney: dateOfJourney,
                               reason: m.bookingFailureReason,
                               isOtpFailure: p?['status'] == 'awaitingOtp',
-                              isPaymentFailure: p?['status'] == 'readyForPayment',
+                              isPaymentFailure:
+                                  p?['status'] == 'readyForPayment',
                               isDark: isDark,
                               pulseCtrl: _pulseCtrl,
-                              onRetrySearch: () => AppShell.goTo(context, AppShell.tabSearch),
+                              onRetrySearch: () =>
+                                  AppShell.goTo(context, AppShell.tabSearch),
                               onReAutoBook: () async => await m.reAutoBook(),
                               onClear: _handleStopAndClear,
                               onDismiss: () => m.dismissBookingFailure(),
@@ -721,143 +736,133 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 
                             const SizedBox(height: 12),
 
-                          if (RailApiClient.cooldownRemaining > Duration.zero) ...[
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(14),
-                              decoration: BoxDecoration(
-                                color: AppColors.warning.withValues(alpha: 0.12),
-                                borderRadius: BorderRadius.circular(14),
+                            // ── Exact Error Banner (if any) ──
+                            if (exactError != null &&
+                                exactError.isNotEmpty &&
+                                !isReservationExpired) ...[
+                              _ErrorBanner(
+                                message: friendlyErrorMessage(
+                                  exactError,
+                                  isBangla: lang.isBangla,
+                                ),
+                                onVerifyTurnstile: _handleSolveTurnstile,
+                                onDismiss: () => m.clearBookingError(),
+                                isDark: isDark,
                               ),
-                              child: Row(children: [
-                                const Icon(Icons.hourglass_top_rounded, color: AppColors.warning),
-                                const SizedBox(width: 10),
-                                Expanded(child: Text(lang.tr(
-                                  'Railway is busy. Requests paused for ${(RailApiClient.cooldownRemaining.inMilliseconds / 1000).ceil()}s. Please wait before trying again.',
-                                  'রেলওয়ে ব্যস্ত। ${(RailApiClient.cooldownRemaining.inMilliseconds / 1000).ceil()} সেকেন্ড অপেক্ষা করে আবার চেষ্টা করুন।',
-                                ), style: TextStyle(color: AppColors.textPrimary(isDark), fontSize: 13))),
-                              ]),
-                            ),
-                            const SizedBox(height: 12),
-                          ],
+                              const SizedBox(height: 12),
+                            ],
 
-                          // ── Exact Error Banner (if any) ──
-                          if (exactError != null && exactError.isNotEmpty && !isReservationExpired && RailApiClient.cooldownRemaining == Duration.zero) ...[
-                            _ErrorBanner(
-                              message: friendlyErrorMessage(exactError, isBangla: lang.isBangla),
-                              onVerifyTurnstile: _handleSolveTurnstile,
-                              onDismiss: () => m.clearBookingError(),
-                              isDark: isDark,
-                            ),
-                            const SizedBox(height: 12),
-                          ],
+                            // ── In-Between / Via Station Available Tickets ──
+                            if (m.viaJourneys.isNotEmpty &&
+                                !isReservationExpired) ...[
+                              _ViaStationMonitorCard(
+                                viaJourneys: m.viaJourneys,
+                                fromCity: fromCity,
+                                toCity: toCity,
+                                dateOfJourney: dateOfJourney,
+                                isDark: isDark,
+                                pulseCtrl: _pulseCtrl,
+                                onAutoBookLeg: (journey, isFirstLeg) =>
+                                    _handleAutoBookLeg(
+                                      journey: journey,
+                                      isFirstLeg: isFirstLeg,
+                                      fromCity: fromCity,
+                                      toCity: toCity,
+                                    ),
+                                onSelectSeatsLeg: (journey, isFirstLeg) =>
+                                    _handleManualSeatSelect(
+                                      journey: journey,
+                                      isFirstLeg: isFirstLeg,
+                                      fromCity: fromCity,
+                                      toCity: toCity,
+                                    ),
+                                onOpenFullMatrix: (train) => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => IntermediateStationScreen(
+                                      train: train,
+                                      from: fromCity,
+                                      to: toCity,
+                                      date: dateOfJourney,
+                                      seatClass: m.targetSeatClass,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 14),
+                            ],
 
-                          
-                          // ── In-Between / Via Station Available Tickets ──
-                          if (m.viaJourneys.isNotEmpty && !isReservationExpired) ...[
-                            _ViaStationMonitorCard(
-                              viaJourneys: m.viaJourneys,
-                              fromCity: fromCity,
-                              toCity: toCity,
-                              dateOfJourney: dateOfJourney,
-                              isDark: isDark,
+                            // ── 2. Coupled Train Coach Route Tracker (4 Steps) ──
+                            _TrainCoachTracker(
+                              step: step,
+                              ready: ready,
+                              otp: otp,
+                              p: p,
                               pulseCtrl: _pulseCtrl,
-                              onAutoBookLeg: (journey, isFirstLeg) => _handleAutoBookLeg(
-                                journey: journey,
-                                isFirstLeg: isFirstLeg,
-                                fromCity: fromCity,
-                                toCity: toCity,
-                              ),
-                              onSelectSeatsLeg: (journey, isFirstLeg) => _handleManualSeatSelect(
-                                journey: journey,
-                                isFirstLeg: isFirstLeg,
-                                fromCity: fromCity,
-                                toCity: toCity,
-                              ),
-                              onOpenFullMatrix: (train) => Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => IntermediateStationScreen(
-                                    train: train,
-                                    from: fromCity,
-                                    to: toCity,
-                                    date: dateOfJourney,
-                                    seatClass: m.targetSeatClass,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                          ],
-
-                          // ── 2. Coupled Train Coach Route Tracker (4 Steps) ──
-                          _TrainCoachTracker(
-                            step: step,
-                            ready: ready,
-                            otp: otp,
-                            p: p,
-                            pulseCtrl: _pulseCtrl,
-                            isDark: isDark,
-                          ),
-
-                          const SizedBox(height: 14),
-
-                          // ── 2b. 5-Min Payment Countdown Timer ──
-                          if (p != null && !expired)
-                            _PaymentTimerBar(
-                              reservation: p,
                               isDark: isDark,
-                              onTimeout: () async {
-                                await BookingService.clear();
-                                if (context.mounted) {
-                                  context.read<MonitorService>().markReservationExpired();
-                                }
-                              },
                             ),
 
-                          if (p != null && !expired) const SizedBox(height: 14),
+                            const SizedBox(height: 14),
 
-                          // ── 3. Train Master Throttle Actions ──
-                          _TrainActionButtons(
-                            m: m,
-                            p: p,
-                            ready: ready,
-                            otp: otp,
-                            expired: expired,
-                            hasSearch: hasSearch,
-                            isBookingBusy: isBookingBusy,
-                            credits: credit.credits,
-                            onReservation: () async {
-                              await Navigator.push(
+                            // ── 2b. 5-Min Payment Countdown Timer ──
+                            if (p != null && !expired)
+                              _PaymentTimerBar(
+                                reservation: p,
+                                isDark: isDark,
+                                onTimeout: () async {
+                                  await BookingService.clear();
+                                  if (context.mounted) {
+                                    context
+                                        .read<MonitorService>()
+                                        .markReservationExpired();
+                                  }
+                                },
+                              ),
+
+                            if (p != null && !expired)
+                              const SizedBox(height: 14),
+
+                            // ── 3. Train Master Throttle Actions ──
+                            _TrainActionButtons(
+                              m: m,
+                              p: p,
+                              ready: ready,
+                              otp: otp,
+                              expired: expired,
+                              hasSearch: hasSearch,
+                              isBookingBusy: isBookingBusy,
+                              credits: credit.credits,
+                              onReservation: () async {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ReservationScreen(),
+                                  ),
+                                );
+                                await _refresh();
+                              },
+                              onRailway: () => Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (_) => const ReservationScreen(),
-                                ),
-                              );
-                              await _refresh();
-                            },
-                            onRailway: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => BookingScreen(
-                                  url: NotificationService.bookingUrl(
-                                    fromCity,
-                                    toCity,
-                                    dateOfJourney,
-                                    seatClass ?? 'SNIGDHA',
+                                  builder: (_) => BookingScreen(
+                                    url: NotificationService.bookingUrl(
+                                      fromCity,
+                                      toCity,
+                                      dateOfJourney,
+                                      seatClass ?? 'SNIGDHA',
+                                    ),
                                   ),
                                 ),
                               ),
+                              onSignIn: _doSessionExpiry,
+                              onPause: _handlePauseSearch,
+                              onResume: _handleResumeSearch,
+                              onClear: _handleStopAndClear,
+                              pulseCtrl: _pulseCtrl,
+                              isDark: isDark,
                             ),
-                            onSignIn: _doSessionExpiry,
-                            onPause: _handlePauseSearch,
-                            onResume: _handleResumeSearch,
-                            onClear: _handleStopAndClear,
-                            pulseCtrl: _pulseCtrl,
-                            isDark: isDark,
-                          ),
-                        ],
-                      ] else ...[
+                          ],
+                        ] else ...[
                           // ── Cleared / Empty Monitor State ──
                           _EmptyMonitorView(
                             isDark: isDark,
@@ -2408,12 +2413,10 @@ class _TrainActionButtons extends StatelessWidget {
     return Column(
       children: [
         // ── Primary Action Button ──
-        if (!m.isMonitoring && ((p != null && expired) || m.lastReservationExpired)) ...[
+        if (!m.isMonitoring &&
+            ((p != null && expired) || m.lastReservationExpired)) ...[
           _MasterButton(
-            label: lang.tr(
-              'Retry New Search',
-              'নতুন অনুসন্ধান করুন',
-            ),
+            label: lang.tr('Retry New Search', 'নতুন অনুসন্ধান করুন'),
             icon: Icons.search_rounded,
             gradientColors: [AppColors.primary, AppColors.primaryDark],
             textColor: Colors.black,
@@ -2426,10 +2429,7 @@ class _TrainActionButtons extends StatelessWidget {
             children: [
               Expanded(
                 child: _SecondaryTrainButton(
-                  label: lang.tr(
-                    'Re-Auto Book',
-                    'পুনরায় অটো-বুক',
-                  ),
+                  label: lang.tr('Re-Auto Book', 'পুনরায় অটো-বুক'),
                   icon: Icons.refresh_rounded,
                   color: const Color(0xFFF59E0B),
                   onTap: () async {
@@ -2932,12 +2932,22 @@ class _ReservationExpiredCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
     final String headline = isOtpFailure
-        ? lang.tr('Hold Expired — OTP Not Verified', 'সময় শেষ — ওটিপি যাচাই হয়নি')
+        ? lang.tr(
+            'Hold Expired — OTP Not Verified',
+            'সময় শেষ — ওটিপি যাচাই হয়নি',
+          )
         : (isPaymentFailure
-            ? lang.tr('Hold Expired — Payment Timed Out', 'সময় শেষ — পেমেন্টের সময় শেষ')
-            : lang.tr('Seat Hold Expired — Seats Released', 'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত'));
+              ? lang.tr(
+                  'Hold Expired — Payment Timed Out',
+                  'সময় শেষ — পেমেন্টের সময় শেষ',
+                )
+              : lang.tr(
+                  'Seat Hold Expired — Seats Released',
+                  'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত',
+                ));
 
-    final bool isStandardReason = reason == null ||
+    final bool isStandardReason =
+        reason == null ||
         reason!.isEmpty ||
         reason!.contains('Seats were reserved') ||
         reason!.contains('5 minutes') ||
@@ -2951,19 +2961,19 @@ class _ReservationExpiredCard extends StatelessWidget {
 
     final String details = isStandardReason
         ? (isOtpFailure
-            ? lang.tr(
-                'Seats were reserved, but OTP was not verified within 5 minutes. Bangladesh Railway has released the held seats.',
-                'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই না হওয়ায় আসনটি ছেড়ে দেওয়া হয়েছে।',
-              )
-            : (isPaymentFailure
-                ? lang.tr(
-                    'Seats were reserved and verified, but payment was not completed within the 5-minute limit. The seats have been released.',
-                    'আসন সংরক্ষিত ও ওটিপি যাচাই হয়েছিল, কিন্তু ৫ মিনিটে পেমেন্ট সম্পন্ন না হওয়ায় টিকিটটি বাতিল হয়ে গেছে।',
-                  )
-                : lang.tr(
-                    'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.',
-                    'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট সম্পন্ন না হওয়ায় বাংলাদেশ রেলওয়ে আসনটি ছেড়ে দিয়েছে।',
-                  )))
+              ? lang.tr(
+                  'Seats were reserved, but OTP was not verified within 5 minutes. Bangladesh Railway has released the held seats.',
+                  'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই না হওয়ায় আসনটি ছেড়ে দেওয়া হয়েছে।',
+                )
+              : (isPaymentFailure
+                    ? lang.tr(
+                        'Seats were reserved and verified, but payment was not completed within the 5-minute limit. The seats have been released.',
+                        'আসন সংরক্ষিত ও ওটিপি যাচাই হয়েছিল, কিন্তু ৫ মিনিটে পেমেন্ট সম্পন্ন না হওয়ায় টিকিটটি বাতিল হয়ে গেছে।',
+                      )
+                    : lang.tr(
+                        'Seats were reserved, but OTP was not verified or payment was not completed within 5 minutes. Held seats were released by Bangladesh Railway.',
+                        'রেলওয়ে সিস্টেমে আসন সংরক্ষিত হয়েছিল, কিন্তু ৫ মিনিটের মধ্যে ওটিপি যাচাই বা পেমেন্ট সম্পন্ন না হওয়ায় বাংলাদেশ রেলওয়ে আসনটি ছেড়ে দিয়েছে।',
+                      )))
         : friendlyErrorMessage(reason, isBangla: lang.isBangla);
 
     final origin = fromCity?.isNotEmpty == true ? fromCity! : 'Origin';
@@ -2976,12 +2986,14 @@ class _ReservationExpiredCard extends StatelessWidget {
         color: isDark ? const Color(0xFF1E0E13) : const Color(0xFFFFF1F3),
         borderRadius: BorderRadius.circular(24),
         border: Border.all(
-          color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.45 : 0.35),
+          color: const Color(0xFFEF4444)
+              .withValues(alpha: isDark ? 0.45 : 0.35),
           width: 1.5,
         ),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.18 : 0.10),
+            color: const Color(0xFFEF4444)
+                .withValues(alpha: isDark ? 0.18 : 0.10),
             blurRadius: 24,
             offset: const Offset(0, 8),
           ),
@@ -2995,12 +3007,19 @@ class _ReservationExpiredCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
-                    color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.05),
+                    color: (isDark ? Colors.white : Colors.black).withValues(
+                      alpha: 0.05,
+                    ),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: (isDark ? Colors.white : Colors.black).withValues(alpha: 0.08),
+                      color: (isDark ? Colors.white : Colors.black).withValues(
+                        alpha: 0.08,
+                      ),
                     ),
                   ),
                   child: Row(
@@ -3026,7 +3045,12 @@ class _ReservationExpiredCard extends StatelessWidget {
                       ),
                       if (dateOfJourney?.isNotEmpty == true) ...[
                         const SizedBox(width: 6),
-                        Text('•', style: TextStyle(color: isDark ? Colors.white38 : Colors.black38)),
+                        Text(
+                          '•',
+                          style: TextStyle(
+                            color: isDark ? Colors.white38 : Colors.black38,
+                          ),
+                        ),
                         const SizedBox(width: 6),
                         Text(
                           dateOfJourney!,
@@ -3073,14 +3097,17 @@ class _ReservationExpiredCard extends StatelessWidget {
                   height: 92 + pulse * 10,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: const Color(0xFFEF4444).withValues(alpha: 0.08 + pulse * 0.06),
+                    color: const Color(0xFFEF4444)
+                        .withValues(alpha: 0.08 + pulse * 0.06),
                     border: Border.all(
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.25 + pulse * 0.2),
+                      color: const Color(0xFFEF4444)
+                          .withValues(alpha: 0.25 + pulse * 0.2),
                       width: 1.8,
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFEF4444).withValues(alpha: 0.15 + pulse * 0.1),
+                        color: const Color(0xFFEF4444)
+                            .withValues(alpha: 0.15 + pulse * 0.1),
                         blurRadius: 24,
                         spreadRadius: 2,
                       ),
@@ -3120,7 +3147,8 @@ class _ReservationExpiredCard extends StatelessWidget {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
               decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.2 : 0.1),
+                color: const Color(0xFFEF4444)
+                    .withValues(alpha: isDark ? 0.2 : 0.1),
                 borderRadius: BorderRadius.circular(20),
                 border: Border.all(
                   color: const Color(0xFFEF4444).withValues(alpha: 0.35),
@@ -3129,10 +3157,17 @@ class _ReservationExpiredCard extends StatelessWidget {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.history_toggle_off_rounded, size: 14, color: Color(0xFFEF4444)),
+                  const Icon(
+                    Icons.history_toggle_off_rounded,
+                    size: 14,
+                    color: Color(0xFFEF4444),
+                  ),
                   const SizedBox(width: 5),
                   Text(
-                    lang.tr('5-Minute Hold Expired', '৫ মিনিটের সময়সীমা সমাপ্ত'),
+                    lang.tr(
+                      '5-Minute Hold Expired',
+                      '৫ মিনিটের সময়সীমা সমাপ্ত',
+                    ),
                     style: const TextStyle(
                       color: Color(0xFFEF4444),
                       fontSize: 11.5,
@@ -3167,7 +3202,8 @@ class _ReservationExpiredCard extends StatelessWidget {
               color: isDark ? const Color(0xFF16090D) : const Color(0xFFFFF6F7),
               borderRadius: BorderRadius.circular(14),
               border: Border.all(
-                color: const Color(0xFFEF4444).withValues(alpha: isDark ? 0.25 : 0.15),
+                color: const Color(0xFFEF4444)
+                    .withValues(alpha: isDark ? 0.25 : 0.15),
               ),
             ),
             child: Text(
@@ -3185,16 +3221,15 @@ class _ReservationExpiredCard extends StatelessWidget {
 
           // ── Action Buttons (Fancy & Prominent) ──
           _MasterButton(
-            label: lang.tr(
-              'Retry New Search',
-              'নতুন অনুসন্ধান করুন',
-            ),
+            label: lang.tr('Retry New Search', 'নতুন অনুসন্ধান করুন'),
             icon: Icons.search_rounded,
             gradientColors: [AppColors.primary, AppColors.primaryDark],
             textColor: Colors.black,
             pulseAura: true,
             pulseCtrl: pulseCtrl,
-            onTap: onRetrySearch ?? () => AppShell.goTo(context, AppShell.tabSearch),
+            onTap:
+                onRetrySearch ??
+                () => AppShell.goTo(context, AppShell.tabSearch),
           ),
 
           const SizedBox(height: 10),
@@ -3203,10 +3238,7 @@ class _ReservationExpiredCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _SecondaryTrainButton(
-                  label: lang.tr(
-                    'Re-Auto Book',
-                    'পুনরায় অটো-বুক',
-                  ),
+                  label: lang.tr('Re-Auto Book', 'পুনরায় অটো-বুক'),
                   icon: Icons.refresh_rounded,
                   color: const Color(0xFFF59E0B),
                   onTap: onReAutoBook ?? () {},
@@ -3231,27 +3263,21 @@ class _ReservationExpiredCard extends StatelessWidget {
   }
 }
 
-
-
-
-
 // ─────────────────────────────────────────────────────────────────────────────
 // In-Between / Via Station Monitor Card
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ─────────────────────────────────────────────────────────────────────────────
-// In-Between / Via Station Monitor Card
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _ViaStationMonitorCard extends StatefulWidget {
+class _ViaStationMonitorCard extends StatelessWidget {
   final List<IntermediateJourney> viaJourneys;
   final String fromCity;
   final String toCity;
   final String dateOfJourney;
   final bool isDark;
   final AnimationController pulseCtrl;
-  final void Function(IntermediateJourney journey, bool isFirstLeg) onAutoBookLeg;
-  final void Function(IntermediateJourney journey, bool isFirstLeg) onSelectSeatsLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg)
+  onAutoBookLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg)
+  onSelectSeatsLeg;
   final void Function(TrainTrip train) onOpenFullMatrix;
 
   const _ViaStationMonitorCard({
@@ -3267,22 +3293,12 @@ class _ViaStationMonitorCard extends StatefulWidget {
   });
 
   @override
-  State<_ViaStationMonitorCard> createState() => _ViaStationMonitorCardState();
-}
-
-class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
-  final Map<String, String> _selectedClassByVia = {};
-
-  @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
-    final groups = ViaRouteGroup.fromJourneys(widget.viaJourneys);
-    final borderColor = widget.isDark
+    final borderColor = isDark
         ? const Color(0xFF10B981).withValues(alpha: 0.35)
         : const Color(0xFF10B981).withValues(alpha: 0.45);
-    final bgColor = widget.isDark
-        ? const Color(0xFF062319)
-        : const Color(0xFFF0FDF4);
+    final bgColor = isDark ? const Color(0xFF062319) : const Color(0xFFF0FDF4);
 
     return Container(
       decoration: BoxDecoration(
@@ -3323,24 +3339,26 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                   children: [
                     Text(
                       lang.tr(
-                        'In-Between Station Options Available',
+                        'In-Between Station Tickets Available',
                         'বিকল্প রুট আসন পাওয়া গেছে',
                       ),
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.bold,
-                        color: widget.isDark ? Colors.white : const Color(0xFF065F46),
+                        color: isDark ? Colors.white : const Color(0xFF065F46),
                       ),
                     ),
                     const SizedBox(height: 2),
                     Text(
                       lang.tr(
-                        'Direct seats are sold out. Book split tickets below:',
-                        'সরাসরি টিকিট শেষ। নিচে বিকল্প রুটে বুক করুন:',
+                        'Direct tickets are sold out. Book via intermediate stops below:',
+                        'সরাসরি টিকিট শেষ। নিচে বিকল্প স্টেশন হয়ে বুক করুন:',
                       ),
                       style: TextStyle(
                         fontSize: 11,
-                        color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF047857),
+                        color: isDark
+                            ? const Color(0xFF94A3B8)
+                            : const Color(0xFF047857),
                       ),
                     ),
                   ],
@@ -3350,38 +3368,23 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
           ),
           const SizedBox(height: 12),
 
-          // Grouped Via Routes
-          ...groups.take(3).map((group) {
-            final selectedType = _selectedClassByVia[group.via] ?? group.classOptions.first.type;
-            final selectedOpt = group.classOptions.firstWhere(
-              (o) => o.type == selectedType,
-              orElse: () => group.classOptions.first,
-            );
-
-            final matchingJourney = widget.viaJourneys.firstWhere(
-              (j) => j.via == group.via && j.firstSeat.type == selectedOpt.type,
-              orElse: () => widget.viaJourneys.firstWhere(
-                (j) => j.via == group.via,
-                orElse: () => widget.viaJourneys.first,
-              ),
-            );
+          // Discovered Via Journeys
+          ...viaJourneys.take(3).map((journey) {
+            final fare1 = double.tryParse(journey.firstSeat.fare) ?? 0;
+            final fare2 = double.tryParse(journey.secondSeat.fare) ?? 0;
+            final totalFare = fare1 + fare2;
 
             return Container(
               margin: const EdgeInsets.only(bottom: 10),
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: widget.isDark ? const Color(0xFF0F172A) : Colors.white,
+                color: isDark ? const Color(0xFF0F172A) : Colors.white,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: widget.isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                  color: isDark
+                      ? const Color(0xFF1E293B)
+                      : const Color(0xFFE2E8F0),
                 ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: widget.isDark ? 0.2 : 0.04),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -3390,13 +3393,16 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                   Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
                           color: AppColors.primary.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          group.first.tripNumber,
+                          journey.first.tripNumber,
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
@@ -3406,13 +3412,17 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                       ),
                       const SizedBox(width: 6),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 3,
+                        ),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                          color: const Color(0xFF10B981)
+                              .withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(6),
                         ),
                         child: Text(
-                          'Via ${group.via}',
+                          'Via ${journey.via}',
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w600,
@@ -3421,190 +3431,100 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                         ),
                       ),
                       const Spacer(),
-                      if (selectedOpt.totalFare > 0)
+                      if (totalFare > 0)
                         Text(
-                          '৳${selectedOpt.totalFare.toStringAsFixed(0)}',
+                          '৳${totalFare.toStringAsFixed(0)}',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.bold,
-                            color: widget.isDark ? Colors.white : AppColors.lightTextPrimary,
+                            color: isDark
+                                ? Colors.white
+                                : AppColors.textPrimaryLight,
                           ),
                         ),
                     ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Route Flow & Layover
-                  Row(
-                    children: [
-                      Text(
-                        widget.fromCity,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDark ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 6),
-                        child: Icon(Icons.arrow_forward_rounded, size: 13, color: Color(0xFF10B981)),
-                      ),
-                      Text(
-                        group.via,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF10B981),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 6),
-                        child: Icon(Icons.arrow_forward_rounded, size: 13, color: Color(0xFF10B981)),
-                      ),
-                      Text(
-                        widget.toCity,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.bold,
-                          color: widget.isDark ? Colors.white : const Color(0xFF0F172A),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    group.layoverText(isBangla: lang.isBangla),
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                    ),
                   ),
                   const SizedBox(height: 10),
-
-                  // Seat availability by seat type
-                  Text(
-                    lang.tr('Available Seat Classes:', 'উপলব্ধ আসন শ্রেণি:'),
-                    style: TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w600,
-                      color: widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: group.classOptions.map((opt) {
-                      final isSel = (opt.type == selectedOpt.type);
-                      return InkWell(
-                        onTap: () {
-                          setState(() {
-                            _selectedClassByVia[group.via] = opt.type;
-                          });
-                        },
-                        borderRadius: BorderRadius.circular(8),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: isSel
-                                ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                                : (widget.isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9)),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: isSel
-                                  ? const Color(0xFF10B981)
-                                  : (widget.isDark ? const Color(0xFF334155) : const Color(0xFFCBD5E1)),
-                              width: isSel ? 1.4 : 1.0,
-                            ),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                opt.displayName,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: isSel ? FontWeight.bold : FontWeight.w600,
-                                  color: isSel
-                                      ? const Color(0xFF10B981)
-                                      : (widget.isDark ? Colors.white70 : const Color(0xFF334155)),
-                                ),
-                              ),
-                              const SizedBox(width: 5),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  '${opt.minSeats} ${lang.tr("seats", "আসন")}',
-                                  style: const TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: Color(0xFF10B981),
-                                  ),
-                                ),
-                              ),
-                              if (opt.totalFare > 0) ...[
-                                const SizedBox(width: 5),
-                                Text(
-                                  '৳${opt.totalFare.toStringAsFixed(0)}',
-                                  style: TextStyle(
-                                    fontSize: 10.5,
-                                    fontWeight: FontWeight.bold,
-                                    color: isSel
-                                        ? (widget.isDark ? Colors.white : Colors.black87)
-                                        : (widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 12),
 
                   // Leg 1 Card
                   _buildLegSection(
                     context: context,
                     lang: lang,
-                    isDark: widget.isDark,
-                    title: '${lang.tr("Leg 1", "১ম অংশ")}: ${widget.fromCity} ➔ ${group.via}',
-                    time: '${IntermediateStationSearch.cleanTime(group.first.departureDateTime)} - ${IntermediateStationSearch.cleanTime(group.first.arrivalDateTime)}',
-                    seatClass: selectedOpt.displayName,
-                    seats: selectedOpt.leg1Seats,
-                    onAutoBook: () => widget.onAutoBookLeg(matchingJourney, true),
-                    onSelectSeats: () => widget.onSelectSeatsLeg(matchingJourney, true),
+                    isDark: isDark,
+                    title:
+                        '${lang.tr("Leg 1", "১ম অংশ")}: $fromCity ➔ ${journey.via}',
+                    time:
+                        '${IntermediateStationSearch.cleanTime(journey.first.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.first.arrivalDateTime)}',
+                    seatClass: journey.firstSeat.displayName,
+                    seats: journey.firstSeat.seatCounts.online,
+                    onAutoBook: () => onAutoBookLeg(journey, true),
+                    onSelectSeats: () => onSelectSeatsLeg(journey, true),
                   ),
 
-                  const SizedBox(height: 8),
+                  // Layover Station Indicator
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 6,
+                      horizontal: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 1,
+                          height: 14,
+                          color: isDark
+                              ? const Color(0xFF334155)
+                              : const Color(0xFFCBD5E1),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(
+                          Icons.swap_vert_rounded,
+                          size: 14,
+                          color: Color(0xFF10B981),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${lang.tr("Transfer / Layover at", "যাত্রাবিরতি")}: ${journey.via}',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: isDark
+                                ? const Color(0xFF94A3B8)
+                                : const Color(0xFF64748B),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
 
                   // Leg 2 Card
                   _buildLegSection(
                     context: context,
                     lang: lang,
-                    isDark: widget.isDark,
-                    title: '${lang.tr("Leg 2", "২য় অংশ")}: ${group.via} ➔ ${widget.toCity}',
-                    time: '${IntermediateStationSearch.cleanTime(group.second.departureDateTime)} - ${IntermediateStationSearch.cleanTime(group.second.arrivalDateTime)}',
-                    seatClass: selectedOpt.displayName,
-                    seats: selectedOpt.leg2Seats,
-                    onAutoBook: () => widget.onAutoBookLeg(matchingJourney, false),
-                    onSelectSeats: () => widget.onSelectSeatsLeg(matchingJourney, false),
+                    isDark: isDark,
+                    title:
+                        '${lang.tr("Leg 2", "২য় অংশ")}: ${journey.via} ➔ $toCity',
+                    time:
+                        '${IntermediateStationSearch.cleanTime(journey.second.departureDateTime)} - ${IntermediateStationSearch.cleanTime(journey.second.arrivalDateTime)}',
+                    seatClass: journey.secondSeat.displayName,
+                    seats: journey.secondSeat.seatCounts.online,
+                    onAutoBook: () => onAutoBookLeg(journey, false),
+                    onSelectSeats: () => onSelectSeatsLeg(journey, false),
                   ),
 
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
                   // Open full matrix button
                   Align(
                     alignment: Alignment.centerRight,
                     child: TextButton.icon(
                       style: TextButton.styleFrom(
                         visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
                       ),
-                      onPressed: () => widget.onOpenFullMatrix(group.first),
+                      onPressed: () => onOpenFullMatrix(journey.first),
                       icon: const Icon(Icons.open_in_new_rounded, size: 13),
                       label: Text(
                         lang.tr('All Via Options', 'সব বিকল্প অপশন'),
@@ -3654,7 +3574,7 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.bold,
-                    color: isDark ? Colors.white : AppColors.lightTextPrimary,
+                    color: isDark ? Colors.white : AppColors.textPrimaryLight,
                   ),
                 ),
               ),
@@ -3693,7 +3613,10 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
@@ -3703,7 +3626,10 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                   icon: const Icon(Icons.bolt_rounded, size: 14),
                   label: Text(
                     lang.tr('Auto Book', 'অটো বুক'),
-                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ),
@@ -3712,11 +3638,18 @@ class _ViaStationMonitorCardState extends State<_ViaStationMonitorCard> {
                 flex: 2,
                 child: OutlinedButton(
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: isDark ? Colors.white70 : AppColors.lightTextPrimary,
+                    foregroundColor: isDark
+                        ? Colors.white70
+                        : AppColors.textPrimaryLight,
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 6,
+                    ),
                     side: BorderSide(
-                      color: isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1),
+                      color: isDark
+                          ? const Color(0xFF475569)
+                          : const Color(0xFFCBD5E1),
                     ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
