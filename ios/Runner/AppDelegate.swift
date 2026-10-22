@@ -31,6 +31,20 @@ import BackgroundTasks
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
+  // Display heads-up notifications (banner, sound, badge) even while the app is in the foreground
+  @available(iOS 10.0, *)
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .badge, .sound, .list])
+    } else {
+      completionHandler([.alert, .badge, .sound])
+    }
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     // UIScene creates the Flutter engine after didFinishLaunching. Register

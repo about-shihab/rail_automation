@@ -90,8 +90,13 @@ class RailRequestPacer {
   Future<T> run<T>({
     required String operation,
     Duration minInterval = Duration.zero,
+    bool paced = true,
     required Future<T> Function() send,
   }) async {
+    if (!paced) {
+      checkCooldown();
+      return await send();
+    }
     final previous = _tail;
     final completed = Completer<void>();
     _tail = completed.future;

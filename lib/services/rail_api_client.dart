@@ -379,6 +379,7 @@ class RailApiClient {
       try {
         final response = await requestPacer.run(
           operation: operation,
+          paced: operation != 'search_trips',
           minInterval: Duration(
             seconds: settings['min_interval_seconds'] as int? ?? 0,
           ),

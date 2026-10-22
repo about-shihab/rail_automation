@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:intl/intl.dart';
 
 import 'package:flutter/material.dart';
@@ -99,7 +100,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         final is5MinElapsed = isReady
             ? (expiry != null && !now.isBefore(expiry))
             : ((started != null && now.difference(started).inMinutes >= 5) ||
-               (expiry != null && !now.isBefore(expiry)));
+                  (expiry != null && !now.isBefore(expiry)));
         if (is5MinElapsed) {
           await BookingService.clear();
           if (mounted) {
@@ -397,152 +398,12 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     required String fromCity,
     required String toCity,
   }) async {
-    final leg = isFirstLeg ? journey.first : journey.second;
-    final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? canonicalStation(fromCity) : journey.canonicalVia;
-    final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(toCity);
-    final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
-
-    var session = await AuthSession.load();
-    if (session == null || !session.isValid) {
-      final ok = await LoginFlow.openManualLogin();
-      if (!ok) return;
-      session = await AuthSession.load();
-      if (session == null || !session.isValid) return;
-    }
-
-    final bookingTrain = TrainTrip(
-      tripNumber: leg.tripNumber,
-      departureDateTime: leg.departureDateTime,
-      departureFullDate: leg.departureFullDate,
-      departureDateTimeJd: leg.departureDateTimeJd,
-      arrivalDateTime: leg.arrivalDateTime,
-      travelTime: leg.travelTime,
-      originCityName: legFrom,
-      destinationCityName: legTo,
-      trainModel: leg.trainModel,
-      isOpenForAll: leg.isOpenForAll,
-      boardingPoints: leg.boardingPoints.isNotEmpty
-          ? leg.boardingPoints
-          : [
-              BoardingPoint(
-                locationName: legFrom,
-                locationTime: leg.departureDateTime,
-                locationDate: legDate,
-              ),
-            ],
-      seatTypes: [seat],
+    await _handleManualSeatSelect(
+      journey: journey,
+      isFirstLeg: isFirstLeg,
+      fromCity: fromCity,
+      toCity: toCity,
     );
-
-    if (!mounted) return;
-    final lang = LanguageService.of(context);
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => Center(
-        child: Container(
-          padding: const EdgeInsets.all(24),
-          margin: const EdgeInsets.symmetric(horizontal: 32),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1E293B) : Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.2),
-                blurRadius: 16,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(color: AppColors.primary),
-              const SizedBox(height: 16),
-              Text(
-                lang.tr(
-                  'Auto-booking $legFrom → $legTo...',
-                  '$legFrom → $legTo অটো-বুকিং হচ্ছে...',
-                ),
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
-                  color: AppColors.textPrimary(isDark),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '${leg.tripNumber} • ${seat.displayName}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMuted(isDark),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    try {
-      final reservation = await BookingService.reserve(
-        train: bookingTrain,
-        seat: seat,
-        from: legFrom,
-        to: legTo,
-        date: legDate,
-        auth: session,
-        quantity: 1,
-        isAutoBook: true,
-        allowVerificationPrompt: true,
-      );
-
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-
-      await NotificationService().showReservation(reservation);
-      await OtpVerifier.listen();
-
-      if (mounted) {
-        await Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ReservationScreen()),
-        );
-        await _refresh();
-      }
-    } catch (err) {
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.pop(context);
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              friendlyErrorMessage(err.toString(), isBangla: lang.isBangla),
-            ),
-            backgroundColor: Colors.redAccent,
-            action: SnackBarAction(
-              label: lang.tr('Choose Seats', 'আসন বাছুন'),
-              textColor: Colors.white,
-              onPressed: () {
-                _openSeatBooking(
-                  bookingTrain,
-                  seat,
-                  legFrom,
-                  legTo,
-                  legDate,
-                  session!,
-                );
-              },
-            ),
-          ),
-        );
-      }
-    }
   }
 
   Future<void> _handleManualSeatSelect({
@@ -553,7 +414,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   }) async {
     final leg = isFirstLeg ? journey.first : journey.second;
     final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? canonicalStation(fromCity) : journey.canonicalVia;
+    final legFrom = isFirstLeg
+        ? canonicalStation(fromCity)
+        : journey.canonicalVia;
     final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(toCity);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
 
@@ -588,7 +451,14 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       seatTypes: [seat],
     );
 
-    _openSeatBooking(bookingTrain, seat, legFrom, legTo, legDate, session);
+    await _openSeatBooking(
+      bookingTrain,
+      seat,
+      legFrom,
+      legTo,
+      legDate,
+      session,
+    );
   }
 
   Future<void> _openSeatBooking(
@@ -633,7 +503,11 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final isBookingBusy = activity.busy;
     final step = _step(m, p, activity);
     final hasActiveContent =
-        hasSearch || hasReservation || isBookingBusy || credit.credits <= 0 || p != null;
+        hasSearch ||
+        hasReservation ||
+        isBookingBusy ||
+        credit.credits <= 0 ||
+        p != null;
     final isActive =
         (m.isMonitoring && !m.isScheduled && p == null && !m.needsLogin) ||
         (isBookingBusy && p == null);
@@ -926,18 +800,18 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                               isDark: isDark,
                               onAutoBookLeg: (journey, isFirstLeg) =>
                                   _handleAutoBookLeg(
-                                journey: journey,
-                                isFirstLeg: isFirstLeg,
-                                fromCity: fromCity,
-                                toCity: toCity,
-                              ),
+                                    journey: journey,
+                                    isFirstLeg: isFirstLeg,
+                                    fromCity: fromCity,
+                                    toCity: toCity,
+                                  ),
                               onSelectSeatsLeg: (journey, isFirstLeg) =>
                                   _handleManualSeatSelect(
-                                journey: journey,
-                                isFirstLeg: isFirstLeg,
-                                fromCity: fromCity,
-                                toCity: toCity,
-                              ),
+                                    journey: journey,
+                                    isFirstLeg: isFirstLeg,
+                                    fromCity: fromCity,
+                                    toCity: toCity,
+                                  ),
                               onOpenFullMatrix: (train) => Navigator.push(
                                 context,
                                 MaterialPageRoute(
@@ -2217,7 +2091,8 @@ class _TicketProcessingCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
     final train = reservation['train'] as Map<String, dynamic>?;
-    final trainName = train?['trip_number']?.toString() ??
+    final trainName =
+        train?['trip_number']?.toString() ??
         train?['train_name']?.toString() ??
         'Train';
     final from = canonicalStation('${reservation['from'] ?? ''}');
@@ -2229,34 +2104,33 @@ class _TicketProcessingCard extends StatelessWidget {
         : '';
     final seatNumbers = rawSeats != null
         ? rawSeats
-            .map((s) => s is Map ? s['seat_number']?.toString() ?? '' : '')
-            .where((s) => s.isNotEmpty)
-            .join(', ')
+              .map((s) => s is Map ? s['seat_number']?.toString() ?? '' : '')
+              .where((s) => s.isNotEmpty)
+              .join(', ')
         : '';
     final seatClass = rawSeats?.firstOrNull is Map
         ? (rawSeats!.first['selected_seat_class']?.toString() ?? '')
         : (reservation['seatClass'] is Map
-            ? reservation['seatClass']['type']?.toString() ?? ''
-            : '');
+              ? reservation['seatClass']['type']?.toString() ?? ''
+              : '');
     final totalFare = reservation['total_fare'] != null
         ? double.tryParse('${reservation['total_fare']}') ?? 0.0
         : (rawSeats != null
-            ? rawSeats.fold<double>(
-                0.0,
-                (sum, s) =>
-                    sum +
-                    (s is Map ? (double.tryParse('${s['fare']}') ?? 0.0) : 0.0),
-              )
-            : 0.0);
+              ? rawSeats.fold<double>(
+                  0.0,
+                  (sum, s) =>
+                      sum +
+                      (s is Map
+                          ? (double.tryParse('${s['fare']}') ?? 0.0)
+                          : 0.0),
+                )
+              : 0.0);
 
     return Container(
       decoration: BoxDecoration(
         color: isDark ? const Color(0xFF1C1917) : const Color(0xFFFFFBEB),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFF59E0B),
-          width: 1.5,
-        ),
+        border: Border.all(color: const Color(0xFFF59E0B), width: 1.5),
         boxShadow: [
           BoxShadow(
             color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
@@ -2292,7 +2166,10 @@ class _TicketProcessingCard extends StatelessWidget {
                     Row(
                       children: [
                         Text(
-                          lang.tr('STEP 4 · READY TO PAY', 'ধাপ ৪ • পেমেন্ট প্রস্তুত'),
+                          lang.tr(
+                            'STEP 4 · READY TO PAY',
+                            'ধাপ ৪ • পেমেন্ট প্রস্তুত',
+                          ),
                           style: const TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w800,
@@ -2302,9 +2179,13 @@ class _TicketProcessingCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                            color: const Color(0xFF10B981)
+                                .withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
@@ -2370,11 +2251,18 @@ class _TicketProcessingCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Row(
                   children: [
-                    const Icon(Icons.route_rounded, size: 14, color: AppColors.primary),
+                    const Icon(
+                      Icons.route_rounded,
+                      size: 14,
+                      color: AppColors.primary,
+                    ),
                     const SizedBox(width: 4),
                     Text(
                       '$from ➔ $to',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
@@ -2395,7 +2283,11 @@ class _TicketProcessingCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          coach.isNotEmpty ? '$coach ($seatNumbers)' : (seatNumbers.isNotEmpty ? seatNumbers : 'Confirmed'),
+                          coach.isNotEmpty
+                              ? '$coach ($seatNumbers)'
+                              : (seatNumbers.isNotEmpty
+                                    ? seatNumbers
+                                    : 'Confirmed'),
                           style: const TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
@@ -2473,7 +2365,10 @@ class _TicketProcessingCard extends StatelessWidget {
                   icon: const Icon(Icons.payment_rounded, size: 18),
                   label: Text(
                     lang.tr('Pay Now (Official)', 'পেমেন্ট সম্পন্ন করুন'),
-                    style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                    ),
                   ),
                 ),
               ),
@@ -2492,7 +2387,10 @@ class _TicketProcessingCard extends StatelessWidget {
                   icon: const Icon(Icons.receipt_outlined, size: 16),
                   label: Text(
                     lang.tr('Details', 'বিবরণ'),
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ),
@@ -4078,8 +3976,10 @@ class _MonitorActivityLogCard extends StatefulWidget {
   final String toCity;
   final String dateOfJourney;
   final bool isDark;
-  final void Function(IntermediateJourney journey, bool isFirstLeg) onAutoBookLeg;
-  final void Function(IntermediateJourney journey, bool isFirstLeg) onSelectSeatsLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg)
+  onAutoBookLeg;
+  final void Function(IntermediateJourney journey, bool isFirstLeg)
+  onSelectSeatsLeg;
   final void Function(TrainTrip train) onOpenFullMatrix;
 
   const _MonitorActivityLogCard({
@@ -4098,45 +3998,35 @@ class _MonitorActivityLogCard extends StatefulWidget {
   });
 
   @override
-  State<_MonitorActivityLogCard> createState() => _MonitorActivityLogCardState();
+  State<_MonitorActivityLogCard> createState() =>
+      _MonitorActivityLogCardState();
 }
 
 class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
-  bool _showAllLogs = false;
-
-  bool _isRoutineCheck(MonitorLog l) {
-    if (l.viaJourney != null) return false;
-    final msg = l.message.toLowerCase();
-    return msg.contains('check') ||
-        msg.contains('checked') ||
-        msg.contains('monitoring check') ||
-        msg.contains('scanning') ||
-        msg.contains('direct seats found');
-  }
-
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
     final isDark = widget.isDark;
 
-    // Filter out check logs completely. Keep only via tickets and critical notifications.
-    final viaLogs = widget.logs
-        .where((l) => l.viaJourney != null || l.message.contains('VIA') || l.message.contains('ভায়া'))
-        .toList();
-
-    final displayedLogs = widget.logs
-        .where((l) => !_isRoutineCheck(l) || l.isAlert || l.isError)
-        .toList();
-
-    final logSlice = _showAllLogs ? displayedLogs : displayedLogs.take(6).toList();
+    // Keep only actual via ticket journeys, deduplicated from newest to oldest
+    final seen = <String>{};
+    final uniqueViaLogs = <MonitorLog>[];
+    for (final l in widget.logs.reversed) {
+      final j = l.viaJourney;
+      if (j != null) {
+        final key =
+            '${j.canonicalVia}_${j.first.tripNumber}_${j.second.tripNumber}_${j.firstSeat.type}';
+        if (seen.add(key)) {
+          uniqueViaLogs.add(l);
+        }
+      }
+    }
 
     return Container(
       decoration: BoxDecoration(
         color: isDark ? AppColors.darkSurface : Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: AppColors.cardBorder(isDark),
-        ),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
@@ -4253,15 +4143,18 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                 ),
               ),
               const Spacer(),
-              if (viaLogs.isNotEmpty)
+              if (uniqueViaLogs.isNotEmpty)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: const Color(0xFF10B981).withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
-                    '${viaLogs.length} ${lang.tr("Found", "পাওয়া গেছে")}',
+                    '${uniqueViaLogs.length} ${lang.tr("Found", "পাওয়া গেছে")}',
                     style: const TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
@@ -4275,11 +4168,13 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
           const SizedBox(height: 10),
 
           // ── Discovered Tickets Content or Running Waiting State ──
-          if (displayedLogs.isEmpty) ...[
+          if (uniqueViaLogs.isEmpty) ...[
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+                color: isDark
+                    ? const Color(0xFF0F172A)
+                    : const Color(0xFFF8FAFC),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
                   color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
@@ -4326,29 +4221,7 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
               ),
             ),
           ] else
-            ...logSlice.map((log) => _buildLogItem(log, lang, isDark)),
-
-          if (displayedLogs.length > 8)
-            Align(
-              alignment: Alignment.center,
-              child: TextButton(
-                onPressed: () => setState(() => _showAllLogs = !_showAllLogs),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                ),
-                child: Text(
-                  _showAllLogs
-                      ? lang.tr('Show fewer', 'কম দেখুন')
-                      : lang.tr(
-                          'Show all ${displayedLogs.length} logs',
-                          'সব ${displayedLogs.length}টি লগ দেখুন',
-                        ),
-                  style: const TextStyle(fontSize: 11),
-                ),
-              ),
-            ),
+            ...uniqueViaLogs.map((log) => _buildLogItem(log, lang, isDark)),
         ],
       ),
     );
@@ -4438,8 +4311,10 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
@@ -4460,8 +4335,10 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
@@ -4480,8 +4357,10 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
@@ -4496,8 +4375,10 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                 TextButton.icon(
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
                   ),
                   onPressed: () => widget.onOpenFullMatrix(journey.first),
                   icon: const Icon(Icons.open_in_new_rounded, size: 12),
@@ -4513,54 +4394,6 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
       );
     }
 
-    if (_isRoutineCheck(log)) return const SizedBox.shrink();
-
-    Color iconColor = Colors.grey;
-    IconData icon = Icons.circle_outlined;
-    if (log.isAlert) {
-      iconColor = const Color(0xFF10B981);
-      icon = Icons.check_circle_rounded;
-    } else if (log.isError) {
-      iconColor = Colors.redAccent;
-      icon = Icons.error_outline_rounded;
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Icon(icon, size: 11, color: iconColor),
-          ),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              log.message,
-              style: TextStyle(
-                fontSize: 11,
-                color: log.isError
-                    ? Colors.redAccent
-                    : (log.isAlert
-                        ? (isDark ? Colors.white : Colors.black87)
-                        : AppColors.textMuted(isDark)),
-                fontWeight: (log.isAlert || log.isError)
-                    ? FontWeight.w600
-                    : FontWeight.normal,
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            timeStr,
-            style: TextStyle(
-              fontSize: 10,
-              color: AppColors.textMuted(isDark),
-            ),
-          ),
-        ],
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }

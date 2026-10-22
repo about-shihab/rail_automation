@@ -427,7 +427,12 @@ class NotificationService {
           android: androidDetails,
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
+            presentBadge: true,
             presentSound: true,
+            presentBanner: true,
+            presentList: true,
+            sound: 'seat_found.wav',
+            interruptionLevel: InterruptionLevel.timeSensitive,
           ),
         ),
       );
@@ -548,7 +553,12 @@ class NotificationService {
           android: androidDetails,
           iOS: const DarwinNotificationDetails(
             presentAlert: true,
+            presentBadge: true,
             presentSound: true,
+            presentBanner: true,
+            presentList: true,
+            sound: 'seat_found.wav',
+            interruptionLevel: InterruptionLevel.timeSensitive,
           ),
         ),
       );
@@ -918,6 +928,10 @@ class NotificationService {
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
+        presentBanner: true,
+        presentList: true,
+        sound: 'seat_found.wav',
+        interruptionLevel: InterruptionLevel.timeSensitive,
       ),
     );
 
@@ -947,6 +961,8 @@ class NotificationService {
             presentSound: true,
             presentBanner: true,
             presentList: true,
+            sound: 'seat_found.wav',
+            interruptionLevel: InterruptionLevel.timeSensitive,
           ),
         ),
       );
@@ -1115,8 +1131,15 @@ class NotificationService {
         presentSound: true,
         presentBanner: true,
         presentList: true,
+        sound: 'seat_found.wav',
+        interruptionLevel: InterruptionLevel.timeSensitive,
       ),
     );
+
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      await initialize(background: true);
+      if (!_isInitialized) return;
+    }
 
     try {
       await _notificationsPlugin.show(

@@ -177,6 +177,7 @@ class ViaRouteGroup {
 class TrainRouteCache {
   static final Map<String, List<Map<String, dynamic>>> _routes = {};
   static final Map<String, List<String>> _intermediate = {};
+  static final Map<String, List<Map<String, dynamic>>> _stoppagesByModel = {};
 
   static String _routeKey(String model, String date) =>
       '${model.trim().toLowerCase()}_${date.trim().toLowerCase()}';
@@ -184,8 +185,11 @@ class TrainRouteCache {
   static String _interKey(String train, String from, String to) =>
       '${train.trim().toLowerCase()}_${from.trim().toLowerCase()}_${to.trim().toLowerCase()}';
 
-  static List<Map<String, dynamic>>? getRoute(String model, String date) =>
-      _routes[_routeKey(model, date)];
+  static List<Map<String, dynamic>>? getRoute(String model, String date) {
+    final byDate = _routes[_routeKey(model, date)];
+    if (byDate != null) return byDate;
+    return _stoppagesByModel[model.trim().toLowerCase()];
+  }
 
   static void setRoute(
     String model,
@@ -193,6 +197,7 @@ class TrainRouteCache {
     List<Map<String, dynamic>> routes,
   ) {
     _routes[_routeKey(model, date)] = routes;
+    _stoppagesByModel[model.trim().toLowerCase()] = routes;
   }
 
   static List<String>? getIntermediate(String train, String from, String to) =>
@@ -210,6 +215,7 @@ class TrainRouteCache {
   static void clear() {
     _routes.clear();
     _intermediate.clear();
+    _stoppagesByModel.clear();
   }
 }
 
@@ -637,7 +643,7 @@ class IntermediateStationSearch {
         }
       }
 
-      final concurrency = min(3, totalCandidateStops);
+      final concurrency = min(5, totalCandidateStops);
       await Future.wait(List.generate(concurrency, (_) => worker()));
     }
 
