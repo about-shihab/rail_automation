@@ -147,7 +147,7 @@ class NotificationService {
         .inMilliseconds
         .clamp(1, 3600000),
     autoCancel: true,
-    fullScreenIntent: seatAlert,
+    fullScreenIntent: false,
     actions: actions,
     styleInformation: BigTextStyleInformation(body, contentTitle: title),
   );
@@ -901,8 +901,8 @@ class NotificationService {
           ].join(' · ');
     final body = '$trainName\n$description';
     final androidDetails = _alertDetails(
-      channel: 'br_seat_found_v3',
-      channelName: 'Seats found (High Alert Whistle)',
+      channel: 'br_seat_found_v2',
+      channelName: 'Seats found',
       seatAlert: true,
       onlyAlertOnce: true,
       title: title,
@@ -1106,8 +1106,8 @@ class NotificationService {
         'rail://via-ticket?from=${Uri.encodeComponent(fromCity)}&to=${Uri.encodeComponent(toCity)}&date=${Uri.encodeComponent(travelDate)}&train=${Uri.encodeComponent(trainName)}&via=${Uri.encodeComponent(viaStation)}&class=${Uri.encodeComponent(seatType)}';
 
     final androidDetails = _alertDetails(
-      channel: 'br_seat_found_v3',
-      channelName: 'Seats found (High Alert Whistle)',
+      channel: 'br_seat_found_v2',
+      channelName: 'Seats found',
       seatAlert: true,
       onlyAlertOnce: false,
       title: title,

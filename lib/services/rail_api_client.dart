@@ -376,13 +376,13 @@ class RailApiClient {
       seconds: settings['retry_delay_seconds'] as int? ?? 2,
     );
     for (var attempt = 0; ; attempt++) {
+      final minIntervalSec = settings['min_interval_seconds'] as int? ?? 0;
+      final minInterval = Duration(seconds: minIntervalSec);
       try {
         final response = await requestPacer.run(
           operation: operation,
-          paced: operation != 'search_trips',
-          minInterval: Duration(
-            seconds: settings['min_interval_seconds'] as int? ?? 0,
-          ),
+          paced: minInterval > Duration.zero || operation != 'search_trips',
+          minInterval: minInterval,
           send: () async {
             await ensureReady();
             if (authenticated && !AuthSession.useBackgroundStorage) {

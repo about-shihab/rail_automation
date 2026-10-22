@@ -1377,7 +1377,7 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
                     style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
                   ),
                 ),
-                OutlinedButton(
+                OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1386,8 +1386,9 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
                     ),
                   ),
                   onPressed: widget.onOpenFull,
-                  child: Text(
-                    lang.tr('All options', 'সব বিকল্প'),
+                  icon: const Icon(Icons.search_rounded, size: 13),
+                  label: Text(
+                    lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
                     style: const TextStyle(fontSize: 10.5),
                   ),
                 ),
@@ -1398,75 +1399,58 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
       );
     }
 
-    if (_loading) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: AppColors.primary.withValues(alpha: 0.2),
-          ),
-        ),
-        child: Row(
-          children: [
-            const SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppColors.primary,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                lang.tr(
-                  'Auto-searching in-between station tickets…',
-                  'স্বয়ংক্রিয়ভাবে মধ্যবর্তী স্টেশনের আসন খোঁজা হচ্ছে…',
-                ),
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.primary,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    // Finished searching, no via seats found for this train
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? Colors.grey.shade900 : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-        ),
+        color: AppColors.primary.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.info_outline_rounded, size: 14, color: Colors.grey),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              lang.tr('No via seats found', 'মধ্যবর্তী স্টেশনেও আসন খালি নেই'),
-              style: TextStyle(fontSize: 11, color: AppColors.textMuted(isDark)),
-            ),
-          ),
-          InkWell(
-            onTap: widget.onOpenFull,
-            child: Text(
-              lang.tr('View route', 'রুট দেখুন'),
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppColors.primary,
-                fontWeight: FontWeight.w600,
+          Row(
+            children: [
+              const Icon(Icons.alt_route_rounded, size: 20, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  lang.tr('Try an intermediate station', 'মধ্যবর্তী স্টেশন দিয়ে চেষ্টা করুন'),
+                  style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary(isDark)),
+                ),
               ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            lang.tr(
+              'Check two-ticket options or seats between specific stops.',
+              'দুই টিকিটের বিকল্প বা নির্দিষ্ট স্টেশনের মধ্যে আসন দেখুন।',
             ),
+            style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark)),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              TextButton.icon(
+                onPressed: widget.onOpenFull,
+                icon: const Icon(Icons.search_rounded, size: 18),
+                label: Text(
+                  lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
+                ),
+              ),
+              if (_loading) ...[
+                const SizedBox(width: 8),
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: AppColors.primary,
+                  ),
+                ),
+              ],
+            ],
           ),
         ],
       ),
