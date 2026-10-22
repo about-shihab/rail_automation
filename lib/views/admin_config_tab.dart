@@ -221,6 +221,16 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
       icon: Icons.speed_rounded,
       presets: [120, 300, 600],
     ),
+    _ConfigFieldMeta(
+      key: 'via_search_interval_minutes',
+      label: 'Via station search interval (minutes)',
+      description: 'How frequently intermediate / via stations are searched during active background monitoring.',
+      unit: 'minutes',
+      min: 1,
+      max: 60,
+      icon: Icons.alt_route_rounded,
+      presets: [1, 2, 3, 5, 10],
+    ),
   ];
 
   static const _nearDepartureGroup = [
@@ -370,6 +380,9 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
       text: widget.values['recharge_contact_email'] as String? ??
           'connect.abdulla@gmail.com',
     );
+    _controllers['developer_name'] = TextEditingController(
+      text: widget.values['developer_name'] as String? ?? 'Abdulla Al Mamun',
+    );
   }
 
   @override
@@ -396,6 +409,8 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
         'direct_recharge_enabled': _directRecharge,
         'recharge_contact_email':
             _controllers['recharge_contact_email']!.text.trim(),
+        'developer_name':
+            _controllers['developer_name']!.text.trim(),
         for (final key in _maps.keys) key: jsonDecode(_controllers[key]!.text),
       };
       final patch = {
@@ -750,6 +765,44 @@ class _AdminConfigEditorState extends State<AdminConfigEditor> {
                       final email = text?.trim() ?? '';
                       if (!email.contains('@') || !email.contains('.')) {
                         return 'Enter a valid email address';
+                      }
+                      return null;
+                    },
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Developer name',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    'Developer name displayed on the profile drawer and app information screens.',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isDark ? Colors.grey.shade400 : Colors.grey.shade600,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextFormField(
+                    key: const ValueKey('developer_name'),
+                    controller: _controllers['developer_name'],
+                    enabled: !widget.busy,
+                    keyboardType: TextInputType.text,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.person_outline, size: 20),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                    ),
+                    onChanged: _changed,
+                    validator: (text) {
+                      if (text == null || text.trim().isEmpty) {
+                        return 'Developer name cannot be empty';
                       }
                       return null;
                     },

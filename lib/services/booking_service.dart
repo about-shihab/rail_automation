@@ -22,6 +22,7 @@ import 'trip_history_service.dart';
 import 'turnstile_gate.dart';
 import 'voice_service.dart';
 import '../utils/friendly_error.dart';
+import '../utils/railway_stations.dart';
 
 /// The layout already loaded for this booking; choosing seats must not fetch
 /// it again and repeat the human check. Railway still validates reservations.
@@ -400,8 +401,8 @@ class BookingService {
                   },
                 )
                 .toList(),
-            'from': from,
-            'to': to,
+            'from': canonicalStation(from),
+            'to': canonicalStation(to),
             'date': date,
             'confirmedTicketIds': <int>[],
             'autoVerify': autoVerify,
@@ -429,8 +430,8 @@ class BookingService {
                 'extras': {
                   'seat_number': item.$2.seatNumber,
                   'trip_number': train.tripNumber,
-                  'origin_name': from,
-                  'destination_name': to,
+                  'origin_name': canonicalStation(from),
+                  'destination_name': canonicalStation(to),
                 },
               }, auth);
               if (data['ack'] != 1) {

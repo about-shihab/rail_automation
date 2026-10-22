@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../models/auth_session.dart';
 import '../models/seat_type.dart';
 import '../models/train_trip.dart';
+import '../utils/railway_stations.dart';
 import 'api_service.dart';
 import 'journey_schedule.dart';
 import 'rail_api_client.dart';
@@ -13,11 +14,13 @@ import 'rail_api_client.dart';
 /// Legacy model for backwards compatibility with tests and views.
 class IntermediateJourney {
   final String via, firstDate, secondDate;
+  final String viaCity;
   final TrainTrip first, second;
   final SeatType firstSeat, secondSeat;
 
   const IntermediateJourney({
     required this.via,
+    this.viaCity = '',
     required this.firstDate,
     required this.secondDate,
     required this.first,
@@ -25,6 +28,9 @@ class IntermediateJourney {
     required this.firstSeat,
     required this.secondSeat,
   });
+
+  String get canonicalVia =>
+      viaCity.isNotEmpty ? viaCity : canonicalStation(via);
 
   int get seats =>
       min(firstSeat.seatCounts.online, secondSeat.seatCounts.online);
@@ -57,6 +63,7 @@ class ViaClassOption {
 /// Cleanly presents seat availability categorized by seat type (not bogi numbers).
 class ViaRouteGroup {
   final String via;
+  final String viaCity;
   final TrainTrip first;
   final TrainTrip second;
   final String firstDate;
@@ -65,12 +72,16 @@ class ViaRouteGroup {
 
   const ViaRouteGroup({
     required this.via,
+    this.viaCity = '',
     required this.first,
     required this.second,
     required this.firstDate,
     required this.secondDate,
     required this.classOptions,
   });
+
+  String get canonicalVia =>
+      viaCity.isNotEmpty ? viaCity : canonicalStation(via);
 
   int get maxAvailableSeats => classOptions.fold<int>(
     0,
@@ -147,6 +158,7 @@ class ViaRouteGroup {
       groups.add(
         ViaRouteGroup(
           via: via,
+          viaCity: firstJourney.canonicalVia,
           first: firstJourney.first,
           second: firstJourney.second,
           firstDate: firstJourney.firstDate,
@@ -519,7 +531,7 @@ class IntermediateStationSearch {
       ).format(journeyDate.add(Duration(days: dayOffsets[i] ?? 0)));
       final first = sameRun(
         await ApiService.searchTrips(
-          fromCity: from,
+          fromCity: canonicalStation(from),
           toCity: city(i),
           dateOfJourney: date,
           seatClass: seatClass,
@@ -539,7 +551,7 @@ class IntermediateStationSearch {
       final second = sameRun(
         await ApiService.searchTrips(
           fromCity: city(i),
-          toCity: to,
+          toCity: canonicalStation(to),
           dateOfJourney: secondDate,
           seatClass: seatClass,
           authSession: auth,
@@ -566,7 +578,8 @@ class IntermediateStationSearch {
         if (other != null) {
           stationJourneys.add(
             IntermediateJourney(
-              via: city(i).replaceAll('_', ' '),
+              via: displayStation(city(i)),
+              viaCity: city(i),
               firstDate: date,
               secondDate: secondDate,
               first: first,

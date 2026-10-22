@@ -13,6 +13,7 @@ import '../services/login_flow.dart';
 import '../services/rail_api_client.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
+import '../utils/railway_stations.dart';
 import 'seat_booking_screen.dart';
 import 'train_selection_screen.dart';
 
@@ -228,8 +229,8 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
   void _openLeg(IntermediateJourney journey, bool first) {
     final train = first ? journey.first : journey.second;
     final seat = first ? journey.firstSeat : journey.secondSeat;
-    final legFrom = first ? widget.from : journey.via;
-    final legTo = first ? journey.via : widget.to;
+    final legFrom = first ? canonicalStation(widget.from) : journey.canonicalVia;
+    final legTo = first ? journey.canonicalVia : canonicalStation(widget.to);
     HapticFeedback.selectionClick();
     Navigator.push(
       context,
@@ -271,15 +272,18 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
     }
     _auth = auth;
 
+    final cFrom = canonicalStation(legFrom);
+    final cTo = canonicalStation(legTo);
+
     final readyTrain = TrainTrip.fromJson({
       ...legTrain.toJson(),
-      'origin_city_name': legFrom,
-      'destination_city_name': legTo,
+      'origin_city_name': cFrom,
+      'destination_city_name': cTo,
       'boarding_points': legTrain.boardingPoints.isNotEmpty
           ? legTrain.boardingPoints.map((e) => e.toJson()).toList()
           : [
               BoardingPoint(
-                locationName: legFrom,
+                locationName: cFrom,
                 locationTime: legTrain.departureDateTime,
                 locationDate: legDate,
               ).toJson(),
@@ -293,8 +297,8 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
         builder: (_) => SeatBookingScreen(
           train: readyTrain,
           seatType: seat,
-          fromCity: legFrom,
-          toCity: legTo,
+          fromCity: cFrom,
+          toCity: cTo,
           dateOfJourney: legDate,
           authSession: auth!,
         ),
@@ -1472,10 +1476,14 @@ class _IntermediateStationScreenState extends State<IntermediateStationScreen>
                     context,
                     MaterialPageRoute(
                       builder: (_) => SeatBookingScreen(
-                        train: res.train!,
+                        train: TrainTrip.fromJson({
+                          ...res.train!.toJson(),
+                          'origin_city_name': canonicalStation(res.from.city),
+                          'destination_city_name': canonicalStation(res.to.city),
+                        }),
                         seatType: seat,
-                        fromCity: res.from.city,
-                        toCity: res.to.city,
+                        fromCity: canonicalStation(res.from.city),
+                        toCity: canonicalStation(res.to.city),
                         dateOfJourney: res.date,
                         authSession: _auth!,
                       ),

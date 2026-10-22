@@ -54,6 +54,7 @@ class AppConfig extends ChangeNotifier {
     // Reservation hold (Railway keeps a seat for 5 minutes) and what to do
     // when it expires unpaid.
     'reservation_timeout_minutes': 5,
+    'via_search_interval_minutes': 3,
     'resume_search_after_expiry': true,
     'admin_push_enabled': false,
     // Credits and recharge configuration (can be adjusted by admin on the fly)
@@ -80,6 +81,13 @@ class AppConfig extends ChangeNotifier {
   String get rechargeContactEmail => string('recharge_contact_email');
   String get developerEmail => rechargeContactEmail;
   String get developerName => string('developer_name');
+  int get viaSearchIntervalMinutes {
+    final val = _values['via_search_interval_minutes'];
+    if (val is int && val > 0) return val;
+    final numVal = num.tryParse('$val');
+    if (numVal != null && numVal > 0) return numVal.toInt();
+    return 3;
+  }
 
   /// Seconds between seat searches. A value on the `search_trips` operation
   /// wins over the global `poll_interval_seconds`.
@@ -114,6 +122,7 @@ class AppConfig extends ChangeNotifier {
       'search_near_departure_minutes': (0, 1440),
       'search_near_departure_interval_seconds': (0, 3600),
       'reservation_timeout_minutes': (1, 15),
+      'via_search_interval_minutes': (1, 60),
       'default_credits': (0, 100),
     };
 
@@ -138,6 +147,18 @@ class AppConfig extends ChangeNotifier {
         timeLimitSecs >= 60 &&
         timeLimitSecs <= 86400) {
       result['free_monitor_seconds'] = timeLimitSecs;
+    }
+
+    int? viaIntervalMins;
+    if (input.containsKey('via_search_interval_minutes')) {
+      final v = input['via_search_interval_minutes'];
+      viaIntervalMins = v is num ? v.toInt() : int.tryParse('$v');
+    } else if (input.containsKey('via_search_interval')) {
+      final v = input['via_search_interval'];
+      viaIntervalMins = v is num ? v.toInt() : int.tryParse('$v');
+    }
+    if (viaIntervalMins != null && viaIntervalMins >= 1 && viaIntervalMins <= 60) {
+      result['via_search_interval_minutes'] = viaIntervalMins;
     }
 
     for (final entry in limits.entries) {

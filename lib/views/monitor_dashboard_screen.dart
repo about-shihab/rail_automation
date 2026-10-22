@@ -24,6 +24,7 @@ import '../widgets/fancy_train_loader.dart';
 import '../widgets/scenic_rail_header.dart';
 import '../services/turnstile_gate.dart';
 import '../utils/friendly_error.dart';
+import '../utils/railway_stations.dart';
 import '../models/auth_session.dart';
 import '../models/seat_type.dart';
 import '../models/train_trip.dart';
@@ -385,8 +386,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   }) async {
     final leg = isFirstLeg ? journey.first : journey.second;
     final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? fromCity : journey.via;
-    final legTo = isFirstLeg ? journey.via : toCity;
+    final legFrom = isFirstLeg ? canonicalStation(fromCity) : journey.canonicalVia;
+    final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(toCity);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
 
     var session = await AuthSession.load();
@@ -532,8 +533,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   }) async {
     final leg = isFirstLeg ? journey.first : journey.second;
     final seat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? fromCity : journey.via;
-    final legTo = isFirstLeg ? journey.via : toCity;
+    final legFrom = isFirstLeg ? canonicalStation(fromCity) : journey.canonicalVia;
+    final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(toCity);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
 
     var session = await AuthSession.load();

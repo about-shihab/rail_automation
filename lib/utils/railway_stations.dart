@@ -273,3 +273,24 @@ const List<String> popularStations = [
   "Rangpur",
   "Dinajpur",
 ];
+
+
+/// Converts a station name (which may have spaces, underscores, or differing casing)
+/// into the canonical identifier recognized by the Bangladesh Railway official APIs
+/// and present in [railwayStations].
+String canonicalStation(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) return '';
+  final normalized = trimmed.replaceAll('_', ' ').toLowerCase();
+  for (final station in railwayStations) {
+    if (station.replaceAll('_', ' ').toLowerCase() == normalized) {
+      return station;
+    }
+  }
+  return trimmed;
+}
+
+/// Human-friendly station display string (replaces internal underscores with spaces).
+String displayStation(String name) {
+  return name.replaceAll('_', ' ').trim();
+}

@@ -162,6 +162,9 @@ class MonitorService extends ChangeNotifier {
     bookingIntent = const BookingIntent();
     _lastTrains = [];
     _viaJourneys = [];
+    _lastViaSearchAt = null;
+    _lastNotifiedViaKey = null;
+    _isSearchingVia = false;
     _lastError = null;
     _lastBookingError = null;
     _bookingNeedsVerification = false;
@@ -422,6 +425,9 @@ class MonitorService extends ChangeNotifier {
   String? _lastBookingError;
   List<TrainTrip> _lastTrains = [];
   List<IntermediateJourney> _viaJourneys = [];
+  DateTime? _lastViaSearchAt;
+  String? _lastNotifiedViaKey;
+  bool _isSearchingVia = false;
   final List<MonitorLog> _logs = [];
 
   // Monitoring lasts until departure; waiting for sales does not count as checks.
@@ -954,6 +960,9 @@ class MonitorService extends ChangeNotifier {
     _elapsedMonitoringSeconds = 0;
     _lastTrains = [];
     _viaJourneys = [];
+    _lastViaSearchAt = null;
+    _lastNotifiedViaKey = null;
+    _isSearchingVia = false;
     backgroundError = null;
     _isMonitoring = true;
     _totalChecksCount = 0;
@@ -1384,9 +1393,18 @@ class MonitorService extends ChangeNotifier {
           _addLog(
             '#$_totalChecksCount checked at ${_formatTime(_lastCheckedAt!)}: No online seats yet. Next in ${_intervalSeconds}s.',
           );
+          final viaInterval = AppConfig.instance.viaSearchIntervalMinutes;
+          final shouldCheckVia = _lastViaSearchAt == null ||
+              DateTime.now().difference(_lastViaSearchAt!).inMinutes >= viaInterval;
+          if (shouldCheckVia && !_isSearchingVia) {
+            unawaited(_runViaSearch(session, upcomingTrains));
+          }
         } else {
           if (_viaJourneys.isNotEmpty) {
             _viaJourneys = [];
+    _lastViaSearchAt = null;
+    _lastNotifiedViaKey = null;
+    _isSearchingVia = false;
             notifyListeners();
           }
         }
@@ -1550,6 +1568,67 @@ class MonitorService extends ChangeNotifier {
         );
         notifyListeners();
       }
+    }
+  }
+
+  Future<void> _runViaSearch(AuthSession session, List<TrainTrip> trains) async {
+    if (_isSearchingVia || !_isMonitoring || _disposed) return;
+    _isSearchingVia = true;
+    _lastViaSearchAt = DateTime.now();
+    try {
+      final targets = trains.where((t) => isTrainMonitored(t.tripNumber)).toList();
+      if (targets.isEmpty) return;
+
+      final allVia = <IntermediateJourney>[];
+      for (final train in targets) {
+        if (!_isMonitoring || _disposed) break;
+        final results = await IntermediateStationSearch.search(
+          train: train,
+          from: _fromCity,
+          to: _toCity,
+          date: _dateOfJourney,
+          auth: session,
+          seatClass: _targetSeatClass,
+          cancelled: () => !_isMonitoring || _disposed,
+        );
+        allVia.addAll(results);
+        if (allVia.isNotEmpty) break;
+      }
+
+      if (_disposed || !_isMonitoring) return;
+
+      if (allVia.isNotEmpty) {
+        _viaJourneys = allVia;
+        notifyListeners();
+
+        final best = allVia.first;
+        final viaKey =
+            '${best.first.tripNumber}:${best.canonicalVia}:${best.firstSeat.type}:${best.seats}';
+        if (_lastNotifiedViaKey != viaKey) {
+          _lastNotifiedViaKey = viaKey;
+          _addLog(
+            '🔍 VIA TICKET FOUND! ${best.first.tripNumber} via ${best.via} has ${best.seats} [${best.firstSeat.type}] seats!',
+            isAlert: true,
+          );
+          try {
+            await _notificationService.triggerViaSeatAvailableAlert(
+              trainName: best.first.tripNumber,
+              viaStation: best.via,
+              fromCity: _fromCity,
+              toCity: _toCity,
+              travelDate: _dateOfJourney,
+              seatType: best.firstSeat.displayName,
+              seatCount: best.seats,
+            );
+          } catch (e) {
+            _addLog('Via seat notification error: $e', isError: true);
+          }
+        }
+      }
+    } catch (e) {
+      _addLog('Via search check: ${friendlyErrorMessage(e)}');
+    } finally {
+      _isSearchingVia = false;
     }
   }
 
