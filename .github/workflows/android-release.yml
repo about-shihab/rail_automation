@@ -23,16 +23,71 @@ concurrency:
 env:
   SITE_URL: https://about-shihab.github.io/rail-pro
   PUBLIC_REPO: about-shihab/rail-pro
+  FLUTTER_VERSION: '3.47.1'
 
 jobs:
+  # ---------------------------------------------------------------
+  # 1. Assign the version once. Both builds use the same version/build.
+  # ---------------------------------------------------------------
+  prepare:
+    name: Assign version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.version.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assign the next version (automatic force update)
+        id: version
+        env:
+          FORCE: ${{ inputs.force_update != false }}
+        run: |
+          if [ "$FORCE" = "false" ]; then
+            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json
+          else
+            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json --force
+          fi
+
+      # Save every file `prepare` changed or created, explicitly including build/release-plan.json
+      - name: Save release state
+        run: |
+          touch .release-state-marker
+          { git ls-files -m -o --exclude-standard; echo build/release-plan.json; echo .release-state-marker; } \
+            | sort -u | tr '\n' '\0' | tar --null -T - -czf release-state.tgz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-state
+          path: release-state.tgz
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # 2a. iOS (runs in parallel with Android)
+  # ---------------------------------------------------------------
   build-ios:
     name: Build iOS IPA
-    runs-on: macos-15-intel
+    needs: [prepare]
+    runs-on: macos-15          # Apple Silicon M2, much faster than macos-15-intel
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-state
+
+      - name: Apply release state
+        run: tar -xzf release-state.tgz && rm release-state.tgz
+
       # workmanager_apple 0.9.11 references iOS 26 SDK types.
-      # The Intel runner defaults to Xcode 16.4, even with Xcode 26 installed.
       - name: Select Xcode 26.3
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -48,13 +103,19 @@ jobs:
             exit 1
           fi
 
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
       - name: Cache Flutter pub packages
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: flutter-pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          key: flutter-pub-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
-            flutter-pub-${{ runner.os }}-
+            flutter-pub-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache CocoaPods
         uses: actions/cache@v4
@@ -62,65 +123,66 @@ jobs:
           path: |
             ios/Pods
             ~/Library/Caches/CocoaPods
-          key: cocoapods-${{ runner.os }}-v2-${{ hashFiles('ios/Podfile.lock') }}
+          key: cocoapods-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            cocoapods-${{ runner.os }}-v2-
+            cocoapods-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Xcode DerivedData
         uses: actions/cache@v4
         with:
           path: ~/Library/Developer/Xcode/DerivedData
-          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          key: xcode-deriveddata-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            xcode-deriveddata-${{ runner.os }}-
-
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.1'
-          channel: stable
-          cache: true
+            xcode-deriveddata-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Setup CocoaPods
-        run: |
-          cd ios
-          pod install
-          cd ..
+      # `flutter build ios` runs pod install itself without --repo-update
+      - name: Build iOS app (no codesign)
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD: ${{ needs.prepare.outputs.build }}
+        run: >
+          flutter build ios --release --no-codesign
+          --build-name "$VERSION" --build-number "$BUILD"
+          --dart-define="UPDATE_MANIFEST_URL=$SITE_URL/update.json"
 
-      - name: Build and Package iOS IPA
+      - name: Package IPA
         run: |
-          flutter build ipa --no-codesign --release
+          APP="build/ios/iphoneos/Runner.app"
+          test -d "$APP" || { echo "::error::$APP not found"; exit 1; }
           OUTPUT_DIR="build/ios/ipa"
           mkdir -p "$OUTPUT_DIR/Payload"
-          ARCHIVE_APP="build/ios/archive/Runner.xcarchive/Products/Applications/Runner.app"
-          if [ -d "$ARCHIVE_APP" ]; then
-            cp -R "$ARCHIVE_APP" "$OUTPUT_DIR/Payload/"
-            cd "$OUTPUT_DIR"
-            zip -r -y "RailPro.ipa" "Payload"
-            cd - > /dev/null
-            echo "Successfully packaged RailPro.ipa"
-          else
-            echo "Error: Archive app not found"
-            exit 1
-          fi
+          cp -R "$APP" "$OUTPUT_DIR/Payload/"
+          (cd "$OUTPUT_DIR" && zip -qr -y RailPro.ipa Payload)
 
-      - name: Upload iOS IPA Artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: rail-pro-ios-ipa
           path: build/ios/ipa/RailPro.ipa
+          retention-days: 7
 
-  publish:
-    name: Build Android APK and Publish Release
-    needs: [build-ios]
+  # ---------------------------------------------------------------
+  # 2b. Android (runs in parallel with iOS)
+  # ---------------------------------------------------------------
+  build-android:
+    name: Test and build Android APK
+    needs: [prepare]
     runs-on: ubuntu-latest
-    environment: production
+    timeout-minutes: 30
+    environment: production    # signing secrets
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-state
+
+      - name: Apply release state
+        run: tar -xzf release-state.tgz && rm release-state.tgz
 
       - uses: actions/setup-java@v4
         with:
@@ -132,6 +194,12 @@ jobs:
         with:
           cache-read-only: false
 
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
       - name: Cache Flutter pub packages
         uses: actions/cache@v4
         with:
@@ -140,12 +208,6 @@ jobs:
           restore-keys: |
             flutter-pub-${{ runner.os }}-
 
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.47.1'
-          channel: stable
-          cache: true
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -153,17 +215,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Assign the next version (automatic force update)
-        id: version
-        env:
-          FORCE: ${{ inputs.force_update != false }}
-        run: |
-          if [ "$FORCE" = "false" ]; then
-            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json
-          else
-            python scripts/release.py prepare --site-url "$SITE_URL" --release-repo "$PUBLIC_REPO" --previous-manifest-url https://railautomation-1993.web.app/update.json --force
-          fi
 
       - name: Analyze and test
         run: |
@@ -184,18 +235,53 @@ jobs:
 
       - name: Build the signed APK
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-          BUILD: ${{ steps.version.outputs.build }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUILD: ${{ needs.prepare.outputs.build }}
         run: >
           flutter build apk --release
           --build-name "$VERSION" --build-number "$BUILD"
           --dart-define="UPDATE_MANIFEST_URL=$SITE_URL/update.json"
 
-      - name: Download iOS IPA Artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rail-pro-android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 7
+
+  # ---------------------------------------------------------------
+  # 3. Bundle the website and publish (waits for both builds)
+  # ---------------------------------------------------------------
+  publish:
+    name: Publish release
+    needs: [prepare, build-ios, build-android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-state
+
+      - name: Apply release state
+        run: tar -xzf release-state.tgz && rm release-state.tgz
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: rail-pro-android-apk
+          path: build/app/outputs/flutter-apk
+
+      - uses: actions/download-artifact@v4
         with:
           name: rail-pro-ios-ipa
           path: build/ios/ipa
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
 
       - name: Bundle the website
         run: python scripts/release.py bundle
@@ -210,7 +296,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: signed-release-${{ steps.version.outputs.version }}
+          name: signed-release-${{ needs.prepare.outputs.version }}
           path: |
             build/app/outputs/flutter-apk/app-release.apk
             build/ios/ipa/RailPro.ipa
