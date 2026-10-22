@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   build-ios:
-    runs-on: macos-15-intel
+    runs-on: macos-15          # Apple Silicon M2, significantly faster than macos-15-intel
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -56,9 +56,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.pub-cache
-          key: flutter-pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          key: flutter-pub-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/pubspec.lock') }}
           restore-keys: |
-            flutter-pub-${{ runner.os }}-
+            flutter-pub-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache CocoaPods
         uses: actions/cache@v4
@@ -66,17 +66,17 @@ jobs:
           path: |
             ios/Pods
             ~/Library/Caches/CocoaPods
-          key: cocoapods-${{ runner.os }}-v2-${{ hashFiles('ios/Podfile.lock') }}
+          key: cocoapods-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            cocoapods-${{ runner.os }}-v2-
+            cocoapods-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Xcode DerivedData
         uses: actions/cache@v4
         with:
           path: ~/Library/Developer/Xcode/DerivedData
-          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('ios/Podfile.lock') }}
+          key: xcode-deriveddata-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Podfile.lock') }}
           restore-keys: |
-            xcode-deriveddata-${{ runner.os }}-
+            xcode-deriveddata-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
