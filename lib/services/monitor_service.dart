@@ -1138,7 +1138,7 @@ class MonitorService extends ChangeNotifier {
   /// Single-shot timer, re-armed after every check, so a changed database
   /// interval takes effect on the very next cycle. The background service
   /// isolate drives its own schedule via [nextCheckDelay].
-  void _scheduleNext() {
+  void _scheduleNext({Duration? overrideDelay}) {
     _checkTimer?.cancel();
     _checkTimer = null;
     if (!_isMonitoring ||
@@ -1147,7 +1147,7 @@ class MonitorService extends ChangeNotifier {
         _foregroundSuspended) {
       return;
     }
-    final delay = nextCheckDelay();
+    final delay = overrideDelay ?? nextCheckDelay();
     _intervalSeconds = delay.inSeconds < 1 ? 1 : delay.inSeconds;
     _secondsUntilNextCheck = _intervalSeconds;
     _checkTimer = Timer(delay, _executeCheck);
@@ -1569,6 +1569,9 @@ class MonitorService extends ChangeNotifier {
               // Keep a partial/unknown reservation for review; never replay it.
               stopMonitoring();
               _scheduleReservationExpiryWatch();
+            } else if (_isMonitoring && bookingIntent.autoReserve) {
+              // User requirement: if one booking failed, retry another booking after 3-4s
+              _scheduleNext(overrideDelay: const Duration(milliseconds: 3500));
             }
             notifyListeners();
             return;

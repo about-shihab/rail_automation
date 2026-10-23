@@ -34,6 +34,34 @@ class IntermediateJourney {
 
   int get seats =>
       min(firstSeat.seatCounts.online, secondSeat.seatCounts.online);
+
+  int? get layoverMinutes {
+    final arr = IntermediateStationSearch.parseMinutes(first.arrivalDateTime);
+    final dep = IntermediateStationSearch.parseMinutes(second.departureDateTime);
+    if (arr != null && dep != null) {
+      var diff = dep - arr;
+      if (diff < 0) diff += 24 * 60;
+      return diff;
+    }
+    return null;
+  }
+
+  String layoverText({required bool isBangla}) {
+    final mins = layoverMinutes;
+    if (mins == null) {
+      return isBangla ? '$via-এ যাত্রাবিরতি' : 'Transfer at $via';
+    }
+    if (mins >= 60) {
+      final h = mins ~/ 60;
+      final m = mins % 60;
+      return isBangla
+          ? '$via-এ $h ঘণ্টা ${m > 0 ? "$m মি. " : ""}যাত্রাবিরতি'
+          : '$h hr ${m > 0 ? "$m min " : ""}layover at $via';
+    }
+    return isBangla
+        ? '$via-এ $mins মিনিট যাত্রাবিরতি'
+        : '$mins min layover at $via';
+  }
 }
 
 /// Seat availability and pricing for a specific seat class across both legs of a via route.
@@ -640,10 +668,14 @@ class IntermediateStationSearch {
             ];
             onResults(List.unmodifiable(current));
           }
+          // Pacing delay between candidate stations to prevent server overload/429
+          if (queue.isNotEmpty && cancelled?.call() != true) {
+            await Future.delayed(const Duration(milliseconds: 350));
+          }
         }
       }
 
-      final concurrency = min(5, totalCandidateStops);
+      final concurrency = min(2, totalCandidateStops);
       await Future.wait(List.generate(concurrency, (_) => worker()));
     }
 
