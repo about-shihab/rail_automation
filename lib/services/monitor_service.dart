@@ -544,8 +544,20 @@ class MonitorService extends ChangeNotifier {
 
   void removeTrainFromMonitoring(String trainName) {
     final clean = trainName.trim();
-    _targetTrains.removeWhere((t) => t.toLowerCase() == clean.toLowerCase());
-    _targetTrain = _targetTrains.isNotEmpty ? _targetTrains.join(', ') : null;
+    if (_targetTrains.isEmpty) {
+      stopMonitoring();
+      return;
+    }
+    _targetTrains.removeWhere(
+      (t) => t.toLowerCase() == clean.toLowerCase() || _matchTrain(t, clean),
+    );
+    if (_targetTrains.isEmpty) {
+      _targetTrain = null;
+      bookingIntent = bookingIntent.copyWith(targetTrains: const []);
+      stopMonitoring();
+      return;
+    }
+    _targetTrain = _targetTrains.join(', ');
     bookingIntent = bookingIntent.copyWith(targetTrains: _targetTrains);
     _refreshDepartureDeadline();
     _addLog(

@@ -116,9 +116,17 @@ class TrainSelectionScreen extends StatelessWidget {
             AppShell.goTo(context, AppShell.tabMonitor);
           } else if (action == 'remove') {
             monitor.removeTrainFromMonitoring(train);
+            final lang = LanguageService.of(context);
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Removed $train from active auto-booking.'),
+                content: Text(
+                  monitor.isMonitoring
+                      ? 'Removed $train from active auto-booking.'
+                      : lang.tr(
+                          'Search monitor removed.',
+                          'অনুসন্ধান মনিটর বন্ধ করা হয়েছে।',
+                        ),
+                ),
                 behavior: SnackBarBehavior.floating,
               ),
             );
