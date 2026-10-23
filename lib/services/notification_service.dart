@@ -9,8 +9,6 @@ import 'package:provider/provider.dart';
 import '../views/booking_screen.dart';
 import '../views/announcement_screen.dart';
 import '../views/webview_login_screen.dart';
-import '../views/intermediate_station_screen.dart';
-import '../models/train_trip.dart';
 import '../models/auth_session.dart';
 import '../views/seat_booking_screen.dart';
 import 'seat_layout_continuation.dart';
@@ -270,42 +268,15 @@ class NotificationService {
       _handleTurnstileRequest(payload);
       return;
     }
-    if (payload.startsWith('rail://via-ticket')) {
-      final uri = Uri.tryParse(payload);
-      if (uri != null) {
-        final navigator = navigatorKey.currentState;
-        if (navigator == null) {
-          _pendingBooking = payload;
-          return;
-        }
-        _pendingBooking = null;
-        final from = uri.queryParameters['from'] ?? '';
-        final to = uri.queryParameters['to'] ?? '';
-        final date = uri.queryParameters['date'] ?? '';
-        final trainName = uri.queryParameters['train'] ?? '';
-        final seatClass = uri.queryParameters['class'];
-        final train = TrainTrip.fromJson({
-          'trip_number': trainName,
-          'train_model': trainName,
-          'departure_date_time': '',
-          'arrival_date_time': '',
-          'departure_full_date': date,
-          'seat_types': [],
-          'boarding_points': [],
-        });
-        navigator.push(
-          MaterialPageRoute(
-            builder: (_) => IntermediateStationScreen(
-              train: train,
-              from: from,
-              to: to,
-              date: date,
-              seatClass: seatClass,
-            ),
-          ),
-        );
+    if (payload.startsWith('rail://via-ticket') || payload == 'rail://monitor') {
+      final navigator = navigatorKey.currentState;
+      if (navigator == null || !navigator.mounted) {
+        _pendingBooking = payload;
         return;
       }
+      _pendingBooking = null;
+      AppShell.openTab(navigator, AppShell.tabMonitor);
+      return;
     }
     final uri = Uri.tryParse(payload);
     if (uri == null ||
@@ -728,6 +699,9 @@ class NotificationService {
               details.actionId == 'solve_turnstile' ||
               details.payload == 'rail://turnstile') {
             openBooking('rail://turnstile');
+          } else if (details.actionId == 'book_via' ||
+              details.actionId == 'view_monitor') {
+            openBooking(details.payload ?? 'rail://via-ticket');
           } else {
             openBooking(details.payload);
           }
@@ -1099,8 +1073,8 @@ class NotificationService {
         ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()
         : '$seatCount';
     final body = bn
-        ? '$viaStation হয়ে $numberটি $seatType আসন ($fromCity → $viaStation → $toCity)। বুক করতে চাপুন।'
-        : 'Split journey via $viaStation ($number $seatType seats: $fromCity → $viaStation → $toCity). Tap to book.';
+        ? '$viaStation হয়ে $numberটি $seatType আসন ($fromCity → $viaStation → $toCity)। মনিটরে দেখতে চাপুন।'
+        : 'Split journey via $viaStation ($number $seatType seats: $fromCity → $viaStation → $toCity). Tap to open monitor.';
 
     final payload =
         'rail://via-ticket?from=${Uri.encodeComponent(fromCity)}&to=${Uri.encodeComponent(toCity)}&date=${Uri.encodeComponent(travelDate)}&train=${Uri.encodeComponent(trainName)}&via=${Uri.encodeComponent(viaStation)}&class=${Uri.encodeComponent(seatType)}';

@@ -39,17 +39,22 @@ class AppShell extends StatefulWidget {
   static final ValueNotifier<int> tab = ValueNotifier<int>(0);
   static bool _alive = false;
 
-  /// Close any pushed pages and switch to [index].
-  static void goTo(BuildContext context, int index) {
+  /// Switch the root shell to [index] using [navigator].
+  static void openTab(NavigatorState navigator, int index) {
+    tab.value = index;
     if (_alive) {
-      Navigator.of(context).popUntil((r) => r.isFirst);
-      tab.value = index;
+      navigator.popUntil((r) => r.isFirst);
     } else {
-      Navigator.of(context).pushAndRemoveUntil(
+      navigator.pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => AppShell(initialTab: index)),
         (_) => false,
       );
     }
+  }
+
+  /// Close any pushed pages and switch to [index].
+  static void goTo(BuildContext context, int index) {
+    openTab(Navigator.of(context), index);
   }
 
   @override
