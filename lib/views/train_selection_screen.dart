@@ -1261,13 +1261,13 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
       final totalFare = fare1 + fare2;
 
       return Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF042017) : const Color(0xFFECFDF5),
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: const Color(0xFF10B981).withValues(alpha: 0.4),
-            width: 1.2,
+            color: const Color(0xFF10B981).withValues(alpha: 0.35),
+            width: 1,
           ),
         ),
         child: Column(
@@ -1275,88 +1275,62 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
           children: [
             Row(
               children: [
-                const Icon(Icons.alt_route_rounded, size: 18, color: Color(0xFF10B981)),
-                const SizedBox(width: 8),
+                const Icon(Icons.alt_route_rounded, size: 16, color: Color(0xFF10B981)),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '${lang.tr("Seat Available via", "ভায়া")} ${best.via} ${lang.tr("Station", "স্টেশন")}!',
+                    '${lang.tr("Via", "ভায়া")} ${best.via} (${best.seats} ${lang.tr("seats", "আসন")})',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 12,
                       color: Color(0xFF10B981),
                     ),
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${best.seats} ${lang.tr("seats", "আসন")}',
-                    style: const TextStyle(
-                      fontSize: 10.5,
-                      fontWeight: FontWeight.w700,
-                      color: Color(0xFF10B981),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Text(
-              '${widget.from} ➔ ${best.via} ➔ ${widget.to}',
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary(isDark),
-              ),
-            ),
-            const SizedBox(height: 4),
-            // Availability cleanly displayed by seat type
-            Row(
-              children: [
-                Text(
-                  '${best.firstSeat.displayName}: ${best.firstSeat.seatCounts.online} · ${best.secondSeat.displayName}: ${best.secondSeat.seatCounts.online}',
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: AppColors.textMuted(isDark),
-                  ),
-                ),
-                const Spacer(),
                 if (totalFare > 0)
                   Text(
                     '৳${totalFare.toStringAsFixed(0)}',
                     style: TextStyle(
-                      fontSize: 12,
+                      fontSize: 11.5,
                       fontWeight: FontWeight.bold,
                       color: AppColors.textPrimary(isDark),
                     ),
                   ),
               ],
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 3),
+            Text(
+              '${widget.from} ➔ ${best.via} ➔ ${widget.to} · ${best.firstSeat.displayName}: ${best.firstSeat.seatCounts.online} · ${best.secondSeat.displayName}: ${best.secondSeat.seatCounts.online}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 10.5,
+                color: AppColors.textMuted(isDark),
+              ),
+            ),
+            const SizedBox(height: 6),
             Wrap(
               spacing: 6,
-              runSpacing: 6,
+              runSpacing: 4,
               children: [
                 ElevatedButton.icon(
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
                     elevation: 0,
                   ),
                   onPressed: () => _bookLeg(best, true),
-                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  icon: const Icon(Icons.bolt_rounded, size: 12),
                   label: Text(
-                    '${lang.tr("Book Leg 1", "১ম অংশ বুক")}: ${best.via}',
-                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                    '${lang.tr("Book 1", "১ম বুক")}: ${best.via}',
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                   ),
                 ),
                 ElevatedButton.icon(
@@ -1364,32 +1338,32 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
                     backgroundColor: const Color(0xFF10B981),
                     foregroundColor: Colors.white,
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
                     elevation: 0,
                   ),
                   onPressed: () => _bookLeg(best, false),
-                  icon: const Icon(Icons.bolt_rounded, size: 13),
+                  icon: const Icon(Icons.bolt_rounded, size: 12),
                   label: Text(
-                    '${lang.tr("Book Leg 2", "২য় অংশ বুক")}: ${widget.to}',
-                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                    '${lang.tr("Book 2", "২য় বুক")}: ${widget.to}',
+                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
                   ),
                 ),
                 OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(6),
                     ),
                   ),
                   onPressed: widget.onOpenFull,
-                  icon: const Icon(Icons.search_rounded, size: 13),
+                  icon: const Icon(Icons.search_rounded, size: 12),
                   label: Text(
                     lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
-                    style: const TextStyle(fontSize: 10.5),
+                    style: const TextStyle(fontSize: 10),
                   ),
                 ),
               ],
@@ -1399,62 +1373,7 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
       );
     }
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.primary.withValues(alpha: 0.25)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.alt_route_rounded, size: 20, color: AppColors.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  lang.tr('Try an intermediate station', 'মধ্যবর্তী স্টেশন দিয়ে চেষ্টা করুন'),
-                  style: TextStyle(fontWeight: FontWeight.bold, color: AppColors.textPrimary(isDark)),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(
-            lang.tr(
-              'Check two-ticket options or seats between specific stops.',
-              'দুই টিকিটের বিকল্প বা নির্দিষ্ট স্টেশনের মধ্যে আসন দেখুন।',
-            ),
-            style: TextStyle(fontSize: 12, color: AppColors.textMuted(isDark)),
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              TextButton.icon(
-                onPressed: widget.onOpenFull,
-                icon: const Icon(Icons.search_rounded, size: 18),
-                label: Text(
-                  lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
-                ),
-              ),
-              if (_loading) ...[
-                const SizedBox(width: 8),
-                const SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppColors.primary,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ],
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }
 

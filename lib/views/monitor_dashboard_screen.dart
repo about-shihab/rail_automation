@@ -2532,18 +2532,22 @@ class _PaymentTimerBarState extends State<_PaymentTimerBar>
                     size: 16,
                   ),
                   const SizedBox(width: 7),
-                  Text(
-                    lang.tr(
-                      'Complete purchase within',
-                      'টিকেট ক্রয় সম্পন্ন করুন',
-                    ),
-                    style: TextStyle(
-                      color: timerColor,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12.5,
+                  Expanded(
+                    child: Text(
+                      lang.tr(
+                        'Complete purchase within',
+                        'টিকেট ক্রয় সম্পন্ন করুন',
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: timerColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 12.5,
+                      ),
                     ),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 8),
                   // Countdown digits
                   Text(
                     '${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}',
@@ -4130,19 +4134,23 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                 color: Color(0xFF10B981),
               ),
               const SizedBox(width: 8),
-              Text(
-                lang.tr(
-                  'In-Between Station Tickets',
-                  'ভায়া / মধ্যবর্তী স্টেশনের টিকেট',
-                ),
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.bold,
-                  color: AppColors.textPrimary(isDark),
+              Expanded(
+                child: Text(
+                  lang.tr(
+                    'In-Between Station Tickets',
+                    'ভায়া / মধ্যবর্তী স্টেশনের টিকেট',
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary(isDark),
+                  ),
                 ),
               ),
-              const Spacer(),
-              if (uniqueViaLogs.isNotEmpty)
+              if (uniqueViaLogs.isNotEmpty) ...[
+                const SizedBox(width: 8),
                 Container(
                   padding: const EdgeInsets.symmetric(
                     horizontal: 7,
@@ -4161,6 +4169,7 @@ class _MonitorActivityLogCardState extends State<_MonitorActivityLogCard> {
                     ),
                   ),
                 ),
+              ],
             ],
           ),
 
