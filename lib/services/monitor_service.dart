@@ -461,6 +461,7 @@ class MonitorService extends ChangeNotifier {
 
   // Getters
   bool get isMonitoring => _isMonitoring;
+  bool get isSearchingVia => _isSearchingVia;
   DateTime? get departureAt => _expiresAt;
   DateTime? get scheduledStartAt => JourneySchedule.salesOpenAt(_dateOfJourney);
   bool get isScheduled =>
@@ -1607,6 +1608,7 @@ class MonitorService extends ChangeNotifier {
     if (_isSearchingVia || !_isMonitoring || _disposed) return;
     _isSearchingVia = true;
     _lastViaSearchAt = DateTime.now();
+    notifyListeners();
     try {
       final targets = trains.where((t) => isTrainMonitored(t.tripNumber)).toList();
       if (targets.isEmpty) return;
@@ -1682,6 +1684,7 @@ class MonitorService extends ChangeNotifier {
       _addLog('Via search check: ${friendlyErrorMessage(e)}');
     } finally {
       _isSearchingVia = false;
+      notifyListeners();
     }
   }
 

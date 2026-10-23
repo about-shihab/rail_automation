@@ -37,7 +37,9 @@ class IntermediateJourney {
 
   int? get layoverMinutes {
     final arr = IntermediateStationSearch.parseMinutes(first.arrivalDateTime);
-    final dep = IntermediateStationSearch.parseMinutes(second.departureDateTime);
+    final dep = IntermediateStationSearch.parseMinutes(
+      second.departureDateTime,
+    );
     if (arr != null && dep != null) {
       var diff = dep - arr;
       if (diff < 0) diff += 24 * 60;
@@ -663,9 +665,7 @@ class IntermediateStationSearch {
             stations[stationIdx].name,
           );
           if (list.isNotEmpty && onResults != null) {
-            final current = [
-              for (final items in stationResults) ...items,
-            ];
+            final current = [for (final items in stationResults) ...items];
             onResults(List.unmodifiable(current));
           }
           // Pacing delay between candidate stations to prevent server overload/429
@@ -675,16 +675,15 @@ class IntermediateStationSearch {
         }
       }
 
-      final concurrency = min(2, totalCandidateStops);
+      // Strictly sequential station checks (concurrency=1) with pacing delay to protect server
+      final concurrency = 1;
       await Future.wait(List.generate(concurrency, (_) => worker()));
     }
 
     if (cancelled?.call() != true) {
       onProgress?.call(totalCandidateStops, totalCandidateStops, '');
     }
-    return [
-      for (final items in stationResults) ...items,
-    ];
+    return [for (final items in stationResults) ...items];
   }
 
   /// Searches live availability between any specific pair of stations on this train.

@@ -1,6 +1,7 @@
 import '../services/railway_credentials_rejected.dart';
 import '../services/login_flow.dart';
 import '../services/login_recovery_required.dart';
+import '../services/rail_api_client.dart';
 
 import 'dart:async';
 
@@ -194,6 +195,38 @@ class _SearchScreenState extends State<SearchScreen>
           ),
           backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    if (_loading) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            lang.tr(
+              'Please slow down. A search is already in progress.',
+              'অনুগ্রহ করে অপেক্ষা করুন। অনুসন্ধান প্রক্রিয়াধীন আছে।',
+            ),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+    final remainingSec = RailApiClient.cooldownRemaining.inSeconds;
+    if (remainingSec > 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            lang.tr(
+              'Server is busy. Please slow down and wait $remainingSec seconds.',
+              'সার্ভারে অতিরিক্ত চাপ। গতি কমিয়ে $remainingSec সেকেন্ড পর চেষ্টা করুন।',
+            ),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          backgroundColor: AppColors.warning,
         ),
       );
       return;

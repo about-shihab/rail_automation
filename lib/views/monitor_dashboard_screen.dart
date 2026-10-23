@@ -258,6 +258,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final trainName = (p?['train']?['trip_number']?.toString().isNotEmpty == true)
         ? p!['train']['trip_number'].toString()
         : (m.targetTrains.isNotEmpty ? m.targetTrains.join(', ') : 'Train');
+    final lang = LanguageService.of(context);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -336,6 +337,43 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                       isFirstLeg: isFirstLeg,
                       fromCity: fromCity,
                       toCity: toCity,
+                    ),
+                  ),
+                ] else if (m.isSearchingVia) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                        color: isDark ? Colors.white10 : Colors.black12,
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.6,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isDark ? const Color(0xFF10B981) : const Color(0xFF059669),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          lang.tr('Checking alternative via routes...', 'বিকল্প ভায়া রুট খোঁজা হচ্ছে...'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isDark ? Colors.white70 : const Color(0xFF475569),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],

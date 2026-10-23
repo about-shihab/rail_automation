@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -116,6 +117,68 @@ void main() {
                 ],
               },
             }),
+            200,
+          );
+        }),
+      );
+      monitor.dispose();
+      pro.dispose();
+    },
+  );
+
+  testWidgets(
+    'shows simple loading indicator while lazy loading via station',
+    (tester) async {
+      tester.view.physicalSize = const Size(1080, 2200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await AuthSession.save(auth);
+      await LanguageService.instance.setLanguage(AppLanguage.en);
+      CreditService().setCreditsForTesting(5);
+      final pro = ProService();
+      final monitor = MonitorService(proService: pro);
+      final original = TrainTrip.fromJson(train([seat('S_CHAIR', 1, 0)]));
+
+      final completer = Completer<http.Response>();
+
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            MultiProvider(
+              providers: [
+                ChangeNotifierProvider.value(value: LanguageService.instance),
+                ChangeNotifierProvider.value(value: CreditService()),
+                ChangeNotifierProvider.value(value: monitor),
+              ],
+              child: MaterialApp(
+                home: TrainSelectionScreen(
+                  searchResponse: TripSearchResponse(trains: [original]),
+                  fromCity: 'From',
+                  toCity: 'To',
+                  dateOfJourney: '21-Oct-2026',
+                  initialClass: 'S_CHAIR',
+                ),
+              ),
+            ),
+          );
+          await tester.pump();
+          expect(
+            find.textContaining('via'),
+            findsWidgets,
+          );
+          completer.complete(
+            http.Response(jsonEncode({'data': {'routes': routes}}), 200),
+          );
+          await tester.pumpAndSettle();
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient((request) async {
+          if (request.url.path.endsWith('/train-routes')) {
+            return completer.future;
+          }
+          return http.Response(
+            jsonEncode({'data': {'trains': []}}),
             200,
           );
         }),

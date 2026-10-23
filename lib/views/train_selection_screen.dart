@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'app_shell.dart';
 import 'package:provider/provider.dart';
@@ -19,6 +21,7 @@ import 'watch_options_dialog.dart';
 import 'intermediate_station_screen.dart';
 import '../services/login_flow.dart';
 import '../services/intermediate_station_search.dart';
+import '../services/rail_api_client.dart';
 import '../utils/railway_stations.dart';
 
 class TrainSelectionScreen extends StatelessWidget {
@@ -784,6 +787,65 @@ class TrainSelectionScreen extends StatelessWidget {
               ),
             ),
 
+          // ── Sequential Via Route Pacing Banner ────────────────────────────
+          SliverToBoxAdapter(
+            child: ValueListenableBuilder<int>(
+              valueListenable: _LazyIntermediateQueue.queueCountNotifier,
+              builder: (context, queueCount, _) {
+                final cooldown = RailApiClient.cooldownRemaining;
+                final isThrottled = cooldown > Duration.zero;
+                if (queueCount <= 0 && !isThrottled) {
+                  return const SizedBox.shrink();
+                }
+                return Container(
+                  margin: const EdgeInsets.fromLTRB(16, 6, 16, 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isThrottled
+                        ? (isDark ? const Color(0xFF2E1500) : const Color(0xFFFFF7ED))
+                        : (isDark ? const Color(0xFF0B192C) : const Color(0xFFF0FDF4)),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isThrottled
+                          ? const Color(0xFFF97316).withValues(alpha: 0.6)
+                          : const Color(0xFF10B981).withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        isThrottled ? Icons.hourglass_top_rounded : Icons.sync_rounded,
+                        size: 15,
+                        color: isThrottled ? const Color(0xFFF97316) : const Color(0xFF10B981),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          isThrottled
+                              ? lang.tr(
+                                  'Railway server busy. Pacing searches smoothly to protect your session.',
+                                  'রেলওয়ে সার্ভারে অতিরিক্ত চাপ। সেশন সচল রাখতে অনুসন্ধান ধীরে পরিচালনা করা হচ্ছে।',
+                                )
+                              : lang.tr(
+                                  'Checking via routes one train at a time to prevent server congestion...',
+                                  'সার্ভারের চাপ কমাতে একটি করে ট্রেনের ভায়া রুট খোঁজা হচ্ছে...',
+                                ),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isThrottled
+                                ? (isDark ? const Color(0xFFFDBA74) : const Color(0xFFC2410C))
+                                : (isDark ? const Color(0xFF6EE7B7) : const Color(0xFF047857)),
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+
           // ── Train Cards ──────────────────────────────────────────────────
           trains.isEmpty
               ? SliverFillRemaining(
@@ -1152,8 +1214,95 @@ class _LazyIntermediateSearchCard extends StatefulWidget {
   State<_LazyIntermediateSearchCard> createState() => _LazyIntermediateSearchCardState();
 }
 
+class _LazyTrainTask {
+  final String key;
+  final String trainNumber;
+  final bool Function() isMounted;
+  final void Function(bool inQueue, bool loading) onStatusChanged;
+  final Future<void> Function() execute;
+
+  _LazyTrainTask({
+    required this.key,
+    required this.trainNumber,
+    required this.isMounted,
+    required this.onStatusChanged,
+    required this.execute,
+  });
+}
+
+/// Sequential queue coordinator for intermediate station lazy searches.
+/// Ensures searches happen strictly one train at a time, spaced out by pacing delay
+/// to protect Bangladesh Railway servers from receiving concurrent bursts.
+class _LazyIntermediateQueue {
+  static final List<_LazyTrainTask> _tasks = [];
+  static bool _running = false;
+  static final ValueNotifier<int> queueCountNotifier = ValueNotifier(0);
+  static final ValueNotifier<String?> currentTrainNotifier = ValueNotifier(null);
+
+  static void enqueue(_LazyTrainTask task) {
+    _tasks.removeWhere((t) => t.key == task.key);
+    _tasks.add(task);
+    _notifyQueue();
+    scheduleMicrotask(_processNext);
+  }
+
+  static void cancel(String key) {
+    _tasks.removeWhere((t) => t.key == key);
+    _notifyQueue();
+  }
+
+  static void _notifyQueue() {
+    scheduleMicrotask(() {
+      queueCountNotifier.value = _tasks.length;
+    });
+  }
+
+  static Future<void> _processNext() async {
+    if (_running) return;
+    _running = true;
+
+    try {
+      while (_tasks.isNotEmpty) {
+        final task = _tasks.removeAt(0);
+        _notifyQueue();
+
+        if (!task.isMounted()) {
+          continue;
+        }
+
+        // Check if server rate limit cooldown is active
+        final cooldown = RailApiClient.cooldownRemaining;
+        if (cooldown > Duration.zero) {
+          await Future.delayed(cooldown);
+        }
+
+        currentTrainNotifier.value = task.trainNumber;
+        task.onStatusChanged(false, true); // inQueue=false, loading=true
+
+        try {
+          await task.execute();
+        } catch (_) {
+          // Handled within task
+        } finally {
+          currentTrainNotifier.value = null;
+        }
+
+        // Pacing delay between trains so requests are strictly sequential and spaced out
+        if (_tasks.isNotEmpty) {
+          await Future.delayed(const Duration(milliseconds: 500));
+        }
+      }
+    } finally {
+      _running = false;
+      currentTrainNotifier.value = null;
+      _notifyQueue();
+    }
+  }
+}
+
 class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard> {
   static final Map<String, List<IntermediateJourney>> _cache = {};
+  bool _inQueue = false;
   bool _loading = false;
   List<IntermediateJourney> _results = [];
 
@@ -1166,21 +1315,46 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
     final cached = _cache[_key];
     if (cached != null) {
       _results = cached;
+      _inQueue = false;
+      _loading = false;
     } else {
-      _startLazySearch();
+      _inQueue = true;
+      _loading = false;
+      _LazyIntermediateQueue.enqueue(
+        _LazyTrainTask(
+          key: _key,
+          trainNumber: widget.train.tripNumber,
+          isMounted: () => mounted,
+          onStatusChanged: (inQueue, loading) {
+            if (mounted) {
+              setState(() {
+                _inQueue = inQueue;
+                _loading = loading;
+              });
+            }
+          },
+          execute: _runLazySearch,
+        ),
+      );
     }
   }
 
-  Future<void> _startLazySearch() async {
-    if (_loading) return;
-    setState(() {
-      _loading = true;
-    });
+  @override
+  void dispose() {
+    _LazyIntermediateQueue.cancel(_key);
+    super.dispose();
+  }
 
+  Future<void> _runLazySearch() async {
     try {
       final auth = await AuthSession.load();
       if (auth == null || !auth.isValid) {
-        if (mounted) setState(() { _loading = false; });
+        if (mounted) {
+          setState(() {
+            _loading = false;
+            _inQueue = false;
+          });
+        }
         return;
       }
 
@@ -1207,12 +1381,14 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
           _results = res;
           _cache[_key] = res;
           _loading = false;
+          _inQueue = false;
         });
       }
     } catch (_) {
       if (mounted) {
         setState(() {
           _loading = false;
+          _inQueue = false;
         });
       }
     }
@@ -1352,6 +1528,62 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
               seat: best.secondSeat,
               isDark: isDark,
               onBook: () => _bookLeg(best, false),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // Simple, clean loader while searching or waiting in sequential queue
+    if (_results.isEmpty && (_loading || _inQueue)) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isDark ? Colors.white12 : Colors.grey.shade300,
+            width: 0.9,
+          ),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.8,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  isDark ? const Color(0xFF10B981) : const Color(0xFF059669),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                _inQueue
+                    ? lang.tr('Queued for via search...', 'ভায়া অনুসন্ধানের অপেক্ষায়...')
+                    : lang.tr('Checking via routes...', 'ভায়া রুট খোঁজা হচ্ছে...'),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark ? Colors.white70 : const Color(0xFF475569),
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+            InkWell(
+              onTap: widget.onOpenFull,
+              child: Text(
+                lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Color(0xFF10B981),
+                  decoration: TextDecoration.underline,
+                ),
+              ),
             ),
           ],
         ),
