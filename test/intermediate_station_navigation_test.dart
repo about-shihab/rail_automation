@@ -15,6 +15,8 @@ import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/monitor_service.dart';
 import 'package:rail_automation/services/pro_service.dart';
 import 'package:rail_automation/views/train_selection_screen.dart';
+import 'package:rail_automation/views/seat_booking_screen.dart';
+import 'package:rail_automation/services/intermediate_station_search.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -41,6 +43,8 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
     FlutterSecureStorage.setMockInitialValues({});
+    TrainSelectionScreen.clearLazyCache();
+    TrainRouteCache.clear();
   });
 
   testWidgets(
@@ -77,24 +81,25 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          await tester.tap(find.text('Search via intermediate station'));
+          expect(find.text('Via Route Found: Via'), findsOneWidget);
           await tester.pump();
           await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 50)),
           );
           await tester.pumpAndSettle();
-          expect(find.text('From → Via → To'), findsOneWidget);
-          expect(find.textContaining('two separate tickets'), findsOneWidget);
-          await tester.tap(find.text('View leg 2: Via → To'));
+          expect(find.text('Leg 1'), findsOneWidget);
+          expect(find.textContaining('separate single tickets'), findsOneWidget);
+          expect(find.text('Search via intermediate station'), findsNothing);
+          await tester.tap(find.text('Book 2'));
           await tester.pumpAndSettle();
-          final screen = tester.widget<TrainSelectionScreen>(
-            find.byType(TrainSelectionScreen).last,
+          final screen = tester.widget<SeatBookingScreen>(
+            find.byType(SeatBookingScreen).last,
           );
           expect(screen.fromCity, 'Via');
           expect(screen.toCity, 'To');
           expect(screen.dateOfJourney, '22-Oct-2026');
           expect(
-            screen.searchResponse.trains.single.seatTypes.single.tripRouteId,
+            screen.seatType.tripRouteId,
             102,
           );
           await tester.pumpWidget(const SizedBox.shrink());
@@ -164,7 +169,7 @@ void main() {
           );
           await tester.pump();
           expect(
-            find.textContaining('via'),
+            find.byType(CircularProgressIndicator),
             findsWidgets,
           );
           completer.complete(

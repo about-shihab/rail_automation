@@ -18,7 +18,6 @@ import 'webview_login_screen.dart';
 import 'seat_booking_screen.dart';
 import 'recharge_credit_dialog.dart';
 import 'watch_options_dialog.dart';
-import 'intermediate_station_screen.dart';
 import '../services/login_flow.dart';
 import '../services/intermediate_station_search.dart';
 import '../services/rail_api_client.dart';
@@ -37,6 +36,12 @@ class TrainSelectionScreen extends StatelessWidget {
     required this.dateOfJourney,
     this.initialClass,
   });
+
+  @visibleForTesting
+  static void clearLazyCache() {
+    _LazyIntermediateSearchCardState.clearCache();
+    _LazyIntermediateQueue.resetForTesting();
+  }
 
   Future<void> _watch(
     BuildContext context, {
@@ -890,18 +895,6 @@ class TrainSelectionScreen extends StatelessWidget {
                           isMonitored: isMon,
                           onWatch: () => _watch(ctx, train: trains[i].tripNumber),
                           onBook: () => _book(ctx, trains[i]),
-                          onIntermediateSearch: () => Navigator.push(
-                            ctx,
-                            MaterialPageRoute(
-                              builder: (_) => IntermediateStationScreen(
-                                train: trains[i],
-                                from: fromCity,
-                                to: toCity,
-                                date: dateOfJourney,
-                                seatClass: initialClass,
-                              ),
-                            ),
-                          ),
                           showIntermediateSearch:
                               !trains[i].hasAnyOnlineSeats ||
                               (initialClass != null &&
@@ -939,7 +932,7 @@ class _TrainCard extends StatelessWidget {
   final String? seatClass;
   final bool isDark;
   final bool isMonitored;
-  final VoidCallback onWatch, onBook, onIntermediateSearch;
+  final VoidCallback onWatch, onBook;
   final bool showIntermediateSearch;
   final ValueChanged<SeatType> onSeatWatch;
 
@@ -953,7 +946,6 @@ class _TrainCard extends StatelessWidget {
     this.isMonitored = false,
     required this.onWatch,
     required this.onBook,
-    required this.onIntermediateSearch,
     required this.showIntermediateSearch,
     required this.onSeatWatch,
   });
@@ -1148,7 +1140,6 @@ class _TrainCard extends StatelessWidget {
                 date: date,
                 seatClass: seatClass,
                 isDark: isDark,
-                onOpenFull: onIntermediateSearch,
               ),
               const SizedBox(height: 8),
             ],
@@ -1198,7 +1189,6 @@ class _LazyIntermediateSearchCard extends StatefulWidget {
   final String date;
   final String? seatClass;
   final bool isDark;
-  final VoidCallback onOpenFull;
 
   const _LazyIntermediateSearchCard({
     required this.train,
@@ -1207,7 +1197,6 @@ class _LazyIntermediateSearchCard extends StatefulWidget {
     required this.date,
     this.seatClass,
     required this.isDark,
-    required this.onOpenFull,
   });
 
   @override
@@ -1238,6 +1227,14 @@ class _LazyIntermediateQueue {
   static bool _running = false;
   static final ValueNotifier<int> queueCountNotifier = ValueNotifier(0);
   static final ValueNotifier<String?> currentTrainNotifier = ValueNotifier(null);
+
+  @visibleForTesting
+  static void resetForTesting() {
+    _tasks.clear();
+    _running = false;
+    queueCountNotifier.value = 0;
+    currentTrainNotifier.value = null;
+  }
 
   static void enqueue(_LazyTrainTask task) {
     _tasks.removeWhere((t) => t.key == task.key);
@@ -1302,6 +1299,9 @@ class _LazyIntermediateQueue {
 
 class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard> {
   static final Map<String, List<IntermediateJourney>> _cache = {};
+
+  @visibleForTesting
+  static void clearCache() => _cache.clear();
   bool _inQueue = false;
   bool _loading = false;
   List<IntermediateJourney> _results = [];
@@ -1478,17 +1478,6 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
                     ),
                   ),
                 ),
-                InkWell(
-                  onTap: widget.onOpenFull,
-                  child: Text(
-                    lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
-                    style: const TextStyle(
-                      fontSize: 10,
-                      color: Color(0xFF10B981),
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ),
               ],
             ),
             const SizedBox(height: 3),
@@ -1548,6 +1537,7 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
           ),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
               width: 12,
@@ -1560,29 +1550,14 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
               ),
             ),
             const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                _inQueue
-                    ? lang.tr('Queued for via search...', 'ভায়া অনুসন্ধানের অপেক্ষায়...')
-                    : lang.tr('Checking via routes...', 'ভায়া রুট খোঁজা হচ্ছে...'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  color: isDark ? Colors.white70 : const Color(0xFF475569),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            InkWell(
-              onTap: widget.onOpenFull,
-              child: Text(
-                lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Color(0xFF10B981),
-                  decoration: TextDecoration.underline,
-                ),
+            Text(
+              _inQueue
+                  ? lang.tr('Queued for via search...', 'ভায়া অনুসন্ধানের অপেক্ষায়...')
+                  : lang.tr('Checking via routes...', 'ভায়া রুট খোঁজা হচ্ছে...'),
+              style: TextStyle(
+                fontSize: 11,
+                color: isDark ? Colors.white70 : const Color(0xFF475569),
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
