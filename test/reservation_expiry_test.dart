@@ -320,6 +320,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
 
     await LanguageService.instance.setLanguage(AppLanguage.bn);
+    addTearDown(() => LanguageService.instance.setLanguage(AppLanguage.en));
 
     final monitor = MonitorService(proService: ProService());
     monitor.startMonitoring(

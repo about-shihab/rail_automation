@@ -183,19 +183,7 @@ class _MonitorTab extends StatelessWidget {
   const _MonitorTab();
   @override
   Widget build(BuildContext context) {
-    final m = context.watch<MonitorService>();
-    final lang = context.watch<LanguageService>();
-    if (m.dateOfJourney.isNotEmpty) return const MonitorDashboardScreen();
-    return _Empty(
-      icon: Icons.radar_rounded,
-      title: lang.tr('No active watch', 'কোনো সক্রিয় নজরদারি নেই'),
-      body: lang.tr(
-        'Search for a train and tap Watch to get notified when seats open up.',
-        'ট্রেন অনুসন্ধান করুন এবং সিট খালি হলে নোটিফিকেশন পেতে নজরদারিতে রাখুন।',
-      ),
-      action: lang.tr('Search trains', 'ট্রেন অনুসন্ধান'),
-      onAction: () => AppShell.tab.value = AppShell.tabSearch,
-    );
+    return const MonitorDashboardScreen();
   }
 }
 
@@ -918,57 +906,4 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
   }
 }
 
-class _Empty extends StatelessWidget {
-  final IconData icon;
-  final String title, body, action;
-  final VoidCallback onAction;
-  const _Empty({
-    required this.icon,
-    required this.title,
-    required this.body,
-    required this.action,
-    required this.onAction,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Scaffold(
-      backgroundColor: AppColors.scaffoldBg(isDark),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CircleAvatar(
-                radius: 40,
-                backgroundColor: AppColors.primary.withValues(alpha: .12),
-                child: Icon(icon, size: 38, color: AppColors.primary),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                body,
-                textAlign: TextAlign.center,
-                style: TextStyle(color: AppColors.textMuted(isDark)),
-              ),
-              const SizedBox(height: 24),
-              PrimaryButton(
-                label: action,
-                icon: Icons.search_rounded,
-                onPressed: onAction,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
+

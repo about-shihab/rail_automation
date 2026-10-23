@@ -1219,11 +1219,27 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
   }
 
   Future<void> _bookLeg(IntermediateJourney journey, bool isFirstLeg) async {
-    final legTrain = isFirstLeg ? journey.first : journey.second;
+    final baseTrain = isFirstLeg ? journey.first : journey.second;
     final legSeat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
     final legFrom = isFirstLeg ? canonicalStation(widget.from) : journey.canonicalVia;
     final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(widget.to);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
+
+    // Dedicated single-ticket trip prevents redundant search / parallel booking calls
+    final legTrain = TrainTrip(
+      tripNumber: baseTrain.tripNumber,
+      departureDateTime: baseTrain.departureDateTime,
+      departureFullDate: baseTrain.departureFullDate,
+      departureDateTimeJd: baseTrain.departureDateTimeJd,
+      arrivalDateTime: baseTrain.arrivalDateTime,
+      travelTime: baseTrain.travelTime,
+      originCityName: legFrom,
+      destinationCityName: legTo,
+      trainModel: baseTrain.trainModel,
+      isOpenForAll: baseTrain.isOpenForAll,
+      seatTypes: [legSeat],
+      boardingPoints: baseTrain.boardingPoints,
+    );
 
     var auth = await AuthSession.load();
     if (auth == null || !auth.isValid) {
@@ -1256,117 +1272,86 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
 
     if (_results.isNotEmpty) {
       final best = _results.first;
-      final fare1 = double.tryParse(best.firstSeat.fare) ?? 0;
-      final fare2 = double.tryParse(best.secondSeat.fare) ?? 0;
-      final totalFare = fare1 + fare2;
 
       return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        margin: const EdgeInsets.only(top: 4, bottom: 4),
+        padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
           color: isDark ? const Color(0xFF042017) : const Color(0xFFECFDF5),
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: const Color(0xFF10B981).withValues(alpha: 0.35),
-            width: 1,
+            color: const Color(0xFF10B981).withValues(alpha: 0.4),
+            width: 1.2,
           ),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Header
             Row(
               children: [
                 const Icon(Icons.alt_route_rounded, size: 16, color: Color(0xFF10B981)),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    '${lang.tr("Via", "ভায়া")} ${best.via} (${best.seats} ${lang.tr("seats", "আসন")})',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                    '${lang.tr("Via Route Found", "ভায়া রুট পাওয়া গেছে")}: ${best.via}',
                     style: const TextStyle(
                       fontWeight: FontWeight.bold,
-                      fontSize: 12,
+                      fontSize: 12.5,
                       color: Color(0xFF10B981),
                     ),
                   ),
                 ),
-                if (totalFare > 0)
-                  Text(
-                    '৳${totalFare.toStringAsFixed(0)}',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary(isDark),
+                InkWell(
+                  onTap: widget.onOpenFull,
+                  child: Text(
+                    lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFF10B981),
+                      decoration: TextDecoration.underline,
                     ),
                   ),
+                ),
               ],
             ),
             const SizedBox(height: 3),
             Text(
-              '${widget.from} ➔ ${best.via} ➔ ${widget.to} · ${best.firstSeat.displayName}: ${best.firstSeat.seatCounts.online} · ${best.secondSeat.displayName}: ${best.secondSeat.seatCounts.online}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              lang.tr(
+                'Two separate single tickets (up to 4 seats each). Book one ticket at a time.',
+                'দুটি আলাদা একক টিকিট (প্রতিটিতে সর্বোচ্চ ৪ আসন)। একটি করে বুক করুন।',
+              ),
               style: TextStyle(
                 fontSize: 10.5,
                 color: AppColors.textMuted(isDark),
               ),
             ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 4,
-              children: [
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    elevation: 0,
-                  ),
-                  onPressed: () => _bookLeg(best, true),
-                  icon: const Icon(Icons.bolt_rounded, size: 12),
-                  label: Text(
-                    '${lang.tr("Book 1", "১ম বুক")}: ${best.via}',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    elevation: 0,
-                  ),
-                  onPressed: () => _bookLeg(best, false),
-                  icon: const Icon(Icons.bolt_rounded, size: 12),
-                  label: Text(
-                    '${lang.tr("Book 2", "২য় বুক")}: ${widget.to}',
-                    style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                  ),
-                ),
-                OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                  ),
-                  onPressed: widget.onOpenFull,
-                  icon: const Icon(Icons.search_rounded, size: 12),
-                  label: Text(
-                    lang.tr('Search via intermediate station', 'মধ্যবর্তী স্টেশন হয়ে খুঁজুন'),
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                ),
-              ],
+            const SizedBox(height: 10),
+
+            // Single Ticket 1 (Leg 1: From -> Via)
+            _buildSingleTicketCard(
+              context: context,
+              legNumber: 1,
+              from: widget.from,
+              to: best.via,
+              trainNumber: best.first.tripNumber,
+              seat: best.firstSeat,
+              isDark: isDark,
+              onBook: () => _bookLeg(best, true),
+            ),
+
+            const SizedBox(height: 8),
+
+            // Single Ticket 2 (Leg 2: Via -> To)
+            _buildSingleTicketCard(
+              context: context,
+              legNumber: 2,
+              from: best.via,
+              to: widget.to,
+              trainNumber: best.second.tripNumber,
+              seat: best.secondSeat,
+              isDark: isDark,
+              onBook: () => _bookLeg(best, false),
             ),
           ],
         ),
@@ -1374,6 +1359,96 @@ class _LazyIntermediateSearchCardState extends State<_LazyIntermediateSearchCard
     }
 
     return const SizedBox.shrink();
+  }
+
+  Widget _buildSingleTicketCard({
+    required BuildContext context,
+    required int legNumber,
+    required String from,
+    required String to,
+    required String trainNumber,
+    required SeatType seat,
+    required bool isDark,
+    required VoidCallback onBook,
+  }) {
+    final lang = LanguageService.of(context);
+    final fareNum = double.tryParse(seat.fare) ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF0F172A) : Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              '${lang.tr("Leg", "অংশ")} $legNumber',
+              style: const TextStyle(
+                color: Color(0xFF10B981),
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '$from ➔ $to',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary(isDark),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$trainNumber · ${seat.displayName}: ${seat.seatCounts.online} ${lang.tr("seats", "আসন")}${fareNum > 0 ? " · ৳${fareNum.toStringAsFixed(0)}" : ""}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: AppColors.textMuted(isDark),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF10B981),
+              foregroundColor: Colors.white,
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              elevation: 0,
+            ),
+            onPressed: onBook,
+            child: Text(
+              '${lang.tr("Book", "বুক")} $legNumber',
+              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
