@@ -318,35 +318,20 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
             children: [
               const AppBrandIcon(size: 34),
               const SizedBox(width: 8),
-              const Text(
-                'Rail Pro',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.4,
-                  color: Colors.white,
-                ),
-              ),
-              const Spacer(),
-
-              // Language Toggle
-              TextButton(
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                ),
-                onPressed: () => LanguageService.instance.toggleLanguage(),
+              Expanded(
                 child: Text(
-                  lang.isBangla ? 'ENG' : 'বাংলা',
+                  'Rail Pro',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.4,
                     color: Colors.white,
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
+              const SizedBox(width: 8),
 
               // Credits Pill (Amber 0 • Buy when zero)
               InkWell(
@@ -1021,15 +1006,19 @@ class _CockpitMonitorHud extends StatelessWidget {
           // Sub-bar with Date & Status
           Row(
             children: [
-              Text(
-                '${m.dateOfJourney} • ${m.targetSeatClass?.isNotEmpty == true ? m.targetSeatClass! : "ALL"}',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary(isDark),
+              Expanded(
+                child: Text(
+                  '${m.dateOfJourney} • ${m.targetSeatClass?.isNotEmpty == true ? m.targetSeatClass! : "ALL"}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary(isDark),
+                  ),
                 ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
