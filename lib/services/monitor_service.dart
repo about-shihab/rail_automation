@@ -316,6 +316,8 @@ class MonitorService extends ChangeNotifier {
             return IntermediateJourney(
               via: map['via'] ?? '',
               viaCity: map['viaCity'] ?? '',
+              leg1ToStation: map['leg1ToStation'],
+              leg2FromStation: map['leg2FromStation'],
               firstDate: map['firstDate'] ?? '',
               secondDate: map['secondDate'] ?? '',
               first: TrainTrip.fromJson(Map<String, dynamic>.from(map['first'])),
@@ -1638,6 +1640,7 @@ class MonitorService extends ChangeNotifier {
           date: _dateOfJourney,
           auth: session,
           seatClass: _targetSeatClass,
+          includeOverlapping: true,
           cancelled: () => !_isMonitoring || _disposed,
         );
         allVia.addAll(results);
@@ -1657,6 +1660,8 @@ class MonitorService extends ChangeNotifier {
                 (j) => {
                   'via': j.via,
                   'viaCity': j.viaCity,
+                  'leg1ToStation': j.leg1To,
+                  'leg2FromStation': j.leg2From,
                   'firstDate': j.firstDate,
                   'secondDate': j.secondDate,
                   'first': j.first.toJson(),
@@ -1672,11 +1677,14 @@ class MonitorService extends ChangeNotifier {
 
         final best = allVia.first;
         final viaKey =
-            '${best.first.tripNumber}:${best.canonicalVia}:${best.firstSeat.type}:${best.seats}';
+            '${best.first.tripNumber}:${best.leg1To}:${best.leg2From}:${best.firstSeat.type}:${best.seats}';
         if (_lastNotifiedViaKey != viaKey) {
           _lastNotifiedViaKey = viaKey;
+          final logMsg = best.isOverlapping
+              ? '🔍 OVERLAPPING ROUTE FOUND! ${best.first.tripNumber} (${best.first.originCityName} → ${best.leg1To} + ${best.leg2From} → ${best.second.destinationCityName}) has ${best.seats} [${best.firstSeat.type}] seats!'
+              : '🔍 VIA TICKET FOUND! ${best.first.tripNumber} via ${best.via} has ${best.seats} [${best.firstSeat.type}] seats!';
           _addLog(
-            '🔍 VIA TICKET FOUND! ${best.first.tripNumber} via ${best.via} has ${best.seats} [${best.firstSeat.type}] seats!',
+            logMsg,
             isAlert: true,
             viaJourney: best,
           );
@@ -1689,6 +1697,9 @@ class MonitorService extends ChangeNotifier {
               travelDate: _dateOfJourney,
               seatType: best.firstSeat.displayName,
               seatCount: best.seats,
+              leg1To: best.leg1To,
+              leg2From: best.leg2From,
+              isOverlapping: best.isOverlapping,
             );
           } catch (e) {
             _addLog('Via seat notification error: $e', isError: true);

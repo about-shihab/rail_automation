@@ -1064,17 +1064,30 @@ class NotificationService {
     required String travelDate,
     required String seatType,
     required int seatCount,
+    String? leg1To,
+    String? leg2From,
+    bool isOverlapping = false,
   }) async {
     final bn = await prefersBangla();
-    final title = bn
-        ? 'ভায়া টিকেট পাওয়া গেছে · $trainName'
-        : 'Via tickets available · $trainName';
+    final title = isOverlapping
+        ? (bn
+            ? 'ওভারল্যাপিং টিকেট পাওয়া গেছে · $trainName'
+            : 'Overlapping tickets found · $trainName')
+        : (bn
+            ? 'ভায়া টিকেট পাওয়া গেছে · $trainName'
+            : 'Via tickets available · $trainName');
     final number = bn
         ? '$seatCount'.split('').map((c) => '০১২৩৪৫৬৭৮৯'[int.parse(c)]).join()
         : '$seatCount';
-    final body = bn
-        ? '$viaStation হয়ে $numberটি $seatType আসন ($fromCity → $viaStation → $toCity)। মনিটরে দেখতে চাপুন।'
-        : 'Split journey via $viaStation ($number $seatType seats: $fromCity → $viaStation → $toCity). Tap to open monitor.';
+    final l1To = leg1To?.isNotEmpty == true ? leg1To! : viaStation;
+    final l2From = leg2From?.isNotEmpty == true ? leg2From! : viaStation;
+    final body = isOverlapping
+        ? (bn
+            ? 'একই ট্রেনে $numberটি $seatType আসন ($fromCity → $l1To এবং $l2From → $toCity)। মনিটরে দেখতে চাপুন।'
+            : 'Same-train split ($number $seatType seats: $fromCity → $l1To & $l2From → $toCity). Tap to open monitor.')
+        : (bn
+            ? '$viaStation হয়ে $numberটি $seatType আসন ($fromCity → $viaStation → $toCity)। মনিটরে দেখতে চাপুন।'
+            : 'Split journey via $viaStation ($number $seatType seats: $fromCity → $viaStation → $toCity). Tap to open monitor.');
 
     final payload =
         'rail://via-ticket?from=${Uri.encodeComponent(fromCity)}&to=${Uri.encodeComponent(toCity)}&date=${Uri.encodeComponent(travelDate)}&train=${Uri.encodeComponent(trainName)}&via=${Uri.encodeComponent(viaStation)}&class=${Uri.encodeComponent(seatType)}';

@@ -17,6 +17,8 @@ class IntermediateJourney {
   final String viaCity;
   final TrainTrip first, second;
   final SeatType firstSeat, secondSeat;
+  final String? leg1ToStation;
+  final String? leg2FromStation;
 
   const IntermediateJourney({
     required this.via,
@@ -27,7 +29,22 @@ class IntermediateJourney {
     required this.second,
     required this.firstSeat,
     required this.secondSeat,
+    this.leg1ToStation,
+    this.leg2FromStation,
   });
+
+  String get leg1To =>
+      leg1ToStation != null && leg1ToStation!.isNotEmpty
+          ? leg1ToStation!
+          : (viaCity.isNotEmpty ? viaCity : via);
+
+  String get leg2From =>
+      leg2FromStation != null && leg2FromStation!.isNotEmpty
+          ? leg2FromStation!
+          : (viaCity.isNotEmpty ? viaCity : via);
+
+  bool get isOverlapping =>
+      canonicalStation(leg1To) != canonicalStation(leg2From);
 
   String get canonicalVia =>
       viaCity.isNotEmpty ? viaCity : canonicalStation(via);
@@ -36,6 +53,7 @@ class IntermediateJourney {
       min(firstSeat.seatCounts.online, secondSeat.seatCounts.online);
 
   int? get layoverMinutes {
+    if (isOverlapping) return 0;
     final arr = IntermediateStationSearch.parseMinutes(first.arrivalDateTime);
     final dep = IntermediateStationSearch.parseMinutes(
       second.departureDateTime,
@@ -49,6 +67,11 @@ class IntermediateJourney {
   }
 
   String layoverText({required bool isBangla}) {
+    if (isOverlapping) {
+      return isBangla
+          ? 'একই ট্রেন: $leg2From ও $leg1To এর মধ্যে আসন পরিবর্তন'
+          : 'Same train: change seats between $leg2From & $leg1To';
+    }
     final mins = layoverMinutes;
     if (mins == null) {
       return isBangla ? '$via-এ যাত্রাবিরতি' : 'Transfer at $via';
@@ -469,6 +492,7 @@ class IntermediateStationSearch {
     required String date,
     required AuthSession auth,
     String? seatClass,
+    bool includeOverlapping = false,
     bool Function()? cancelled,
     void Function(int checked, int total, String station)? onProgress,
     void Function(List<IntermediateJourney> results)? onResults,
@@ -559,6 +583,9 @@ class IntermediateStationSearch {
       dayOffsets[i] = day;
     }
 
+    final firstLegTrips = <int, TrainTrip?>{};
+    final secondLegTrips = <int, TrainTrip?>{};
+
     Future<List<IntermediateJourney>> checkStation(int i) async {
       if (cancelled?.call() == true) return const [];
       final secondDate = DateFormat(
@@ -575,15 +602,19 @@ class IntermediateStationSearch {
           silent: true,
         ),
       );
+      if (first != null) firstLegTrips[i] = first;
       if (cancelled?.call() == true) return const [];
-      if (first == null ||
-          !first.seatTypes.any(
+
+      final firstHasSeats = first != null &&
+          first.seatTypes.any(
             (s) =>
                 s.isAvailable &&
                 (anyClass || s.type.toUpperCase() == requested),
-          )) {
+          );
+      if (!includeOverlapping && !firstHasSeats) {
         return const [];
       }
+
       final second = sameRun(
         await ApiService.searchTrips(
           fromCity: city(i),
@@ -594,8 +625,9 @@ class IntermediateStationSearch {
           silent: true,
         ),
       );
+      if (second != null) secondLegTrips[i] = second;
       if (cancelled?.call() == true) return const [];
-      if (second == null) return const [];
+      if (second == null || first == null || !firstHasSeats) return const [];
       final stationJourneys = <IntermediateJourney>[];
       for (final seat in first.seatTypes) {
         if (!seat.isAvailable ||
@@ -616,6 +648,8 @@ class IntermediateStationSearch {
             IntermediateJourney(
               via: displayStation(city(i)),
               viaCity: city(i),
+              leg1ToStation: city(i),
+              leg2FromStation: city(i),
               firstDate: date,
               secondDate: secondDate,
               first: first,
@@ -680,10 +714,80 @@ class IntermediateStationSearch {
       await Future.wait(List.generate(concurrency, (_) => worker()));
     }
 
+    final overlappingJourneys = <IntermediateJourney>[];
+    if (includeOverlapping && cancelled?.call() != true) {
+      // Find pairs (j, i) where station j comes before station i along the route.
+      // Leg 1: from -> city(i)
+      // Leg 2: city(j) -> to
+      // Because j < i, the passenger holds overlapping tickets on the same train
+      // between city(j) and city(i), covering the entire journey from 'from' to 'to'.
+      for (var i = start + 1; i < end; i++) {
+        final firstTrip = firstLegTrips[i];
+        if (firstTrip == null) continue;
+
+        for (var j = start + 1; j < i; j++) {
+          final secondTrip = secondLegTrips[j];
+          if (secondTrip == null) continue;
+
+          final secondDate = DateFormat(
+            'dd-MMM-yyyy',
+            'en_US',
+          ).format(journeyDate.add(Duration(days: dayOffsets[j] ?? 0)));
+
+          for (final seat in firstTrip.seatTypes) {
+            if (!seat.isAvailable ||
+                (tripIds.isNotEmpty && !tripIds.contains(seat.tripId)) ||
+                (!anyClass && seat.type.toUpperCase() != requested)) {
+              continue;
+            }
+            final other = secondTrip.seatTypes
+                .where(
+                  (s) =>
+                      s.isAvailable &&
+                      s.type == seat.type &&
+                      (tripIds.isEmpty || s.tripId == seat.tripId),
+                )
+                .firstOrNull;
+            if (other != null) {
+              overlappingJourneys.add(
+                IntermediateJourney(
+                  via: '${displayStation(city(j))} & ${displayStation(city(i))}',
+                  viaCity: '${city(j)} - ${city(i)}',
+                  leg1ToStation: city(i),
+                  leg2FromStation: city(j),
+                  firstDate: date,
+                  secondDate: secondDate,
+                  first: firstTrip,
+                  second: secondTrip,
+                  firstSeat: seat,
+                  secondSeat: other,
+                ),
+              );
+            }
+          }
+        }
+      }
+    }
+
+    final combined = <IntermediateJourney>[
+      for (final items in stationResults) ...items,
+      ...overlappingJourneys,
+    ];
+
+    combined.sort((a, b) {
+      if (a.isOverlapping != b.isOverlapping) {
+        return a.isOverlapping ? 1 : -1;
+      }
+      return b.seats.compareTo(a.seats);
+    });
+
     if (cancelled?.call() != true) {
       onProgress?.call(totalCandidateStops, totalCandidateStops, '');
+      if (onResults != null && overlappingJourneys.isNotEmpty) {
+        onResults(List.unmodifiable(combined));
+      }
     }
-    return [for (final items in stationResults) ...items];
+    return combined;
   }
 
   /// Searches live availability between any specific pair of stations on this train.

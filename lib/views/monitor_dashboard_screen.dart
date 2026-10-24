@@ -175,8 +175,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     HapticFeedback.lightImpact();
     final baseTrain = isFirstLeg ? journey.first : journey.second;
     final legSeat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? canonicalStation(fromCity) : journey.canonicalVia;
-    final legTo = isFirstLeg ? journey.canonicalVia : canonicalStation(toCity);
+    final legFrom = isFirstLeg ? canonicalStation(fromCity) : canonicalStation(journey.leg2From);
+    final legTo = isFirstLeg ? canonicalStation(journey.leg1To) : canonicalStation(toCity);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
 
     // Single-ticket TrainTrip instance: prevents parallel multi-ticket requests and server hang
@@ -2272,8 +2272,8 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
                   children: [
                     Text(
                       lang.tr(
-                        'Alternative Via Route Found',
-                        'বিকল্প ভায়া রুট পাওয়া গেছে',
+                        'Alternative Via / Split Route Found',
+                        'বিকল্প ভায়া / স্প্লিট রুট পাওয়া গেছে',
                       ),
                       style: const TextStyle(
                         fontSize: 13,
@@ -2331,15 +2331,19 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
               Expanded(
                 child: Row(
                   children: [
-                    const Icon(
-                      Icons.place_rounded,
+                    Icon(
+                      journey.isOverlapping
+                          ? Icons.shuffle_rounded
+                          : Icons.place_rounded,
                       size: 14,
-                      color: Color(0xFF10B981),
+                      color: const Color(0xFF10B981),
                     ),
                     const SizedBox(width: 4),
                     Flexible(
                       child: Text(
-                        '${lang.tr("Via", "ভায়া")} ${journey.via}',
+                        journey.isOverlapping
+                            ? '${lang.tr("Overlap Split", "ওভারল্যাপ স্প্লিট")}: ${journey.leg2From} - ${journey.leg1To}'
+                            : '${lang.tr("Via", "ভায়া")} ${journey.via}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -2349,6 +2353,24 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (journey.isOverlapping) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          lang.tr('Same train', 'একই ট্রেন'),
+                          style: const TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF3B82F6),
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -2376,7 +2398,7 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
             context: context,
             legNumber: 1,
             from: fromCity,
-            to: journey.via,
+            to: journey.leg1To,
             trainNumber: journey.first.tripNumber,
             seat: journey.firstSeat,
             date: journey.firstDate,
@@ -2412,7 +2434,7 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
           _buildLegTicketCard(
             context: context,
             legNumber: 2,
-            from: journey.via,
+            from: journey.leg2From,
             to: toCity,
             trainNumber: journey.second.tripNumber,
             seat: journey.secondSeat,
