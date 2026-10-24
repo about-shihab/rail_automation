@@ -144,15 +144,26 @@ class _RechargeCreditDialogState extends State<RechargeCreditDialog> {
     }
   }
 
+  String _encodeQueryParameters(Map<String, String> params) {
+    return params.entries
+        .map((MapEntry<String, String> e) =>
+            '${Uri.encodeComponent(e.key)}=${Uri.encodeComponent(e.value)}')
+        .join('&');
+  }
+
   Future<void> _launchEmail(BuildContext context, String email) async {
+    final phone = _phoneController.text.trim();
+    final phoneLine = phone.isNotEmpty
+        ? 'My Registered Phone Number: $phone'
+        : 'My Registered Phone Number: ';
     final uri = Uri(
       scheme: 'mailto',
       path: email,
-      queryParameters: {
+      query: _encodeQueryParameters(<String, String>{
         'subject': 'Rail Pro Credit Recharge Request',
         'body':
-            'Hello Admin,\n\nI would like to recharge credits for Rail Pro.\nMy Registered Phone Number: \nDesired Credits: \n\nThank you.',
-      },
+            'Hello Admin,\n\nI would like to recharge credits for Rail Pro.\n$phoneLine\nDesired Credits: \n\nThank you.',
+      }),
     );
     try {
       final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);

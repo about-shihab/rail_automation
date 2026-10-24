@@ -723,18 +723,35 @@ class ProfileTab extends StatelessWidget {
           const SizedBox(height: 20),
 
           // ── Version & Footer ──
-          Center(
-            child: Text(
-              lang.tr(
-                'Rail Pro v${AppUpdateService.instance.installedVersion} (${AppUpdateService.instance.installedBuild}) · Developed by Abdulla Al Mamun',
-                'রেল প্রো v${AppUpdateService.instance.installedVersion} (${AppUpdateService.instance.installedBuild}) · প্রস্তুতকারক: আবদুল্লাহ আল মামুন',
-              ),
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w500,
-                color: AppColors.textMuted(isDark),
-              ),
-            ),
+          ListenableBuilder(
+            listenable: AppConfig.instance,
+            builder: (context, _) {
+              final devName = AppConfig.instance.developerName.trim();
+              final isDefault = devName.isEmpty || devName == 'Abdulla Al Mamun';
+              final displayName = isDefault ? 'Abdulla Al Mamun' : devName;
+              final localizedDev = (isDefault && lang.isBangla)
+                  ? 'আবদুল্লাহ আল মামুন'
+                  : displayName;
+              final ver = AppUpdateService.instance.installedVersion.isNotEmpty
+                  ? AppUpdateService.instance.installedVersion
+                  : '1.0.0';
+              final bld = AppUpdateService.instance.installedBuild > 0
+                  ? ' (${AppUpdateService.instance.installedBuild})'
+                  : '';
+              return Center(
+                child: Text(
+                  lang.tr(
+                    'Rail Pro v$ver$bld · Developed by $displayName',
+                    'রেল প্রো v$ver$bld · প্রস্তুতকারক: $localizedDev',
+                  ),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textMuted(isDark),
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -839,7 +856,9 @@ class _ExpandableDeveloperCardState extends State<_ExpandableDeveloperCard> {
                     color: AppColors.primary,
                   ),
                   title: Text(
-                    devName,
+                    (devName == 'Abdulla Al Mamun' && lang.isBangla)
+                        ? 'আবদুল্লাহ আল মামুন'
+                        : devName,
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   subtitle: Text(
