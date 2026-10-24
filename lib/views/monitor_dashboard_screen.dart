@@ -1175,7 +1175,7 @@ class _MonitorSection extends StatelessWidget {
             : lang.tr('PAUSED', 'স্থগিত');
 
     final title = m.isScheduled
-        ? lang.tr('Search is scheduled', 'অনুসন্ধান নির্ধারিত আছে')
+        ? lang.tr('Search scheduled', 'অনুসন্ধান নির্ধারিত')
         : m.isMonitoring
             ? lang.tr("We're finding your ticket", 'আমরা আপনার টিকেট খুঁজছি')
             : lang.tr('Search is paused', 'অনুসন্ধান স্থগিত');
