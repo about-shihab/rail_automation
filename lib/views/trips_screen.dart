@@ -784,7 +784,68 @@ class _TripsScreenState extends State<TripsScreen> {
                   itemCount: filtered.length,
                   itemBuilder: (context, index) {
                     final item = filtered[index];
-                    return _TripCard(record: item, isDark: isDark);
+                    return Dismissible(
+                      key: ValueKey(item.id.isNotEmpty
+                          ? item.id
+                          : 'trip_${item.createdAt.millisecondsSinceEpoch}_$index'),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding: const EdgeInsets.only(right: 20),
+                        margin: const EdgeInsets.only(bottom: 12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFEF4444),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            const Icon(
+                              Icons.delete_outline_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              lang.tr('Delete', 'মুছুন'),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      onDismissed: (_) async {
+                        final removedRecord = item;
+                        final removedIndex = index;
+                        await TripHistoryService().removeTrip(item.id);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).clearSnackBars();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                lang.tr(
+                                  'Auto-book log removed',
+                                  'অটো-বুক লগ মুছে ফেলা হয়েছে',
+                                ),
+                              ),
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 3),
+                              action: SnackBarAction(
+                                label: lang.tr('Undo', 'পূর্বাবস্থায় আনুন'),
+                                textColor: AppColors.accent,
+                                onPressed: () {
+                                  TripHistoryService().restoreTrip(removedIndex, removedRecord);
+                                },
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      child: _TripCard(record: item, isDark: isDark),
+                    );
                   },
                 ),
         ),

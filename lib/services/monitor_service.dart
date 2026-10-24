@@ -191,11 +191,14 @@ class MonitorService extends ChangeNotifier {
 
   void resumeMonitoring() {
     if (_dateOfJourney.isEmpty) return;
+    _lastReservationExpired = false;
+    _lastBookingFailureReason = null;
     startMonitoring(
       fromCity: _fromCity.isEmpty ? 'Dhaka' : _fromCity,
       toCity: _toCity.isEmpty ? 'Chattogram' : _toCity,
       dateOfJourney: _dateOfJourney,
       targetTrain: _targetTrain,
+      targetTrains: _targetTrains.isNotEmpty ? List<String>.of(_targetTrains) : null,
       targetSeatClass: _targetSeatClass,
       intent: bookingIntent,
       departureTime: _expiresAt,

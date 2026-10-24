@@ -317,7 +317,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
                   toCity: toCity,
                   isDark: isDark,
                   pulseCtrl: _pulseCtrl,
-                  onStop: () => m.stopMonitoring(),
+                  onStop: () => m.pauseMonitoring(),
+                  onResume: () => m.resumeMonitoring(),
                   onClear: _handleStopAndClear,
                 ),
                 // ── In-Between / Via Station Discovered Tickets ──
@@ -1017,6 +1018,7 @@ class _CockpitMonitorHud extends StatelessWidget {
   final AnimationController pulseCtrl;
   final VoidCallback onStop;
   final VoidCallback onClear;
+  final VoidCallback? onResume;
 
   const _CockpitMonitorHud({
     required this.m,
@@ -1026,6 +1028,7 @@ class _CockpitMonitorHud extends StatelessWidget {
     required this.pulseCtrl,
     required this.onStop,
     required this.onClear,
+    this.onResume,
   });
 
   @override
@@ -1511,12 +1514,16 @@ class _CockpitMonitorHud extends StatelessWidget {
               ),
               child: Row(
                 children: [
-                  // Cadence
+                  // Continuous Live Status (No interval revealed)
                   Expanded(
                     child: Row(
                       children: [
                         Icon(
-                          Icons.timer_outlined,
+                          isLive
+                              ? Icons.wifi_tethering_rounded
+                              : (m.isScheduled
+                                  ? Icons.schedule_rounded
+                                  : Icons.pause_circle_outline_rounded),
                           size: 14,
                           color: primaryColor,
                         ),
@@ -1524,13 +1531,10 @@ class _CockpitMonitorHud extends StatelessWidget {
                         Expanded(
                           child: Text(
                             isLive
-                                ? (m.secondsUntilNextCheck > 0
-                                    ? lang.tr(
-                                        'Next in ${m.secondsUntilNextCheck}s',
-                                        'পরবর্তী চেক ${m.secondsUntilNextCheck} সে.',
-                                      )
-                                    : lang.tr('Scanning...', 'স্ক্যান হচ্ছে...'))
-                                : lang.tr('Standby', 'অপেক্ষমাণ'),
+                                ? lang.tr('Always hunting', 'সার্বক্ষণিক স্ক্যানিং')
+                                : (m.isScheduled
+                                    ? lang.tr('Scheduled', 'নির্ধারিত')
+                                    : lang.tr('Paused', 'স্থগিত')),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -1674,7 +1678,9 @@ class _CockpitMonitorHud extends StatelessWidget {
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                    onPressed: onStop,
+                    onPressed: m.isMonitoring
+                        ? onStop
+                        : (onResume ?? () => m.resumeMonitoring()),
                     icon: Icon(
                       m.isMonitoring ? Icons.pause_rounded : Icons.play_arrow_rounded,
                       size: 16,

@@ -27,7 +27,8 @@ void _toast(BuildContext context, String msg, {bool error = false}) {
 String _errText(Object e) =>
     e is AdminException ? e.message : 'Something went wrong. Please try again.';
 
-String _fmtDate(DateTime d) {
+String _fmtDate(DateTime? d) {
+  if (d == null) return 'Never';
   const m = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
@@ -100,7 +101,7 @@ class AdminScreen extends StatelessWidget {
     }
 
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         backgroundColor: AppColors.scaffoldBg(isDark),
         appBar: AppBar(
@@ -111,6 +112,7 @@ class AdminScreen extends StatelessWidget {
             indicatorColor: AppColors.primary,
             tabs: [
               Tab(icon: Icon(Icons.people_alt_rounded), text: 'Users'),
+              Tab(icon: Icon(Icons.history_rounded), text: 'User Logs'),
               Tab(icon: Icon(Icons.receipt_long_rounded), text: 'Transactions'),
               Tab(icon: Icon(Icons.notifications_active_rounded), text: 'Notifications'),
               Tab(icon: Icon(Icons.settings_rounded), text: 'Configuration'),
@@ -120,6 +122,7 @@ class AdminScreen extends StatelessWidget {
         body: const TabBarView(
           children: [
             _UsersTab(),
+            _UserLogsTab(),
             _RechargesTab(),
             _NotificationsTab(),
             AdminConfigTab(),
@@ -515,6 +518,17 @@ class _UserActionSheet extends StatelessWidget {
             onTap: () {
               Navigator.pop(context);
               _AdjustCreditSheet.show(context, user);
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.history_rounded, color: Color(0xFF10B981), size: 26),
+            title: const Text('User Activity Logs', style: TextStyle(fontWeight: FontWeight.w600)),
+            subtitle: Text('View search, booking, login & credit records for ${user.phone}'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () {
+              Navigator.pop(context);
+              _UserLogsSheet.show(context, user);
             },
           ),
           ListTile(
@@ -1478,6 +1492,368 @@ class _SendNotificationSheetState extends State<_SendNotificationSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── User Activity Logs Tab & Sheet ──────────────────────────────────────────
+
+Color _actionColor(String action) {
+  final a = action.toUpperCase();
+  if (a.contains('LOGIN') || a.contains('AUTH')) return const Color(0xFF3B82F6);
+  if (a.contains('SEAT') || a.contains('FOUND') || a.contains('SUCCESS')) return const Color(0xFF10B981);
+  if (a.contains('CREDIT') || a.contains('RECHARGE')) return const Color(0xFFF59E0B);
+  if (a.contains('BOOK') || a.contains('RESERVE')) return const Color(0xFF8B5CF6);
+  if (a.contains('FAIL') || a.contains('EXPIRE') || a.contains('BLOCK')) return const Color(0xFFEF4444);
+  return Colors.grey;
+}
+
+IconData _actionIcon(String action) {
+  final a = action.toUpperCase();
+  if (a.contains('LOGIN')) return Icons.login_rounded;
+  if (a.contains('LOGOUT')) return Icons.logout_rounded;
+  if (a.contains('SEAT')) return Icons.chair_rounded;
+  if (a.contains('CREDIT')) return Icons.bolt_rounded;
+  if (a.contains('BOOK') || a.contains('RESERVE')) return Icons.confirmation_number_rounded;
+  if (a.contains('EXPIRE')) return Icons.timer_off_rounded;
+  return Icons.receipt_rounded;
+}
+
+class _UserLogsTab extends StatefulWidget {
+  const _UserLogsTab();
+
+  @override
+  State<_UserLogsTab> createState() => _UserLogsTabState();
+}
+
+class _UserLogsTabState extends State<_UserLogsTab>
+    with AutomaticKeepAliveClientMixin {
+  late final Stream<List<AdminActivityLog>> _stream =
+      AdminService().watchAllActivityLogs();
+  final _search = TextEditingController();
+  String _q = '';
+  String _actionFilter = 'ALL';
+
+  @override
+  bool get wantKeepAlive => true;
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+          child: TextField(
+            controller: _search,
+            onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
+            decoration: InputDecoration(
+              hintText: 'Search phone, action or details',
+              prefixIcon: const Icon(Icons.search_rounded),
+              suffixIcon: _q.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear_rounded),
+                      onPressed: () {
+                        _search.clear();
+                        setState(() => _q = '');
+                      },
+                    )
+                  : null,
+            ),
+          ),
+        ),
+        // Filter Chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: Row(
+            children: [
+              _filterChip('ALL', isDark),
+              const SizedBox(width: 6),
+              _filterChip('LOGIN', isDark),
+              const SizedBox(width: 6),
+              _filterChip('CREDIT', isDark),
+              const SizedBox(width: 6),
+              _filterChip('SEATS', isDark),
+              const SizedBox(width: 6),
+              _filterChip('BOOKING', isDark),
+            ],
+          ),
+        ),
+        const SizedBox(height: 6),
+        Expanded(
+          child: StreamBuilder<List<AdminActivityLog>>(
+            stream: _stream,
+            builder: (context, snap) {
+              if (snap.hasError) {
+                return Center(
+                  child: Text(
+                    'Error: ${snap.error}',
+                    style: const TextStyle(color: AppColors.error),
+                  ),
+                );
+              }
+              if (!snap.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final logs = snap.data!.where((log) {
+                if (_actionFilter != 'ALL' &&
+                    !log.action.toUpperCase().contains(_actionFilter)) {
+                  return false;
+                }
+                if (_q.isEmpty) return true;
+                return log.phone.toLowerCase().contains(_q) ||
+                    log.action.toLowerCase().contains(_q) ||
+                    log.details.toLowerCase().contains(_q);
+              }).toList();
+
+              if (logs.isEmpty) {
+                return Center(
+                  child: Text(
+                    'No activity logs found',
+                    style: TextStyle(color: AppColors.textMuted(isDark)),
+                  ),
+                );
+              }
+
+              return ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 6, 16, 24),
+                itemCount: logs.length,
+                separatorBuilder: (_, _) => const SizedBox(height: 8),
+                itemBuilder: (context, i) => _ActivityLogTile(
+                  log: logs[i],
+                  isDark: isDark,
+                  showPhone: true,
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _filterChip(String filter, bool isDark) {
+    final selected = _actionFilter == filter;
+    return ChoiceChip(
+      label: Text(filter, style: const TextStyle(fontSize: 11)),
+      selected: selected,
+      onSelected: (_) => setState(() => _actionFilter = filter),
+      visualDensity: VisualDensity.compact,
+    );
+  }
+}
+
+class _ActivityLogTile extends StatelessWidget {
+  final AdminActivityLog log;
+  final bool isDark;
+  final bool showPhone;
+
+  const _ActivityLogTile({
+    required this.log,
+    required this.isDark,
+    this.showPhone = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _actionColor(log.action);
+    final icon = _actionIcon(log.action);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.cardBorder(isDark)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 18, color: color),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        log.action,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: color,
+                        ),
+                      ),
+                    ),
+                    if (showPhone && log.phone.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Text(
+                        log.phone,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary(isDark),
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    Text(
+                      _fmtDate(log.timestamp),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: AppColors.textMuted(isDark),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  log.details.isNotEmpty ? log.details : 'No additional details',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: AppColors.textSecondary(isDark),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _UserLogsSheet extends StatelessWidget {
+  final AdminUser user;
+
+  const _UserLogsSheet({required this.user});
+
+  static Future<void> show(BuildContext context, AdminUser user) {
+    return showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      backgroundColor: AppColors.cardBg(
+        Theme.of(context).brightness == Brightness.dark,
+      ),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => _UserLogsSheet(user: user),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.75,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (_, scrollController) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.history_rounded, color: AppColors.primary, size: 24),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Activity Logs: ${user.displayName.isNotEmpty ? user.displayName : user.phone}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.textPrimary(isDark),
+                          ),
+                        ),
+                        Text(
+                          '${user.phone} · Balance: ${user.credits} credits',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textMuted(isDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(),
+              const SizedBox(height: 8),
+              Expanded(
+                child: StreamBuilder<List<AdminActivityLog>>(
+                  stream: AdminService().watchUserLogs(user.phone),
+                  builder: (context, snap) {
+                    if (snap.hasError) {
+                      return Center(
+                        child: Text(
+                          'Error loading logs: ${snap.error}',
+                          style: const TextStyle(color: AppColors.error),
+                        ),
+                      );
+                    }
+                    if (!snap.hasData) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+                    final logs = snap.data!;
+                    if (logs.isEmpty) {
+                      return Center(
+                        child: Text(
+                          'No activity logs recorded for this user yet.',
+                          style: TextStyle(color: AppColors.textMuted(isDark)),
+                        ),
+                      );
+                    }
+                    return ListView.separated(
+                      controller: scrollController,
+                      itemCount: logs.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, i) => _ActivityLogTile(
+                        log: logs[i],
+                        isDark: isDark,
+                        showPhone: false,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

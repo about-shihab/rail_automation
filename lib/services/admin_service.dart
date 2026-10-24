@@ -87,6 +87,43 @@ class AppNotification {
   }
 }
 
+class AdminActivityLog {
+  final String id;
+  final String phone;
+  final String action;
+  final String details;
+  final DateTime? timestamp;
+
+  const AdminActivityLog({
+    required this.id,
+    required this.phone,
+    required this.action,
+    required this.details,
+    this.timestamp,
+  });
+
+  factory AdminActivityLog.fromMap(
+    String id,
+    String phone,
+    Map<String, dynamic> data,
+  ) {
+    final rawTs = data['timestamp'];
+    DateTime? dt;
+    if (rawTs is Timestamp) {
+      dt = rawTs.toDate();
+    } else if (rawTs is String) {
+      dt = DateTime.tryParse(rawTs);
+    }
+    return AdminActivityLog(
+      id: id,
+      phone: phone,
+      action: data['action']?.toString() ?? 'ACTIVITY',
+      details: data['details']?.toString() ?? '',
+      timestamp: dt,
+    );
+  }
+}
+
 enum RequestState { pending, approved, rejected }
 
 /// Admin-only operations. Every method re-checks the admin role locally.
@@ -171,6 +208,67 @@ class AdminService {
         .where('status', isEqualTo: 'Pending')
         .snapshots()
         .map((s) => s.size);
+  }
+
+  // ── User Activity Logs ────────────────────────────────────────────────────
+
+  Stream<List<AdminActivityLog>> watchUserLogs(String phone) {
+    return _db
+        .collection('users')
+        .doc(phone)
+        .collection('activity_logs')
+        .orderBy('timestamp', descending: true)
+        .limit(100)
+        .snapshots()
+        .asyncMap((snap) async {
+      if (snap.docs.isNotEmpty) {
+        return snap.docs
+            .map((d) => AdminActivityLog.fromMap(d.id, phone, d.data()))
+            .toList();
+      }
+      try {
+        final userDoc = await _db.collection('users').doc(phone).get();
+        final recent = userDoc.data()?['recentActivity'];
+        if (recent is List) {
+          final list = <AdminActivityLog>[];
+          for (var i = 0; i < recent.length; i++) {
+            final item = recent[i];
+            if (item is Map) {
+              list.add(AdminActivityLog.fromMap(
+                'recent_$i',
+                phone,
+                Map<String, dynamic>.from(item),
+              ));
+            }
+          }
+          list.sort((a, b) {
+            if (a.timestamp == null && b.timestamp == null) return 0;
+            if (a.timestamp == null) return 1;
+            if (b.timestamp == null) return -1;
+            return b.timestamp!.compareTo(a.timestamp!);
+          });
+          return list;
+        }
+      } catch (_) {}
+      return <AdminActivityLog>[];
+    });
+  }
+
+  Stream<List<AdminActivityLog>> watchAllActivityLogs() {
+    try {
+      return _db
+          .collectionGroup('activity_logs')
+          .orderBy('timestamp', descending: true)
+          .limit(150)
+          .snapshots()
+          .map((snap) => snap.docs.map((d) {
+                final phone = d.reference.parent.parent?.id ?? '';
+                return AdminActivityLog.fromMap(d.id, phone, d.data());
+              }).toList())
+          .handleError((_) => const <AdminActivityLog>[]);
+    } catch (_) {
+      return Stream.value(const <AdminActivityLog>[]);
+    }
   }
 
   // ── Credit adjustment ─────────────────────────────────────────────────────

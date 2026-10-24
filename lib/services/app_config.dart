@@ -274,7 +274,9 @@ class AppConfig extends ChangeNotifier {
     await reloadCache();
     if (Firebase.apps.isEmpty) return;
 
-    unawaited(syncFromFirestore());
+    try {
+      await syncFromFirestore().timeout(const Duration(seconds: 4));
+    } catch (_) {}
 
     if (_subscription != null) return;
     _subscription = FirebaseFirestore.instance

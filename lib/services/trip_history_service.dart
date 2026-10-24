@@ -166,6 +166,37 @@ class TripHistoryService extends ChangeNotifier {
     }
   }
 
+  Future<void> removeTrip(String id) async {
+    final idx = _trips.indexWhere((t) => t.id == id);
+    if (idx < 0) return;
+    _trips.removeAt(idx);
+    notifyListeners();
+    await _saveLocally();
+
+    final phone = FirebaseUserService().currentPhone;
+    final firestore = FirebaseUserService().firestore;
+    if (phone != null && phone.isNotEmpty && firestore != null) {
+      try {
+        await firestore
+            .collection('users')
+            .doc(phone)
+            .collection('trips')
+            .doc(id)
+            .delete();
+      } catch (e) {
+        debugPrint('[TripHistoryService] Delete error: $e');
+      }
+    }
+  }
+
+  Future<void> restoreTrip(int index, TripRecord record) async {
+    final safeIndex = index.clamp(0, _trips.length);
+    _trips.insert(safeIndex, record);
+    notifyListeners();
+    await _saveLocally();
+    unawaited(_syncRecordToFirestore(record));
+  }
+
   Future<void> clearHistory() async {
     _trips.clear();
     notifyListeners();
