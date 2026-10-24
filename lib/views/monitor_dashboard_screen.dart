@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -24,8 +25,64 @@ import 'recharge_credit_dialog.dart';
 import 'reservation_screen.dart';
 import 'seat_booking_screen.dart';
 
-/// Redesigned Monitor Dashboard Screen.
-/// Compact, fancy, intuitive and responsive across all device sizes.
+// ─── Design tokens (local to this screen) ──────────────────────────────────────
+const _kGreen = Color(0xFF10B981);
+const _kAmber = Color(0xFFF59E0B);
+const _kRed = Color(0xFFEF4444);
+const _kBlue = Color(0xFF3B82F6);
+
+Color _surface(bool dark) => dark ? const Color(0xFF131D24) : Colors.white;
+Color _surfaceAlt(bool dark) =>
+    dark ? const Color(0xFF0F1A1E) : const Color(0xFFF6F8FA);
+Color _outline(bool dark) =>
+    dark ? Colors.white.withValues(alpha: 0.09) : const Color(0xFFE5E9EE);
+
+BoxDecoration _cardDeco(bool dark, {Color? accent, double radius = 22}) {
+  return BoxDecoration(
+    color: _surface(dark),
+    borderRadius: BorderRadius.circular(radius),
+    border: Border.all(
+      color: accent != null ? accent.withValues(alpha: 0.45) : _outline(dark),
+      width: accent != null ? 1.4 : 1,
+    ),
+    boxShadow: [
+      BoxShadow(
+        color: (accent ?? Colors.black).withValues(alpha: dark ? 0.18 : 0.07),
+        blurRadius: 22,
+        offset: const Offset(0, 8),
+      ),
+    ],
+  );
+}
+
+Future<bool> _confirm(
+  BuildContext context, {
+  required String title,
+  required String body,
+  required String yes,
+  required String no,
+}) async {
+  final r = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
+      content: Text(body),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(no)),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          style: TextButton.styleFrom(foregroundColor: _kRed),
+          child: Text(yes),
+        ),
+      ],
+    ),
+  );
+  return r == true;
+}
+
+/// Redesigned Monitor Dashboard.
+/// One clear status at a time, plain-language steps, big actions.
 class MonitorDashboardScreen extends StatefulWidget {
   const MonitorDashboardScreen({super.key});
 
@@ -40,7 +97,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   bool _reading = false;
   bool _openingReservation = false;
 
-  late final AnimationController _pulseCtrl;
+  /// One looping 0→1 controller drives radar rings, moving train and glows.
+  late final AnimationController _anim;
 
   @override
   void initState() {
@@ -50,12 +108,12 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     BookingActivity.instance.addListener(_onStateChanged);
 
     final isTest = WidgetsBinding.instance.runtimeType.toString().contains('Test');
-    _pulseCtrl = AnimationController(
+    _anim = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1600),
+      duration: const Duration(milliseconds: 2600),
     );
     if (!isTest) {
-      _pulseCtrl.repeat(reverse: true);
+      _anim.repeat();
     }
 
     _refresh();
@@ -68,7 +126,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     CreditService().removeListener(_onStateChanged);
     BookingActivity.instance.removeListener(_onStateChanged);
     _refreshTimer?.cancel();
-    _pulseCtrl.dispose();
+    _anim.dispose();
     super.dispose();
   }
 
@@ -152,6 +210,39 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     await m.clearSearch();
     if (mounted) {
       setState(() => _reservation = null);
+    }
+  }
+
+  Future<void> _confirmStopAndClear() async {
+    final lang = LanguageService.of(context);
+    final ok = await _confirm(
+      context,
+      title: lang.tr('Stop searching?', 'অনুসন্ধান বন্ধ করবেন?'),
+      body: lang.tr(
+        'We will stop looking for your ticket and clear this search.',
+        'আপনার টিকেটের অনুসন্ধান বন্ধ হবে এবং এই সার্চ মুছে যাবে।',
+      ),
+      yes: lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+      no: lang.tr('Keep searching', 'চালিয়ে যান'),
+    );
+    if (ok && mounted) await _handleStopAndClear();
+  }
+
+  Future<void> _confirmClearReservation() async {
+    final lang = LanguageService.of(context);
+    final ok = await _confirm(
+      context,
+      title: lang.tr('Clear this reservation?', 'রিজার্ভেশন মুছবেন?'),
+      body: lang.tr(
+        'Your held seat will be forgotten in the app. You may lose the seat.',
+        'অ্যাপ থেকে সংরক্ষিত আসনের রেকর্ড মুছে যাবে। আসনটি হারাতে পারেন।',
+      ),
+      yes: lang.tr('Clear', 'মুছুন'),
+      no: lang.tr('Cancel', 'বাতিল'),
+    );
+    if (ok && mounted) {
+      await BookingService.clear();
+      await _refresh();
     }
   }
 
@@ -258,7 +349,103 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final trainName = (p?['train']?['trip_number']?.toString().isNotEmpty == true)
         ? p!['train']['trip_number'].toString()
         : (m.targetTrains.isNotEmpty ? m.targetTrains.join(', ') : 'Train');
-    final lang = LanguageService.of(context);
+
+    // Pick the single most important thing to show.
+    late final String stateKey;
+    late final Widget content;
+
+    if (isReservationExpired) {
+      stateKey = 'expired';
+      content = _ReservationExpiredCard(
+        fromCity: fromCity,
+        toCity: toCity,
+        trainName: trainName,
+        seatClass: m.targetSeatClass,
+        dateOfJourney: dateOfJourney,
+        reason: m.bookingFailureReason,
+        isOtpFailure: p?['status'] == 'awaitingOtp',
+        isPaymentFailure: p?['status'] == 'readyForPayment',
+        isDark: isDark,
+        onRetrySearch: () => AppShell.goTo(context, AppShell.tabSearch),
+        onReAutoBook: () async => await m.reAutoBook(),
+        onClear: _handleStopAndClear,
+        onDismiss: () => m.dismissBookingFailure(),
+      );
+    } else if (hasReservation) {
+      stateKey = 'reservation';
+      content = _ReservationCard(
+        reservation: p,
+        isDark: isDark,
+        anim: _anim,
+        onPayNow: _handlePayNow,
+        onClear: _confirmClearReservation,
+        onTimeout: () async {
+          await BookingService.clear();
+          await _refresh();
+        },
+      );
+    } else if (hasActiveMonitor) {
+      stateKey = 'monitor';
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _MonitorSection(
+            m: m,
+            fromCity: fromCity,
+            toCity: toCity,
+            isDark: isDark,
+            anim: _anim,
+            onStop: () => m.pauseMonitoring(),
+            onResume: () => m.resumeMonitoring(),
+            onClear: _confirmStopAndClear,
+          ),
+          if (m.recentViaJourneys.isNotEmpty || m.viaJourneys.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            _ViaTicketsCard(
+              viaJourneys: m.recentViaJourneys.isNotEmpty
+                  ? m.recentViaJourneys
+                  : m.viaJourneys,
+              fromCity: fromCity,
+              toCity: toCity,
+              isDark: isDark,
+              anim: _anim,
+              onBookLeg: (journey, isFirstLeg) => _handleBookViaLeg(
+                journey: journey,
+                isFirstLeg: isFirstLeg,
+                fromCity: fromCity,
+                toCity: toCity,
+              ),
+            ),
+          ] else if (m.isSearchingVia) ...[
+            const SizedBox(height: 14),
+            _ViaSearchingHint(isDark: isDark),
+          ],
+          if (isZeroCredits) ...[
+            const SizedBox(height: 14),
+            _ZeroCreditBanner(
+              isDark: isDark,
+              onBuy: () => RechargeCreditDialog.show(context),
+            ),
+          ],
+        ],
+      );
+    } else if (isZeroCredits) {
+      stateKey = 'zero';
+      content = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ZeroCreditBanner(
+            isDark: isDark,
+            onBuy: () => RechargeCreditDialog.show(context),
+          ),
+          const SizedBox(height: 14),
+          _EmptyMonitorView(isDark: isDark, anim: _anim),
+        ],
+      );
+    } else {
+      stateKey = 'empty';
+      content = _EmptyMonitorView(isDark: isDark, anim: _anim);
+    }
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -271,134 +458,21 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
       body: SafeArea(
         child: SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // 1. Reservation Expired Card
-              if (isReservationExpired) ...[
-                _ReservationExpiredCard(
-                  fromCity: fromCity,
-                  toCity: toCity,
-                  trainName: trainName,
-                  seatClass: m.targetSeatClass,
-                  dateOfJourney: dateOfJourney,
-                  reason: m.bookingFailureReason,
-                  isOtpFailure: p?['status'] == 'awaitingOtp',
-                  isPaymentFailure: p?['status'] == 'readyForPayment',
-                  isDark: isDark,
-                  pulseCtrl: _pulseCtrl,
-                  onRetrySearch: () => AppShell.goTo(context, AppShell.tabSearch),
-                  onReAutoBook: () async => await m.reAutoBook(),
-                  onClear: _handleStopAndClear,
-                  onDismiss: () => m.dismissBookingFailure(),
-                ),
-                const SizedBox(height: 12),
-              ]
-              // 2. Ticket Processing / Reserved Payment Step Card (Never blank)
-              else if (hasReservation) ...[
-                _TicketProcessingStepCard(
-                  reservation: p,
-                  isDark: isDark,
-                  pulseCtrl: _pulseCtrl,
-                  onPayNow: _handlePayNow,
-                  onClear: () async {
-                    await BookingService.clear();
-                    await _refresh();
-                  },
-                ),
-                const SizedBox(height: 12),
-              ]
-              // 3. Cockpit Search / Monitor Active HUD
-              else if (hasActiveMonitor) ...[
-                _CockpitMonitorHud(
-                  m: m,
-                  fromCity: fromCity,
-                  toCity: toCity,
-                  isDark: isDark,
-                  pulseCtrl: _pulseCtrl,
-                  onStop: () => m.pauseMonitoring(),
-                  onResume: () => m.resumeMonitoring(),
-                  onClear: _handleStopAndClear,
-                ),
-                // ── In-Between / Via Station Discovered Tickets ──
-                if (m.recentViaJourneys.isNotEmpty || m.viaJourneys.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  _ViaTicketsMonitorCard(
-                    viaJourneys: m.recentViaJourneys.isNotEmpty
-                        ? m.recentViaJourneys
-                        : m.viaJourneys,
-                    fromCity: fromCity,
-                    toCity: toCity,
-                    dateOfJourney: dateOfJourney,
-                    isDark: isDark,
-                    pulseCtrl: _pulseCtrl,
-                    onBookLeg: (journey, isFirstLeg) => _handleBookViaLeg(
-                      journey: journey,
-                      isFirstLeg: isFirstLeg,
-                      fromCity: fromCity,
-                      toCity: toCity,
-                    ),
-                  ),
-                ] else if (m.isSearchingVia) ...[
-                  const SizedBox(height: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: isDark ? Colors.white10 : Colors.black12,
-                        width: 0.8,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 1.6,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              isDark ? const Color(0xFF10B981) : const Color(0xFF059669),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          lang.tr('Checking alternative via routes...', 'বিকল্প ভায়া রুট খোঁজা হচ্ছে...'),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isDark ? Colors.white70 : const Color(0xFF475569),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-                if (isZeroCredits) ...[
-                  const SizedBox(height: 12),
-                  _ZeroCreditBanner(
-                    isDark: isDark,
-                    onBuy: () => RechargeCreditDialog.show(context),
-                  ),
-                ],
-                const SizedBox(height: 12),
-              ]
-              // 4. Zero Credits Warning Banner (when idle/empty)
-              else if (isZeroCredits) ...[
-                _ZeroCreditBanner(
-                  isDark: isDark,
-                  onBuy: () => RechargeCreditDialog.show(context),
-                ),
-              ]
-              // 5. Empty State
-              else ...[
-                _EmptyMonitorView(isDark: isDark),
-              ],
-            ],
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 28),
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 320),
+            switchInCurve: Curves.easeOutCubic,
+            transitionBuilder: (child, a) => FadeTransition(
+              opacity: a,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: const Offset(0, 0.03),
+                  end: Offset.zero,
+                ).animate(a),
+                child: child,
+              ),
+            ),
+            child: KeyedSubtree(key: ValueKey(stateKey), child: content),
           ),
         ),
       ),
@@ -406,7 +480,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
   }
 }
 
-// ─── Scenic App Bar ────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// App bar
+// ═══════════════════════════════════════════════════════════════════════════════
 class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidget {
   final int credits;
   final bool isMonitoring;
@@ -426,6 +502,7 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
+    final low = credits <= 0;
 
     return ScenicRailHeader(
       compact: true,
@@ -438,33 +515,52 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
               const AppBrandIcon(size: 34),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  'Rail Pro',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: -0.4,
-                    color: Colors.white,
-                  ),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Rail Pro',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.4,
+                        color: Colors.white,
+                      ),
+                    ),
+                    if (isScheduled) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _kBlue.withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _kBlue.withValues(alpha: 0.5)),
+                        ),
+                        child: Text(
+                          lang.tr('Scheduled', 'নির্ধারিত'),
+                          style: const TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               const SizedBox(width: 8),
-
-              // Credits Pill (Amber 0 • Buy when zero)
               InkWell(
                 borderRadius: BorderRadius.circular(20),
                 onTap: () => RechargeCreditDialog.show(context),
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
-                    color: credits <= 0
-                        ? const Color(0xFFF59E0B)
-                        : Colors.white.withValues(alpha: 0.18),
+                    color: low ? _kAmber : Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
                     border: Border.all(
-                      color: credits <= 0
+                      color: low
                           ? const Color(0xFFD97706)
                           : Colors.white.withValues(alpha: 0.3),
                     ),
@@ -473,21 +569,19 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        credits <= 0
-                            ? Icons.monetization_on_rounded
-                            : Icons.stars_rounded,
-                        size: 14,
-                        color: credits <= 0 ? Colors.black87 : AppColors.accent,
+                        low ? Icons.add_circle_rounded : Icons.stars_rounded,
+                        size: 15,
+                        color: low ? Colors.black87 : AppColors.accent,
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        credits <= 0
+                        low
                             ? '0 • Buy'
                             : '$credits ${lang.tr("Credits", "ক্রেডিট")}',
                         style: TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w800,
-                          color: credits <= 0 ? Colors.black87 : Colors.white,
+                          color: low ? Colors.black87 : Colors.white,
                         ),
                       ),
                     ],
@@ -502,68 +596,996 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
   }
 }
 
-// ─── Zero Credit Banner ────────────────────────────────────────────────────────
-class _ZeroCreditBanner extends StatelessWidget {
-  final bool isDark;
-  final VoidCallback onBuy;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Shared building blocks
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  const _ZeroCreditBanner({
+/// Animated radar: expanding rings around a centre icon.
+class _RadarBeacon extends StatelessWidget {
+  final Animation<double> anim;
+  final Color color;
+  final IconData icon;
+  final bool active;
+  final double size;
+
+  const _RadarBeacon({
+    required this.anim,
+    required this.color,
+    required this.icon,
+    this.active = true,
+    this.size = 76,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          AnimatedBuilder(
+            animation: anim,
+            builder: (context, child) => CustomPaint(
+              size: Size.square(size),
+              painter: _RadarPainter(anim.value, color, active),
+            ),
+          ),
+          Container(
+            width: size * 0.52,
+            height: size * 0.52,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [color, color.withValues(alpha: 0.75)],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.4),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: size * 0.28),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RadarPainter extends CustomPainter {
+  final double t;
+  final Color color;
+  final bool active;
+
+  _RadarPainter(this.t, this.color, this.active);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    final maxR = size.width / 2;
+    final base = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = color.withValues(alpha: 0.15);
+    canvas.drawCircle(c, maxR * 0.98, base);
+    canvas.drawCircle(c, maxR * 0.72, base);
+
+    if (!active) return;
+    for (var i = 0; i < 3; i++) {
+      final p = (t + i / 3) % 1.0;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = color.withValues(alpha: (1 - p) * 0.4);
+      canvas.drawCircle(c, maxR * (0.3 + 0.7 * p), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RadarPainter old) =>
+      old.t != t || old.color != color || old.active != active;
+}
+
+class _StatusChip extends StatelessWidget {
+  final String text;
+  final Color color;
+  final bool dot;
+
+  const _StatusChip({required this.text, required this.color, this.dot = true});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 0.8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (dot) ...[
+            Container(
+              width: 6,
+              height: 6,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+            ),
+            const SizedBox(width: 5),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 9.5,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.5,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _StepState { done, active, pending }
+
+class _StepData {
+  final String label;
+  final IconData icon;
+  final _StepState state;
+  const _StepData(this.label, this.icon, this.state);
+}
+
+/// Horizontal step tracker with a glowing active step.
+class _ProgressSteps extends StatelessWidget {
+  final List<_StepData> steps;
+  final bool isDark;
+  final Animation<double> anim;
+  final Color accent;
+
+  const _ProgressSteps({
+    required this.steps,
     required this.isDark,
-    required this.onBuy,
+    required this.anim,
+    this.accent = _kGreen,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final track = isDark ? const Color(0xFF26333D) : const Color(0xFFE2E8F0);
+    return LayoutBuilder(
+      builder: (ctx, cons) {
+        final n = steps.length;
+        final colW = cons.maxWidth / n;
+        return Stack(
+          children: [
+            Positioned(
+              left: colW / 2,
+              right: colW / 2,
+              top: 14,
+              child: Row(
+                children: List.generate(n - 1, (i) {
+                  return Expanded(
+                    child: Container(
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color: steps[i].state == _StepState.done ? accent : track,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+            Row(
+              children: steps.map((s) {
+                return Expanded(child: _stepColumn(s, track));
+              }).toList(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _stepColumn(_StepData s, Color track) {
+    final done = s.state == _StepState.done;
+    final active = s.state == _StepState.active;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        AnimatedBuilder(
+          animation: anim,
+          builder: (context, child) {
+            final glow = active ? 0.5 + 0.5 * math.sin(anim.value * 2 * math.pi) : 0.0;
+            return Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: done
+                    ? accent
+                    : (active ? accent.withValues(alpha: 0.16) : track),
+                border: active
+                    ? Border.all(color: accent, width: 2)
+                    : null,
+                boxShadow: active
+                    ? [
+                        BoxShadow(
+                          color: accent.withValues(alpha: 0.15 + 0.3 * glow),
+                          blurRadius: 6 + 8 * glow,
+                          spreadRadius: 1 + 2 * glow,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Icon(
+                done ? Icons.check_rounded : s.icon,
+                size: done ? 17 : 15,
+                color: done
+                    ? Colors.white
+                    : (active ? accent : AppColors.textMuted(isDark)),
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Text(
+            s.label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10,
+              height: 1.2,
+              fontWeight: (done || active) ? FontWeight.w800 : FontWeight.w500,
+              color: (done || active)
+                  ? AppColors.textPrimary(isDark)
+                  : AppColors.textMuted(isDark),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DashedLine extends StatelessWidget {
+  final Color color;
+  const _DashedLine({required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (_, cons) {
+        final n = math.max(1, (cons.maxWidth / 9).floor());
+        return Row(
+          children: List.generate(
+            n,
+            (_) => Expanded(
+              child: Container(
+                height: 1.4,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+                color: color,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Ticket-style divider with side cut-outs.
+class _TearLine extends StatelessWidget {
+  final bool isDark;
+  const _TearLine({required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = AppColors.scaffoldBg(isDark);
+    return SizedBox(
+      height: 22,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: _DashedLine(color: _outline(isDark).withValues(alpha: 1)),
+          ),
+          Positioned(
+            left: -11,
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: bg),
+            ),
+          ),
+          Positioned(
+            right: -11,
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: bg),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Departure ───🚆──➔ Arrival with a train moving along the track.
+class _RouteTrack extends StatelessWidget {
+  final String from;
+  final String to;
+  final bool isDark;
+  final Animation<double> anim;
+  final bool moving;
+  final Color accent;
+
+  const _RouteTrack({
+    required this.from,
+    required this.to,
+    required this.isDark,
+    required this.anim,
+    this.moving = true,
+    this.accent = AppColors.primary,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          flex: 5,
+          child: _station(
+            lang.tr('FROM', 'থেকে'),
+            from,
+            CrossAxisAlignment.start,
+            Icons.trip_origin_rounded,
+            accent,
+          ),
+        ),
+        Expanded(
+          flex: 4,
+          child: SizedBox(
+            height: 34,
+            child: LayoutBuilder(
+              builder: (_, cons) {
+                return Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned.fill(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Center(child: _DashedLine(color: accent.withValues(alpha: 0.4))),
+                      ),
+                    ),
+                    AnimatedBuilder(
+                      animation: anim,
+                      builder: (_, child) {
+                        final t = moving ? anim.value : 0.5;
+                        return Align(
+                          alignment: Alignment(t * 1.7 - 0.85, 0),
+                          child: child,
+                        );
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: accent,
+                          boxShadow: [
+                            BoxShadow(
+                              color: accent.withValues(alpha: 0.45),
+                              blurRadius: 8,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.directions_railway_filled_rounded,
+                          size: 14,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ),
+        Expanded(
+          flex: 5,
+          child: _station(
+            lang.tr('TO', 'গন্তব্য'),
+            to,
+            CrossAxisAlignment.end,
+            Icons.location_on_rounded,
+            _kRed,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _station(
+    String label,
+    String city,
+    CrossAxisAlignment align,
+    IconData icon,
+    Color iconColor,
+  ) {
+    return Column(
+      crossAxisAlignment: align,
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 11, color: iconColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
+                color: AppColors.textMuted(isDark),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 3),
+        Text(
+          city,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w900,
+            letterSpacing: -0.4,
+            color: AppColors.textPrimary(isDark),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _InfoCell extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
+  final bool isDark;
+
+  const _InfoCell({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.isDark,
+    this.color = AppColors.primary,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF291804) : const Color(0xFFFEF3C7),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFFF59E0B).withValues(alpha: 0.5),
-          width: 1.5,
-        ),
+        color: _surfaceAlt(isDark),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _outline(isDark)),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: Row(
         children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.warning_amber_rounded,
-                color: Color(0xFFF59E0B),
-                size: 24,
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Add credits to continue',
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, size: 14, color: color),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
-                    color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textMuted(isDark),
                   ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  value,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary(isDark),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 1) Active / scheduled / paused search
+// ═══════════════════════════════════════════════════════════════════════════════
+class _MonitorSection extends StatelessWidget {
+  final MonitorService m;
+  final String fromCity;
+  final String toCity;
+  final bool isDark;
+  final Animation<double> anim;
+  final VoidCallback onStop;
+  final VoidCallback onClear;
+  final VoidCallback? onResume;
+
+  const _MonitorSection({
+    required this.m,
+    required this.fromCity,
+    required this.toCity,
+    required this.isDark,
+    required this.anim,
+    required this.onStop,
+    required this.onClear,
+    this.onResume,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    final trainsList = m.targetTrains.join(', ');
+    final isLive = m.isMonitoring && !m.isScheduled;
+
+    final color = isLive
+        ? AppColors.primary
+        : (m.isScheduled ? _kBlue : const Color(0xFF94A3B8));
+
+    final statusText = m.isScheduled
+        ? lang.tr('SCHEDULED', 'নির্ধারিত')
+        : m.isMonitoring
+            ? lang.tr('LIVE', 'চলছে')
+            : lang.tr('PAUSED', 'স্থগিত');
+
+    final title = m.isScheduled
+        ? lang.tr('Search is scheduled', 'অনুসন্ধান নির্ধারিত আছে')
+        : m.isMonitoring
+            ? lang.tr("We're finding your ticket", 'আমরা আপনার টিকেট খুঁজছি')
+            : lang.tr('Search is paused', 'অনুসন্ধান স্থগিত');
+
+    final subtitle = m.isScheduled
+        ? (m.scheduledStartLabel?.isNotEmpty == true
+            ? lang.tr(
+                'Starts ${m.scheduledStartLabel} (BD Time)',
+                'শুরু: ${m.scheduledStartLabel} (বাংলাদেশ সময়)',
+              )
+            : lang.tr(
+                'Starts automatically when tickets open',
+                'টিকেট ছাড়া মাত্রই স্বয়ংক্রিয়ভাবে শুরু হবে',
+              ))
+        : m.isMonitoring
+            ? lang.tr(
+                'You can relax. We will grab the seat and alert you the moment it appears.',
+                'নিশ্চিন্তে থাকুন। সিট আসামাত্র আমরা ধরে ফেলব ও আপনাকে জানাব।',
+              )
+            : lang.tr(
+                'Tap Resume to start searching again.',
+                'আবার খুঁজতে "চালু করুন" চাপুন।',
+              );
+
+    final qty = m.bookingIntent.quantity;
+    final auto = m.bookingIntent.autoReserve;
+    final seatClassLabel = m.targetSeatClass?.isNotEmpty == true
+        ? m.targetSeatClass!
+        : lang.tr('Any class', 'যেকোনো ক্লাস');
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Hero status ──
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: isDark
+                  ? [
+                      color.withValues(alpha: 0.22),
+                      const Color(0xFF111B22),
+                    ]
+                  : [
+                      color.withValues(alpha: 0.14),
+                      Colors.white,
+                    ],
+            ),
+            border: Border.all(color: color.withValues(alpha: 0.35)),
+            boxShadow: [
+              BoxShadow(
+                color: color.withValues(alpha: isDark ? 0.16 : 0.12),
+                blurRadius: 24,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              _RadarBeacon(
+                anim: anim,
+                color: color,
+                active: isLive,
+                size: 84,
+                icon: m.isScheduled
+                    ? Icons.schedule_rounded
+                    : (isLive ? Icons.search_rounded : Icons.pause_rounded),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _StatusChip(text: statusText, color: color),
+                    const SizedBox(height: 7),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 17,
+                        height: 1.2,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.3,
+                        color: AppColors.textPrimary(isDark),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        height: 1.35,
+                        color: AppColors.textSecondary(isDark),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFF59E0B),
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+        ),
+        const SizedBox(height: 14),
+
+        // ── Journey "boarding pass" ──
+        Container(
+          decoration: _cardDeco(isDark),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                child: _RouteTrack(
+                  from: fromCity,
+                  to: toCity,
+                  isDark: isDark,
+                  anim: anim,
+                  moving: isLive,
                 ),
-                elevation: 0,
               ),
-              onPressed: onBuy,
-              child: const Text(
-                'Buy Credit',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+              _TearLine(isDark: isDark),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _InfoCell(
+                            icon: Icons.calendar_today_rounded,
+                            label: lang.tr('Date', 'তারিখ'),
+                            value: m.dateOfJourney,
+                            isDark: isDark,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _InfoCell(
+                            icon: Icons.airline_seat_recline_extra_rounded,
+                            label: lang.tr('Class', 'ক্লাস'),
+                            value: seatClassLabel,
+                            isDark: isDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _InfoCell(
+                            icon: Icons.people_alt_rounded,
+                            label: lang.tr('Seats', 'আসন'),
+                            value: lang.tr('$qty seat${qty > 1 ? 's' : ''}', '$qtyটি'),
+                            isDark: isDark,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _InfoCell(
+                            icon: auto ? Icons.bolt_rounded : Icons.notifications_active_rounded,
+                            label: lang.tr('When found', 'সিট পেলে'),
+                            value: auto
+                                ? lang.tr('Auto-book', 'অটো-বুক')
+                                : lang.tr('Loud alarm', 'অ্যালার্ম'),
+                            color: auto ? _kGreen : _kBlue,
+                            isDark: isDark,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (trainsList.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: isDark ? 0.1 : 0.07),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: AppColors.primary.withValues(alpha: 0.22),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.train_rounded,
+                              size: 16,
+                              color: AppColors.primary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '${lang.tr("Watching", "নজরে")}: ',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textPrimary(isDark),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(
+                                trainsList,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary(isDark),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ── What happens next ──
+        Container(
+          padding: const EdgeInsets.fromLTRB(14, 14, 14, 14),
+          decoration: _cardDeco(isDark, radius: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    lang.tr('What happens next', 'এরপর কী হবে'),
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
+                      color: AppColors.textPrimary(isDark),
+                    ),
+                  ),
+                  const Spacer(),
+                  Icon(Icons.radar_rounded, size: 14, color: color),
+                  const SizedBox(width: 4),
+                  Text(
+                    lang.tr('${m.totalChecksCount} checks', '${m.totalChecksCount} বার চেক'),
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textMuted(isDark),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _ProgressSteps(
+                isDark: isDark,
+                anim: anim,
+                accent: color == const Color(0xFF94A3B8) ? AppColors.primary : color,
+                steps: [
+                  _StepData(
+                    lang.tr('Searching', 'খোঁজা হচ্ছে'),
+                    Icons.search_rounded,
+                    isLive ? _StepState.active : _StepState.pending,
+                  ),
+                  _StepData(
+                    lang.tr('Seat locked', 'সিট লক'),
+                    Icons.lock_rounded,
+                    _StepState.pending,
+                  ),
+                  _StepData(
+                    lang.tr('Verify OTP', 'ওটিপি'),
+                    Icons.sms_rounded,
+                    _StepState.pending,
+                  ),
+                  _StepData(
+                    lang.tr('Pay in 5 min', '৫ মিনিটে পেমেন্ট'),
+                    Icons.payments_rounded,
+                    _StepState.pending,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: _surfaceAlt(isDark),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.info_outline_rounded, size: 15, color: _kBlue),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        lang.tr(
+                          'You can keep the app in the background. We will sound a loud alert as soon as a seat is found.',
+                          'অ্যাপ ব্যাকগ্রাউন্ডে রেখে অন্য কাজ করতে পারেন। সিট পেলেই জোরে অ্যালার্ম বাজবে।',
+                        ),
+                        style: TextStyle(
+                          fontSize: 11,
+                          height: 1.35,
+                          color: AppColors.textSecondary(isDark),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ── Controls ──
+        Row(
+          children: [
+            Expanded(
+              flex: 5,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: m.isMonitoring
+                      ? (isDark ? const Color(0xFF26333D) : const Color(0xFFE2E8F0))
+                      : AppColors.primary,
+                  foregroundColor: m.isMonitoring
+                      ? AppColors.textPrimary(isDark)
+                      : Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                onPressed: m.isMonitoring
+                    ? onStop
+                    : (onResume ?? () => m.resumeMonitoring()),
+                icon: Icon(
+                  m.isMonitoring ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                  size: 20,
+                ),
+                label: Text(
+                  m.isMonitoring
+                      ? lang.tr('Pause', 'স্থগিত')
+                      : lang.tr('Resume', 'চালু করুন'),
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              flex: 5,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: _kRed,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  side: BorderSide(color: _kRed.withValues(alpha: 0.4)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                ),
+                onPressed: onClear,
+                icon: const Icon(Icons.stop_rounded, size: 20),
+                label: Text(
+                  lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
+                  style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _ViaSearchingHint extends StatelessWidget {
+  final bool isDark;
+  const _ViaSearchingHint({required this.isDark});
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+      decoration: BoxDecoration(
+        color: _surfaceAlt(isDark),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: _outline(isDark)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(
+            width: 13,
+            height: 13,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(_kGreen),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Flexible(
+            child: Text(
+              lang.tr(
+                'Also checking split routes via other stations…',
+                'অন্য স্টেশন হয়ে বিকল্প রুটও খোঁজা হচ্ছে…',
+              ),
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textSecondary(isDark),
               ),
             ),
           ),
@@ -573,20 +1595,24 @@ class _ZeroCreditBanner extends StatelessWidget {
   }
 }
 
-// ─── Ticket Processing / Reserved Step Card ────────────────────────────────────
-class _TicketProcessingStepCard extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════════════════
+// 2) Seat reserved – OTP / Pay
+// ═══════════════════════════════════════════════════════════════════════════════
+class _ReservationCard extends StatelessWidget {
   final Map<String, dynamic> reservation;
   final bool isDark;
-  final AnimationController pulseCtrl;
+  final Animation<double> anim;
   final VoidCallback onPayNow;
   final VoidCallback onClear;
+  final VoidCallback onTimeout;
 
-  const _TicketProcessingStepCard({
+  const _ReservationCard({
     required this.reservation,
     required this.isDark,
-    required this.pulseCtrl,
+    required this.anim,
     required this.onPayNow,
     required this.onClear,
+    required this.onTimeout,
   });
 
   @override
@@ -631,61 +1657,73 @@ class _TicketProcessingStepCard extends StatelessWidget {
               )
             : 0.0);
 
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF131F1C) : Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFF10B981).withValues(alpha: 0.6),
-          width: 1.5,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF10B981).withValues(alpha: 0.12),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── Success hero ──
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF059669), Color(0xFF10B981)],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _kGreen.withValues(alpha: 0.35),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
-        ],
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Header Badge
-          Row(
+          child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(7),
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
                   shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.2),
                 ),
-                child: const Icon(
-                  Icons.check_circle_rounded,
-                  color: Color(0xFF10B981),
-                  size: 20,
+                child: Icon(
+                  isReady ? Icons.celebration_rounded : Icons.sms_rounded,
+                  color: Colors.white,
+                  size: 28,
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      lang.tr('Ticket Processing Steps', 'টিকেট প্রক্রিয়াকরণ ধাপ'),
+                      isReady
+                          ? lang.tr('Seat reserved! 🎉', 'আসন সংরক্ষিত! 🎉')
+                          : lang.tr('Almost there…', 'প্রায় হয়ে গেছে…'),
                       style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF10B981),
+                        fontSize: 19,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.3,
+                        color: Colors.white,
                       ),
                     ),
+                    const SizedBox(height: 3),
                     Text(
                       isReady
-                          ? lang.tr('Seat reserved! Complete payment now.', 'আসন সংরক্ষিত হয়েছে! মূল্য পরিশোধ করুন।')
-                          : lang.tr('OTP checking in progress…', 'ওটিপি যাচাই করা হচ্ছে…'),
+                          ? lang.tr(
+                              'Pay now before the timer runs out.',
+                              'টাইমার শেষ হওয়ার আগে পেমেন্ট করুন।',
+                            )
+                          : lang.tr(
+                              'Verifying your OTP. Please wait.',
+                              'আপনার ওটিপি যাচাই করা হচ্ছে। অপেক্ষা করুন।',
+                            ),
                       style: TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textMuted(isDark),
+                        fontSize: 12,
+                        height: 1.3,
+                        color: Colors.white.withValues(alpha: 0.92),
                       ),
                     ),
                   ],
@@ -693,230 +1731,225 @@ class _TicketProcessingStepCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 12),
+        ),
+        const SizedBox(height: 14),
 
-          // 4-Step Progress Indicator
-          _StepIndicator(isReady: isReady, isDark: isDark),
-          const SizedBox(height: 14),
-
-          // 5-Minute Countdown Timer Bar
-          _PaymentCountdownBar(
-            reservation: reservation,
-            isDark: isDark,
-            onTimeout: onClear,
-          ),
-          const SizedBox(height: 14),
-
-          // Ticket Details Card
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF1F2937) : const Color(0xFFF9FAFB),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
+        // ── Timer + steps ──
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: _cardDeco(isDark, accent: _kGreen, radius: 20),
+          child: Column(
+            children: [
+              _CountdownRing(
+                reservation: reservation,
+                isDark: isDark,
+                onTimeout: onTimeout,
               ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        trainName,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.textPrimary(isDark),
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    if (totalFare > 0)
-                      Text(
-                        '৳${totalFare.toStringAsFixed(0)}',
-                        style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w900,
-                          color: Color(0xFF10B981),
-                        ),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '$from ➔ $to · $date',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary(isDark),
+              const SizedBox(height: 16),
+              _ProgressSteps(
+                isDark: isDark,
+                anim: anim,
+                steps: [
+                  _StepData(lang.tr('Seat found', 'আসন পাওয়া'),
+                      Icons.search_rounded, _StepState.done),
+                  _StepData(lang.tr('Seat locked', 'সিট লক'),
+                      Icons.lock_rounded, _StepState.done),
+                  _StepData(
+                    lang.tr('OTP verified', 'ওটিপি যাচাই'),
+                    Icons.sms_rounded,
+                    isReady ? _StepState.done : _StepState.active,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
+                  _StepData(
+                    lang.tr('Pay ticket', 'পেমেন্ট'),
+                    Icons.payments_rounded,
+                    isReady ? _StepState.active : _StepState.pending,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // ── Ticket ──
+        Container(
+          decoration: _cardDeco(isDark),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (seatClass.isNotEmpty)
-                      _InfoBadge(
-                        label: seatClass,
-                        icon: Icons.airline_seat_recline_extra_rounded,
-                        isDark: isDark,
-                      ),
-                    if (coach.isNotEmpty)
-                      _InfoBadge(
-                        label: '${lang.tr("Coach", "বগি")}: $coach',
-                        icon: Icons.directions_transit_rounded,
-                        isDark: isDark,
-                      ),
-                    if (seatNumbers.isNotEmpty)
-                      _InfoBadge(
-                        label: '${lang.tr("Seat", "সিট")}: $seatNumbers',
-                        icon: Icons.event_seat_rounded,
-                        isDark: isDark,
-                      ),
+                    Row(
+                      children: [
+                        const Icon(Icons.confirmation_number_rounded,
+                            size: 16, color: _kGreen),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            trainName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textPrimary(isDark),
+                            ),
+                          ),
+                        ),
+                        Text(
+                          date,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textMuted(isDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    _RouteTrack(
+                      from: from,
+                      to: to,
+                      isDark: isDark,
+                      anim: anim,
+                      moving: false,
+                      accent: _kGreen,
+                    ),
                   ],
                 ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-
-          // Primary Pay Now Button
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981),
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 13),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
               ),
-              elevation: 2,
-            ),
-            onPressed: onPayNow,
-            icon: const Icon(Icons.payment_rounded, size: 20),
-            label: Text(
-              lang.tr('Pay Now', 'পেমেন্ট করুন'),
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // Clear Record Action
-          Center(
-            child: TextButton.icon(
-              onPressed: onClear,
-              icon: const Icon(Icons.delete_outline_rounded, size: 16),
-              label: Text(
-                lang.tr('Clear record', 'রেকর্ড মুছুন'),
-                style: const TextStyle(fontSize: 12),
-              ),
-              style: TextButton.styleFrom(
-                foregroundColor: AppColors.textMuted(isDark),
-                visualDensity: VisualDensity.compact,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── 4-Step Indicator ──────────────────────────────────────────────────────────
-class _StepIndicator extends StatelessWidget {
-  final bool isReady;
-  final bool isDark;
-
-  const _StepIndicator({required this.isReady, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final lang = LanguageService.of(context);
-
-    final steps = [
-      lang.tr('Seat Found', 'আসন প্রাপ্ত'),
-      lang.tr('Locked', 'সংরক্ষিত'),
-      lang.tr('OTP Verified', 'ওটিপি যাচাই'),
-      lang.tr('Pay Ticket', 'পেমেন্ট'),
-    ];
-
-    return Row(
-      children: List.generate(steps.length * 2 - 1, (index) {
-        if (index.isOdd) {
-          final completed = isReady || index < 4;
-          return Expanded(
-            child: Container(
-              height: 2,
-              color: completed
-                  ? const Color(0xFF10B981)
-                  : (isDark ? Colors.grey.shade800 : Colors.grey.shade300),
-            ),
-          );
-        }
-        final stepIdx = index ~/ 2;
-        final completed = (stepIdx < 3) || (stepIdx == 3 && isReady);
-
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 22,
-              height: 22,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: completed
-                    ? const Color(0xFF10B981)
-                    : (isDark ? Colors.grey.shade800 : Colors.grey.shade300),
-              ),
-              child: Center(
-                child: Icon(
-                  completed ? Icons.check_rounded : Icons.circle,
-                  size: completed ? 14 : 6,
-                  color: completed ? Colors.white : Colors.grey,
+              _TearLine(isDark: isDark),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        if (seatClass.isNotEmpty)
+                          Expanded(
+                            child: _InfoCell(
+                              icon: Icons.airline_seat_recline_extra_rounded,
+                              label: lang.tr('Class', 'ক্লাস'),
+                              value: seatClass,
+                              isDark: isDark,
+                              color: _kGreen,
+                            ),
+                          ),
+                        if (seatClass.isNotEmpty && coach.isNotEmpty)
+                          const SizedBox(width: 8),
+                        if (coach.isNotEmpty)
+                          Expanded(
+                            child: _InfoCell(
+                              icon: Icons.directions_transit_rounded,
+                              label: lang.tr('Coach', 'বগি'),
+                              value: coach,
+                              isDark: isDark,
+                              color: _kGreen,
+                            ),
+                          ),
+                      ],
+                    ),
+                    if (seatNumbers.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      _InfoCell(
+                        icon: Icons.event_seat_rounded,
+                        label: lang.tr('Seat numbers', 'সিট নম্বর'),
+                        value: seatNumbers,
+                        isDark: isDark,
+                        color: _kGreen,
+                      ),
+                    ],
+                    if (totalFare > 0) ...[
+                      const SizedBox(height: 12),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            lang.tr('Total fare', 'মোট ভাড়া'),
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary(isDark),
+                            ),
+                          ),
+                          Text(
+                            '৳${totalFare.toStringAsFixed(0)}',
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -0.5,
+                              color: _kGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
                 ),
               ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // ── Pay ──
+        FilledButton.icon(
+          style: FilledButton.styleFrom(
+            backgroundColor: _kGreen,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            const SizedBox(height: 3),
-            Text(
-              steps[stepIdx],
-              style: TextStyle(
-                fontSize: 9.5,
-                fontWeight: completed ? FontWeight.bold : FontWeight.normal,
-                color: completed
-                    ? (isDark ? Colors.white : Colors.black87)
-                    : AppColors.textMuted(isDark),
-              ),
+            elevation: 4,
+            shadowColor: _kGreen.withValues(alpha: 0.5),
+          ),
+          onPressed: onPayNow,
+          icon: const Icon(Icons.payment_rounded, size: 20),
+          label: Text(
+            lang.tr('Pay Now', 'পেমেন্ট করুন'),
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Center(
+          child: TextButton.icon(
+            onPressed: onClear,
+            icon: const Icon(Icons.delete_outline_rounded, size: 16),
+            label: Text(
+              lang.tr('Clear record', 'রেকর্ড মুছুন'),
+              style: const TextStyle(fontSize: 12),
             ),
-          ],
-        );
-      }),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.textMuted(isDark),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
 
-// ─── 5-Min Countdown Timer Bar ─────────────────────────────────────────────────
-class _PaymentCountdownBar extends StatefulWidget {
+/// Circular countdown for the 5-minute payment window.
+class _CountdownRing extends StatefulWidget {
   final Map<String, dynamic> reservation;
   final bool isDark;
   final VoidCallback onTimeout;
 
-  const _PaymentCountdownBar({
+  const _CountdownRing({
     required this.reservation,
     required this.isDark,
     required this.onTimeout,
   });
 
   @override
-  State<_PaymentCountdownBar> createState() => _PaymentCountdownBarState();
+  State<_CountdownRing> createState() => _CountdownRingState();
 }
 
-class _PaymentCountdownBarState extends State<_PaymentCountdownBar> {
+class _CountdownRingState extends State<_CountdownRing> {
   Timer? _timer;
   int _secondsLeft = 300;
 
@@ -957,51 +1990,71 @@ class _PaymentCountdownBarState extends State<_PaymentCountdownBar> {
     final m = (_secondsLeft ~/ 60).toString().padLeft(2, '0');
     final s = (_secondsLeft % 60).toString().padLeft(2, '0');
     final progress = (_secondsLeft / 300).clamp(0.0, 1.0);
+    final color = _secondsLeft > 120
+        ? _kGreen
+        : (_secondsLeft > 60 ? _kAmber : _kRed);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.timer_outlined,
-                  size: 14,
-                  color: Color(0xFFF59E0B),
+        SizedBox(
+          width: 78,
+          height: 78,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              SizedBox(
+                width: 78,
+                height: 78,
+                child: CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 7,
+                  strokeCap: StrokeCap.round,
+                  backgroundColor: widget.isDark
+                      ? const Color(0xFF26333D)
+                      : const Color(0xFFE2E8F0),
+                  valueColor: AlwaysStoppedAnimation<Color>(color),
                 ),
-                const SizedBox(width: 4),
-                Text(
-                  lang.tr('5-Minute Time Limit Reached', '৫ মিনিটের সময়সীমা সমাপ্ত'),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textMuted(widget.isDark),
-                  ),
-                ),
-              ],
-            ),
-            Text(
-              '$m:$s',
-              style: const TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w800,
-                color: Color(0xFFF59E0B),
               ),
-            ),
-          ],
+              Text(
+                '$m:$s',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                  color: color,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
         ),
-        const SizedBox(height: 4),
-        ClipRRect(
-          borderRadius: BorderRadius.circular(4),
-          child: LinearProgressIndicator(
-            value: progress,
-            minHeight: 5,
-            backgroundColor: widget.isDark
-                ? Colors.grey.shade800
-                : Colors.grey.shade200,
-            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF59E0B)),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                lang.tr('Time left to pay', 'পেমেন্টের বাকি সময়'),
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.textPrimary(widget.isDark),
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                _secondsLeft <= 60
+                    ? lang.tr('Hurry! The seat will be released soon.',
+                        'তাড়াতাড়ি করুন! আসন শীঘ্রই ছেড়ে দেওয়া হবে।')
+                    : lang.tr('Your seat is held for you until the timer ends.',
+                        'টাইমার শেষ না হওয়া পর্যন্ত আসনটি আপনার জন্য ধরা আছে।'),
+                style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.35,
+                  color: AppColors.textSecondary(widget.isDark),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1009,765 +2062,9 @@ class _PaymentCountdownBarState extends State<_PaymentCountdownBar> {
   }
 }
 
-// ─── Cockpit Monitor Active HUD Card ───────────────────────────────────────────
-class _CockpitMonitorHud extends StatelessWidget {
-  final MonitorService m;
-  final String fromCity;
-  final String toCity;
-  final bool isDark;
-  final AnimationController pulseCtrl;
-  final VoidCallback onStop;
-  final VoidCallback onClear;
-  final VoidCallback? onResume;
-
-  const _CockpitMonitorHud({
-    required this.m,
-    required this.fromCity,
-    required this.toCity,
-    required this.isDark,
-    required this.pulseCtrl,
-    required this.onStop,
-    required this.onClear,
-    this.onResume,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final lang = LanguageService.of(context);
-    final targetTrains = m.targetTrains;
-    final trainsList = targetTrains.join(', ');
-    final isLive = m.isMonitoring && !m.isScheduled;
-
-    final primaryColor = isLive
-        ? AppColors.primary
-        : (m.isScheduled ? const Color(0xFF3B82F6) : Colors.grey);
-
-    final statusText = m.isScheduled
-        ? lang.tr('SCHEDULED', 'নির্ধারিত')
-        : m.isMonitoring
-            ? lang.tr('ACTIVE HUNT', 'সক্রিয় নজরদারি')
-            : lang.tr('PAUSED', 'স্থগিত');
-
-    final heroTitle = m.isScheduled
-        ? lang.tr('Search scheduled', 'অনুসন্ধান নির্ধারিত')
-        : m.isMonitoring
-            ? lang.tr("We're Looking for Your Ticket", 'আমরা আপনার টিকেটের সন্ধানে আছি')
-            : lang.tr('Search Paused', 'অনুসন্ধান স্থগিত');
-
-    final heroSubtitle = m.isScheduled
-        ? (m.scheduledStartLabel?.isNotEmpty == true
-            ? lang.tr(
-                'Auto-hunt starts ${m.scheduledStartLabel} (BD Time)',
-                'শুরু: ${m.scheduledStartLabel} (বাংলাদেশ সময়)',
-              )
-            : lang.tr(
-                'Will automatically hunt as soon as tickets open',
-                'টিকেট ছাড়া মাত্রই স্বয়ংক্রিয় অনুসন্ধান শুরু হবে',
-              ))
-        : m.isMonitoring
-            ? lang.tr(
-                'Scanning Bangladesh Railway live. We will secure your seat instantly when released!',
-                'সার্বক্ষণিক বাংলাদেশ রেলওয়েতে আসন খোঁজা হচ্ছে। সিট পেলেই তাৎক্ষণিক সুরক্ষিত করা হবে!',
-              )
-            : lang.tr(
-                'Monitoring is paused. Tap Resume to continue searching.',
-                'নজরদারি স্থগিত রয়েছে। পুনরায় খুঁজতে চালু বাটনে চাপুন।',
-              );
-
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: isDark
-              ? [
-                  const Color(0xFF132321),
-                  const Color(0xFF101920),
-                ]
-              : [
-                  const Color(0xFFF0FDF8),
-                  Colors.white,
-                ],
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: primaryColor.withValues(alpha: isDark ? 0.35 : 0.25),
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: primaryColor.withValues(alpha: isDark ? 0.12 : 0.08),
-            blurRadius: 18,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // ── 1. Hero Radar & Reassurance Header ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Animated Pulsing Radar Beacon
-                AnimatedBuilder(
-                  animation: pulseCtrl,
-                  builder: (_, child) {
-                    final pulse = isLive ? pulseCtrl.value : 0.0;
-                    return Container(
-                      width: 44,
-                      height: 44,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: primaryColor.withValues(alpha: 0.12 + 0.08 * pulse),
-                        border: Border.all(
-                          color: primaryColor.withValues(alpha: 0.35 + 0.3 * pulse),
-                          width: 1.5,
-                        ),
-                        boxShadow: isLive
-                            ? [
-                                BoxShadow(
-                                  color: primaryColor.withValues(alpha: 0.25 * pulse),
-                                  blurRadius: 10 + 6 * pulse,
-                                  spreadRadius: 1 + 2 * pulse,
-                                ),
-                              ]
-                            : null,
-                      ),
-                      child: Icon(
-                        m.isScheduled
-                            ? Icons.schedule_rounded
-                            : (isLive ? Icons.radar_rounded : Icons.pause_circle_filled_rounded),
-                        color: primaryColor,
-                        size: 24,
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(width: 12),
-                // Hero Titles
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              heroTitle,
-                              style: TextStyle(
-                                fontSize: 14.5,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.textPrimary(isDark),
-                                letterSpacing: -0.2,
-                              ),
-                            ),
-                          ),
-                          // Live Status Pill
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                            decoration: BoxDecoration(
-                              color: primaryColor.withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: primaryColor.withValues(alpha: 0.3),
-                                width: 0.8,
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: primaryColor,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  statusText,
-                                  style: TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: primaryColor,
-                                    letterSpacing: 0.4,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        heroSubtitle,
-                        style: TextStyle(
-                          fontSize: 11,
-                          height: 1.3,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.textSecondary(isDark),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Divider line
-          Divider(
-            height: 1,
-            color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06),
-          ),
-
-          // ── 2. Route & Journey Details Card ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? Colors.black.withValues(alpha: 0.25)
-                    : Colors.white.withValues(alpha: 0.85),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: isDark ? Colors.white12 : Colors.grey.shade200,
-                ),
-              ),
-              child: Column(
-                children: [
-                  // Station Row
-                  Row(
-                    children: [
-                      // Departure Station
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.radio_button_checked_rounded,
-                                  size: 11,
-                                  color: AppColors.primary,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  lang.tr('DEPARTURE', 'প্রস্থান'),
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textMuted(isDark),
-                                    letterSpacing: 0.6,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              fromCity,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.textPrimary(isDark),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Train Connector Graphic
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              width: 14,
-                              height: 1.5,
-                              color: AppColors.primary.withValues(alpha: 0.4),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: AppColors.primary.withValues(alpha: 0.15),
-                              ),
-                              child: const Icon(
-                                Icons.directions_railway_filled_rounded,
-                                size: 14,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                            const Icon(
-                              Icons.arrow_forward_rounded,
-                              size: 14,
-                              color: AppColors.primary,
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      // Arrival Station
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Text(
-                                  lang.tr('ARRIVAL', 'গন্তব্য'),
-                                  style: TextStyle(
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.textMuted(isDark),
-                                    letterSpacing: 0.6,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                const Icon(
-                                  Icons.location_on_rounded,
-                                  size: 11,
-                                  color: Color(0xFFEF4444),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              toCity,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w900,
-                                color: AppColors.textPrimary(isDark),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 10),
-
-                  // Route Metadata Tags (Date, Class, Seats, Auto-book)
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      // Date
-                      _HudTag(
-                        icon: Icons.calendar_today_rounded,
-                        label: m.dateOfJourney,
-                        isDark: isDark,
-                      ),
-                      // Class
-                      _HudTag(
-                        icon: Icons.airline_seat_recline_extra_rounded,
-                        label: m.targetSeatClass?.isNotEmpty == true
-                            ? m.targetSeatClass!
-                            : lang.tr('ALL CLASSES', 'সকল ক্লাস'),
-                        isDark: isDark,
-                      ),
-                      // Seats Count
-                      _HudTag(
-                        icon: Icons.people_alt_rounded,
-                        label: lang.tr(
-                          '${m.bookingIntent.quantity} Seat${m.bookingIntent.quantity > 1 ? 's' : ''}',
-                          '${m.bookingIntent.quantity}টি আসন',
-                        ),
-                        isDark: isDark,
-                      ),
-                      // Mode badge
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                        decoration: BoxDecoration(
-                          color: m.bookingIntent.autoReserve
-                              ? const Color(0xFF10B981).withValues(alpha: 0.15)
-                              : const Color(0xFF3B82F6).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(
-                            color: m.bookingIntent.autoReserve
-                                ? const Color(0xFF10B981).withValues(alpha: 0.3)
-                                : const Color(0xFF3B82F6).withValues(alpha: 0.3),
-                            width: 0.8,
-                          ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              m.bookingIntent.autoReserve
-                                  ? Icons.bolt_rounded
-                                  : Icons.volume_up_rounded,
-                              size: 12,
-                              color: m.bookingIntent.autoReserve
-                                  ? const Color(0xFF10B981)
-                                  : const Color(0xFF3B82F6),
-                            ),
-                            const SizedBox(width: 3),
-                            Text(
-                              m.bookingIntent.autoReserve
-                                  ? lang.tr('Auto-Reserve ON', 'অটো-বুকিং চালু')
-                                  : lang.tr('Whistle Alarm ON', 'হুইসেল অ্যালার্ম চালু'),
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: m.bookingIntent.autoReserve
-                                    ? const Color(0xFF10B981)
-                                    : const Color(0xFF3B82F6),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // ── 3. Monitored Target Trains Section ──
-          if (trainsList.isNotEmpty) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    lang.tr('TARGET TRAINS', 'টার্গেট ট্রেন'),
-                    style: TextStyle(
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textMuted(isDark),
-                      letterSpacing: 0.6,
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF1B2A30)
-                          : const Color(0xFFE2E8F0).withValues(alpha: 0.7),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.25),
-                        width: 0.8,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.directions_railway_filled_rounded,
-                          size: 15,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            trainsList,
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textPrimary(isDark),
-                            ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
-
-          // ── 4. Live Vigilance Telemetry Strip ──
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF0F1A1E)
-                    : const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                ),
-              ),
-              child: Row(
-                children: [
-                  // Continuous Live Status (No interval revealed)
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Icon(
-                          isLive
-                              ? Icons.wifi_tethering_rounded
-                              : (m.isScheduled
-                                  ? Icons.schedule_rounded
-                                  : Icons.pause_circle_outline_rounded),
-                          size: 14,
-                          color: primaryColor,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            isLive
-                                ? lang.tr('Always hunting', 'সার্বক্ষণিক স্ক্যানিং')
-                                : (m.isScheduled
-                                    ? lang.tr('Scheduled', 'নির্ধারিত')
-                                    : lang.tr('Paused', 'স্থগিত')),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary(isDark),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 1,
-                    height: 16,
-                    color: isDark ? Colors.white12 : Colors.grey.shade300,
-                  ),
-                  const SizedBox(width: 8),
-                  // Scans count
-                  Expanded(
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.radar_rounded,
-                          size: 14,
-                          color: AppColors.primary,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            lang.tr(
-                              '${m.totalChecksCount} scans done',
-                              '${m.totalChecksCount} বার চেক হয়েছে',
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary(isDark),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    width: 1,
-                    height: 16,
-                    color: isDark ? Colors.white12 : Colors.grey.shade300,
-                  ),
-                  const SizedBox(width: 8),
-                  // Whistle ready
-                  Expanded(
-                    child: Row(
-                      children: [
-                        const Icon(
-                          Icons.notifications_active_rounded,
-                          size: 14,
-                          color: Color(0xFF10B981),
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            lang.tr('Whistle ready', 'হুইসেল প্রস্তুত'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary(isDark),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 10),
-
-          // ── 5. Reassurance Banner ("We are looking for your ticket") ──
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: isDark ? 0.08 : 0.06),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: AppColors.primary.withValues(alpha: 0.18),
-                  width: 0.8,
-                ),
-              ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.security_rounded,
-                    size: 16,
-                    color: AppColors.primary,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      lang.tr(
-                        'Keep your app in background safely. Rail Pro hunts for seats 24/7 and sounds an alert immediately!',
-                        'অ্যাপটি ব্যাকগ্রাউন্ডে চালু রেখে অন্য কাজ করতে পারেন। সিট আসামাত্র তীব্র অ্যালার্ম দিয়ে বুক করবে!',
-                      ),
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w500,
-                        height: 1.3,
-                        color: AppColors.textSecondary(isDark),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // ── 6. Controls Bar (Pause/Resume, Stop & Clear) ──
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.symmetric(vertical: 9),
-                      side: BorderSide(
-                        color: isDark ? Colors.grey.shade700 : Colors.grey.shade300,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    onPressed: m.isMonitoring
-                        ? onStop
-                        : (onResume ?? () => m.resumeMonitoring()),
-                    icon: Icon(
-                      m.isMonitoring ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                      size: 16,
-                    ),
-                    label: Text(
-                      m.isMonitoring
-                          ? lang.tr('Pause', 'স্থগিত')
-                          : lang.tr('Resume', 'চালু করুন'),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                      foregroundColor: const Color(0xFFEF4444),
-                      padding: const EdgeInsets.symmetric(vertical: 9),
-                      side: BorderSide(
-                        color: const Color(0xFFEF4444).withValues(alpha: 0.35),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    onPressed: onClear,
-                    icon: const Icon(Icons.stop_rounded, size: 16),
-                    label: Text(
-                      lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Compact HUD Tag Helper ───────────────────────────────────────────────────
-class _HudTag extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isDark;
-
-  const _HudTag({
-    required this.icon,
-    required this.label,
-    required this.isDark,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isDark ? Colors.white10 : Colors.grey.shade300,
-          width: 0.8,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 11, color: AppColors.primary),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary(isDark),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── Reservation Expired Card ──────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3) Hold expired
+// ═══════════════════════════════════════════════════════════════════════════════
 class _ReservationExpiredCard extends StatelessWidget {
   final String? fromCity;
   final String? toCity;
@@ -1778,7 +2075,6 @@ class _ReservationExpiredCard extends StatelessWidget {
   final bool isOtpFailure;
   final bool isPaymentFailure;
   final bool isDark;
-  final AnimationController? pulseCtrl;
   final VoidCallback? onRetrySearch;
   final VoidCallback? onReAutoBook;
   final VoidCallback? onClear;
@@ -1794,7 +2090,6 @@ class _ReservationExpiredCard extends StatelessWidget {
     this.isOtpFailure = false,
     this.isPaymentFailure = false,
     required this.isDark,
-    this.pulseCtrl,
     this.onRetrySearch,
     this.onReAutoBook,
     this.onClear,
@@ -1806,15 +2101,9 @@ class _ReservationExpiredCard extends StatelessWidget {
     final lang = LanguageService.of(context);
 
     final headline = isOtpFailure
-        ? lang.tr(
-            'Hold Expired — OTP Not Verified',
-            'সময় শেষ — ওটিপি যাচাই হয়নি',
-          )
+        ? lang.tr('Hold Expired — OTP Not Verified', 'সময় শেষ — ওটিপি যাচাই হয়নি')
         : (isPaymentFailure
-            ? lang.tr(
-                'Hold Expired — Payment Timed Out',
-                'সময় শেষ — পেমেন্টের সময় শেষ',
-              )
+            ? lang.tr('Hold Expired — Payment Timed Out', 'সময় শেষ — পেমেন্টের সময় শেষ')
             : lang.tr(
                 'Seat Hold Expired — Seats Released',
                 'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত',
@@ -1839,16 +2128,26 @@ class _ReservationExpiredCard extends StatelessWidget {
           )
         : friendlyErrorMessage(reason, isBangla: lang.isBangla);
 
+    final routeDesc = [
+      if (trainName != null && trainName!.isNotEmpty) trainName,
+      '${fromCity ?? "Origin"} ➔ ${toCity ?? "Destination"}',
+      if (dateOfJourney != null && dateOfJourney!.isNotEmpty) dateOfJourney,
+      if (seatClass != null && seatClass!.isNotEmpty) seatClass,
+    ].join(' · ');
+
     return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E0E13) : const Color(0xFFFFF1F3),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFEF4444).withValues(alpha: 0.4),
-          width: 1.5,
-        ),
+        color: isDark ? const Color(0xFF1E1014) : const Color(0xFFFFF5F6),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: _kRed.withValues(alpha: 0.35), width: 1.4),
+        boxShadow: [
+          BoxShadow(
+            color: _kRed.withValues(alpha: 0.1),
+            blurRadius: 22,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1856,115 +2155,141 @@ class _ReservationExpiredCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  '${fromCity ?? "Origin"} ➔ ${toCity ?? "Destination"}${dateOfJourney != null ? " · $dateOfJourney" : ""}',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textSecondary(isDark),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _surface(isDark).withValues(alpha: isDark ? 0.5 : 0.9),
+                    borderRadius: BorderRadius.circular(10),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  child: Text(
+                    routeDesc,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.textSecondary(isDark),
+                    ),
+                  ),
                 ),
               ),
+              const SizedBox(width: 8),
               InkWell(
+                borderRadius: BorderRadius.circular(20),
                 onTap: onDismiss,
-                child: const Icon(Icons.close_rounded, size: 18),
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Icon(Icons.close_rounded,
+                      size: 20, color: AppColors.textMuted(isDark)),
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           Center(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                color: _kRed.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
                 lang.tr('5-Minute Time Limit Reached', '৫ মিনিটের সময়সীমা সমাপ্ত'),
                 style: const TextStyle(
-                  color: Color(0xFFEF4444),
+                  color: _kRed,
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 14),
+          Center(
+            child: Container(
+              width: 68,
+              height: 68,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _kRed.withValues(alpha: 0.12),
+              ),
+              child: const Icon(Icons.hourglass_bottom_rounded,
+                  size: 34, color: _kRed),
+            ),
+          ),
+          const SizedBox(height: 14),
           Text(
             headline,
             textAlign: TextAlign.center,
             style: TextStyle(
               color: isDark ? const Color(0xFFFFB4AB) : const Color(0xFFB91C1C),
-              fontSize: 16,
-              fontWeight: FontWeight.w800,
+              fontSize: 18,
+              height: 1.2,
+              fontWeight: FontWeight.w900,
+              letterSpacing: -0.3,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Text(
             details,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 11.5,
-              color: AppColors.textMuted(isDark),
+              fontSize: 12,
+              height: 1.45,
+              color: AppColors.textSecondary(isDark),
             ),
           ),
-          const SizedBox(height: 14),
-
-          // Primary Retry Search Button
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
               backgroundColor: AppColors.primary,
               foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 10),
+              padding: const EdgeInsets.symmetric(vertical: 14),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(14),
               ),
-              elevation: 0,
             ),
             onPressed: onRetrySearch,
-            icon: const Icon(Icons.search_rounded, size: 18),
+            icon: const Icon(Icons.search_rounded, size: 20),
             label: Text(
               lang.tr('Retry New Search', 'নতুন অনুসন্ধান করুন'),
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
             ),
           ),
-          const SizedBox(height: 8),
-
-          // Action row: Re-Auto Book & Stop & Clear
+          const SizedBox(height: 10),
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                   onPressed: onReAutoBook,
-                  icon: const Icon(Icons.refresh_rounded, size: 15),
+                  icon: const Icon(Icons.bolt_rounded, size: 17),
                   label: Text(
                     lang.tr('Re-Auto Book', 'পুনরায় অটো-বুক'),
-                    style: const TextStyle(fontSize: 11.5),
+                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: OutlinedButton.icon(
                   style: OutlinedButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    foregroundColor: const Color(0xFFEF4444),
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    side: BorderSide(
-                      color: const Color(0xFFEF4444).withValues(alpha: 0.35),
+                    foregroundColor: _kRed,
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    side: BorderSide(color: _kRed.withValues(alpha: 0.4)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
                   onPressed: onClear,
-                  icon: const Icon(Icons.stop_rounded, size: 15),
+                  icon: const Icon(Icons.stop_rounded, size: 17),
                   label: Text(
                     lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
-                    style: const TextStyle(fontSize: 11.5),
+                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
                   ),
                 ),
               ),
@@ -1976,221 +2301,270 @@ class _ReservationExpiredCard extends StatelessWidget {
   }
 }
 
-// ─── Empty Monitor View ────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// 4) Zero credits
+// ═══════════════════════════════════════════════════════════════════════════════
+class _ZeroCreditBanner extends StatelessWidget {
+  final bool isDark;
+  final VoidCallback onBuy;
+
+  const _ZeroCreditBanner({required this.isDark, required this.onBuy});
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = LanguageService.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: isDark
+              ? [const Color(0xFF33200A), const Color(0xFF1F1708)]
+              : [const Color(0xFFFFF4D6), const Color(0xFFFFFBEB)],
+        ),
+        border: Border.all(color: _kAmber.withValues(alpha: 0.5), width: 1.3),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kAmber.withValues(alpha: 0.2),
+                ),
+                child: const Icon(Icons.stars_rounded, color: _kAmber, size: 26),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Add credits to continue',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w900,
+                        color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      lang.tr(
+                        '1 credit = 1 successfully booked ticket.',
+                        '১ ক্রেডিট = ১টি সফল টিকেট।',
+                      ),
+                      style: TextStyle(
+                        fontSize: 11.5,
+                        height: 1.3,
+                        color: isDark ? const Color(0xFFFCD34D) : const Color(0xFFB45309),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kAmber,
+              foregroundColor: Colors.black,
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+            onPressed: onBuy,
+            icon: const Icon(Icons.add_circle_rounded, size: 19),
+            label: const Text(
+              'Buy Credit',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5) Empty state
+// ═══════════════════════════════════════════════════════════════════════════════
 class _EmptyMonitorView extends StatelessWidget {
   final bool isDark;
+  final Animation<double> anim;
 
-  const _EmptyMonitorView({required this.isDark});
+  const _EmptyMonitorView({required this.isDark, required this.anim});
 
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-      decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF131D24) : Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isDark ? Colors.white10 : Colors.grey.shade200,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.04),
-            blurRadius: 16,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+      padding: const EdgeInsets.fromLTRB(18, 22, 18, 18),
+      decoration: _cardDeco(isDark, radius: 26),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Radar Hero Graphic
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.radar_rounded,
-              size: 40,
+          Center(
+            child: _RadarBeacon(
+              anim: anim,
               color: AppColors.primary,
+              icon: Icons.confirmation_number_rounded,
+              size: 96,
             ),
           ),
           const SizedBox(height: 14),
           Text(
-            lang.tr("We're Ready to Find Your Ticket", 'আমরা আপনার টিকেটের সন্ধানে প্রস্তুত'),
+            lang.tr('No ticket search yet', 'এখনো কোনো টিকেট সার্চ নেই'),
+            textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 16.5,
+              fontSize: 19,
               fontWeight: FontWeight.w900,
+              letterSpacing: -0.3,
               color: AppColors.textPrimary(isDark),
             ),
-            textAlign: TextAlign.center,
           ),
           const SizedBox(height: 6),
           Text(
             lang.tr(
-              'Rail Pro can continuously search Bangladesh Railway and instantly grab your seat or alert you the second it becomes available.',
-              'রেল প্রো সার্বক্ষণিক বাংলাদেশ রেলওয়ে পর্যবেক্ষণ করে আসন খালি হবামাত্রই তাৎক্ষণিক বুক বা তীব্র অ্যালার্ম দিয়ে জানিয়ে দেবে।',
+              'Train full? Tell us your trip once. Rail Pro keeps checking and grabs a seat the second one opens up.',
+              'ট্রেনের টিকেট শেষ? একবার আপনার যাত্রার তথ্য দিন। রেল প্রো সারাক্ষণ খুঁজবে এবং সিট খালি হওয়ামাত্র ধরে ফেলবে।',
             ),
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 11.5,
+              fontSize: 12,
+              height: 1.45,
               color: AppColors.textSecondary(isDark),
-              height: 1.4,
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 20),
 
-          // Feature Highlights
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF0F1A1E)
-                  : const Color(0xFFF8FAFC),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+          // How it works
+          _howRow(
+            1,
+            Icons.search_rounded,
+            _kBlue,
+            lang.tr('Choose your train', 'ট্রেন বেছে নিন'),
+            lang.tr('Pick route, date and class', 'রুট, তারিখ ও ক্লাস দিন'),
+          ),
+          _howRow(
+            2,
+            Icons.radar_rounded,
+            AppColors.primary,
+            lang.tr('We watch 24/7', 'আমরা সারাক্ষণ নজরে রাখি'),
+            lang.tr('Even split routes via other stations', 'ভায়া স্টেশনের বিকল্প রুটও দেখি'),
+          ),
+          _howRow(
+            3,
+            Icons.notifications_active_rounded,
+            _kAmber,
+            lang.tr('Loud alert + auto-book', 'জোরে অ্যালার্ম + অটো-বুক'),
+            lang.tr('Works even if your phone is locked', 'ফোন লক থাকলেও কাজ করে'),
+          ),
+          _howRow(
+            4,
+            Icons.payments_rounded,
+            _kGreen,
+            lang.tr('Pay within 5 minutes', '৫ মিনিটের মধ্যে পেমেন্ট'),
+            lang.tr('Confirm OTP and pay to get the ticket', 'ওটিপি দিয়ে পেমেন্ট করলেই টিকেট'),
+            isLast: true,
+          ),
+
+          const SizedBox(height: 20),
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 15),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
               ),
             ),
+            onPressed: () => AppShell.goTo(context, AppShell.tabSearch),
+            icon: const Icon(Icons.search_rounded, size: 20),
+            label: Text(
+              lang.tr('Search Trains', 'ট্রেন অনুসন্ধান'),
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w900),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _howRow(
+    int n,
+    IconData icon,
+    Color color,
+    String title,
+    String subtitle, {
+    bool isLast = false,
+  }) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: 38,
             child: Column(
               children: [
-                _buildFeatureRow(
-                  icon: Icons.bolt_rounded,
-                  color: const Color(0xFF10B981),
-                  title: lang.tr('Automatic Seat Reservation', 'স্বয়ংক্রিয় আসন সংরক্ষণ'),
-                  subtitle: lang.tr('Locks seat and triggers OTP without delay', 'দেরি না করে সাথে সাথে ওটিপি ও বুকিং চালু করে'),
-                  isDark: isDark,
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color.withValues(alpha: 0.15),
+                    border: Border.all(color: color.withValues(alpha: 0.4)),
+                  ),
+                  child: Icon(icon, size: 17, color: color),
                 ),
-                const SizedBox(height: 10),
-                _buildFeatureRow(
-                  icon: Icons.alt_route_rounded,
-                  color: const Color(0xFF3B82F6),
-                  title: lang.tr('Smart Via-Station Routes', 'স্মার্ট ভায়া স্টেশন সুবিধা'),
-                  subtitle: lang.tr('Discovers split journeys when direct trains are full', 'সরাসরি সিট না থাকলে বিকল্প স্টেশন খুঁজে বের করে'),
-                  isDark: isDark,
-                ),
-                const SizedBox(height: 10),
-                _buildFeatureRow(
-                  icon: Icons.volume_up_rounded,
-                  color: const Color(0xFFF59E0B),
-                  title: lang.tr('Loud Whistle Alerts', 'উচ্চ ভলিউমে হুইসেল সতর্কবার্তা'),
-                  subtitle: lang.tr('Wakes you up even when screen is locked', 'ফোন লক বা সাইলেন্ট থাকলেও সতর্ক করবে'),
-                  isDark: isDark,
-                ),
+                if (!isLast)
+                  Expanded(
+                    child: Container(
+                      width: 2,
+                      margin: const EdgeInsets.symmetric(vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _outline(isDark),
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
-
-          const SizedBox(height: 18),
-
-          // Search Trains CTA Button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primary,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                elevation: 0,
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(top: 2, bottom: isLast ? 0 : 14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary(isDark),
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: AppColors.textMuted(isDark),
+                    ),
+                  ),
+                ],
               ),
-              onPressed: () => AppShell.goTo(context, AppShell.tabSearch),
-              icon: const Icon(Icons.search_rounded, size: 18),
-              label: Text(
-                lang.tr('Search Trains', 'ট্রেন অনুসন্ধান'),
-                style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFeatureRow({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required bool isDark,
-  }) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            shape: BoxShape.circle,
-          ),
-          child: Icon(icon, size: 16, color: color),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary(isDark),
-                ),
-              ),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  fontSize: 10,
-                  color: AppColors.textMuted(isDark),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ─── Compact Info Badge Helper ─────────────────────────────────────────────────
-class _InfoBadge extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final bool isDark;
-
-  const _InfoBadge({
-    required this.label,
-    required this.icon,
-    required this.isDark,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: isDark ? Colors.grey.shade900 : Colors.white,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 12, color: AppColors.primary),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10.5,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary(isDark),
             ),
           ),
         ],
@@ -2199,23 +2573,23 @@ class _InfoBadge extends StatelessWidget {
   }
 }
 
-// ─── In-Between / Via Tickets Monitor Card ─────────────────────────────────────
-class _ViaTicketsMonitorCard extends StatelessWidget {
+// ═══════════════════════════════════════════════════════════════════════════════
+// 6) Via / split-route tickets
+// ═══════════════════════════════════════════════════════════════════════════════
+class _ViaTicketsCard extends StatelessWidget {
   final List<IntermediateJourney> viaJourneys;
   final String fromCity;
   final String toCity;
-  final String dateOfJourney;
   final bool isDark;
-  final AnimationController pulseCtrl;
+  final Animation<double> anim;
   final void Function(IntermediateJourney journey, bool isFirstLeg) onBookLeg;
 
-  const _ViaTicketsMonitorCard({
+  const _ViaTicketsCard({
     required this.viaJourneys,
     required this.fromCity,
     required this.toCity,
-    required this.dateOfJourney,
     required this.isDark,
-    required this.pulseCtrl,
+    required this.anim,
     required this.onBookLeg,
   });
 
@@ -2225,71 +2599,62 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
     final topJourneys = viaJourneys.take(3).toList();
 
     return Container(
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF0D1E18) : const Color(0xFFF0FDF4),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFF10B981).withValues(alpha: 0.5),
-          width: 1.5,
-        ),
+        color: isDark ? const Color(0xFF0D1E18) : const Color(0xFFF0FDF6),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: _kGreen.withValues(alpha: 0.45), width: 1.3),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF10B981).withValues(alpha: 0.1),
-            blurRadius: 14,
-            offset: const Offset(0, 4),
+            color: _kGreen.withValues(alpha: 0.1),
+            blurRadius: 18,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
-      padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header
           Row(
             children: [
               AnimatedBuilder(
-                animation: pulseCtrl,
-                builder: (_, child) => Transform.scale(
-                  scale: 0.94 + 0.08 * pulseCtrl.value,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.alt_route_rounded,
-                      color: Color(0xFF10B981),
-                      size: 18,
-                    ),
+                animation: anim,
+                builder: (_, child) {
+                  final s = 0.95 + 0.07 * math.sin(anim.value * 2 * math.pi);
+                  return Transform.scale(scale: s, child: child);
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(9),
+                  decoration: BoxDecoration(
+                    color: _kGreen.withValues(alpha: 0.18),
+                    shape: BoxShape.circle,
                   ),
+                  child: const Icon(Icons.alt_route_rounded, color: _kGreen, size: 20),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      lang.tr(
-                        'Alternative Via / Split Route Found',
-                        'বিকল্প ভায়া / স্প্লিট রুট পাওয়া গেছে',
-                      ),
+                      lang.tr('Another way to travel found!', 'যাওয়ার আরেকটি উপায় পাওয়া গেছে!'),
                       style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        color: Color(0xFF10B981),
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        color: _kGreen,
                       ),
                     ),
-                    const SizedBox(height: 1),
+                    const SizedBox(height: 2),
                     Text(
                       lang.tr(
-                        'Book single ticket for each leg (up to 4 seats)',
-                        'প্রতিটি অংশের জন্য পৃথক একক টিকিট বুক করুন (সর্বোচ্চ ৪ সিট)',
+                        'No direct seat, but you can book 2 short tickets (up to 4 seats).',
+                        'সরাসরি সিট নেই, তবে ২টি ছোট টিকেট বুক করে যেতে পারবেন (সর্বোচ্চ ৪ সিট)।',
                       ),
                       style: TextStyle(
-                        fontSize: 10.5,
-                        color: AppColors.textMuted(isDark),
+                        fontSize: 11,
+                        height: 1.3,
+                        color: AppColors.textSecondary(isDark),
                       ),
                     ),
                   ],
@@ -2298,15 +2663,13 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-
-          // Discovered Via Route Items
-          ...topJourneys.map((j) => _buildViaRouteGroup(context, j, lang)),
+          ...topJourneys.map((j) => _journeyBlock(context, j, lang)),
         ],
       ),
     );
   }
 
-  Widget _buildViaRouteGroup(
+  Widget _journeyBlock(
     BuildContext context,
     IntermediateJourney journey,
     LanguageService lang,
@@ -2315,87 +2678,53 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF14241E) : Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: isDark ? Colors.grey.shade800 : Colors.grey.shade200,
-        ),
+        color: _surface(isDark),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _outline(isDark)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Transfer headline
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: Row(
-                  children: [
-                    Icon(
-                      journey.isOverlapping
-                          ? Icons.shuffle_rounded
-                          : Icons.place_rounded,
-                      size: 14,
-                      color: const Color(0xFF10B981),
-                    ),
-                    const SizedBox(width: 4),
-                    Flexible(
-                      child: Text(
-                        journey.isOverlapping
-                            ? '${lang.tr("Overlap Split", "ওভারল্যাপ স্প্লিট")}: ${journey.leg2From} - ${journey.leg1To}'
-                            : '${lang.tr("Via", "ভায়া")} ${journey.via}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.textPrimary(isDark),
-                        ),
-                      ),
-                    ),
-                    if (journey.isOverlapping) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          lang.tr('Same train', 'একই ট্রেন'),
-                          style: const TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: Color(0xFF3B82F6),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
+              Icon(
+                journey.isOverlapping ? Icons.shuffle_rounded : Icons.place_rounded,
+                size: 15,
+                color: _kGreen,
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(6),
-                ),
+              const SizedBox(width: 5),
+              Flexible(
                 child: Text(
-                  '${journey.seats} ${lang.tr("seats available", "আসন খালি")}',
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Color(0xFF10B981),
+                  journey.isOverlapping
+                      ? '${lang.tr("Overlap Split", "ওভারল্যাপ স্প্লিট")}: ${journey.leg2From} - ${journey.leg1To}'
+                      : '${lang.tr("Change at", "বদল করুন")} ${journey.via}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w800,
+                    color: AppColors.textPrimary(isDark),
                   ),
                 ),
               ),
+              if (journey.isOverlapping) ...[
+                const SizedBox(width: 6),
+                _StatusChip(
+                  text: lang.tr('SAME TRAIN', 'একই ট্রেন'),
+                  color: _kBlue,
+                  dot: false,
+                ),
+              ],
+              const Spacer(),
+              _StatusChip(
+                text: '${journey.seats} ${lang.tr("SEATS", "আসন")}',
+                color: _kGreen,
+                dot: false,
+              ),
             ],
           ),
-          const SizedBox(height: 8),
-
-          // Two Single Tickets
-          _buildLegTicketCard(
-            context: context,
+          const SizedBox(height: 10),
+          _legRow(
             legNumber: 1,
             from: fromCity,
             to: journey.leg1To,
@@ -2406,23 +2735,19 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
             lang: lang,
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
             child: Row(
               children: [
-                const SizedBox(width: 20),
-                Icon(
-                  Icons.south_rounded,
-                  size: 13,
-                  color: AppColors.textMuted(isDark),
-                ),
-                const SizedBox(width: 6),
+                const SizedBox(width: 12),
+                Icon(Icons.more_vert_rounded, size: 15, color: AppColors.textMuted(isDark)),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Text(
                     journey.layoverText(isBangla: lang.isBangla),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      fontSize: 9.5,
+                      fontSize: 10.5,
                       fontStyle: FontStyle.italic,
                       color: AppColors.textMuted(isDark),
                     ),
@@ -2431,8 +2756,7 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
               ],
             ),
           ),
-          _buildLegTicketCard(
-            context: context,
+          _legRow(
             legNumber: 2,
             from: journey.leg2From,
             to: toCity,
@@ -2447,8 +2771,7 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
     );
   }
 
-  Widget _buildLegTicketCard({
-    required BuildContext context,
+  Widget _legRow({
     required int legNumber,
     required String from,
     required String to,
@@ -2461,32 +2784,29 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
     final fareNum = double.tryParse(seat.fare) ?? 0.0;
 
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1D2E28) : const Color(0xFFF9FAFB),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isDark ? Colors.grey.shade800 : Colors.grey.shade300,
-        ),
+        color: _surfaceAlt(isDark),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _outline(isDark)),
       ),
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFF10B981).withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(6),
-            ),
+            width: 26,
+            height: 26,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(shape: BoxShape.circle, color: _kGreen),
             child: Text(
-              '${lang.tr("Leg", "অংশ")} $legNumber',
+              '$legNumber',
               style: const TextStyle(
-                color: Color(0xFF10B981),
-                fontSize: 10,
-                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
               ),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2496,18 +2816,19 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
                     color: AppColors.textPrimary(isDark),
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '$trainNumber · ${seat.displayName}: ${seat.seatCounts.online} ${lang.tr("seats", "আসন")}${fareNum > 0 ? " · ৳${fareNum.toStringAsFixed(0)}" : ""}',
-                  maxLines: 1,
+                  '$trainNumber · ${seat.displayName} · ${seat.seatCounts.online} ${lang.tr("seats", "আসন")}${fareNum > 0 ? " · ৳${fareNum.toStringAsFixed(0)}" : ""}',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 10.5,
+                    height: 1.25,
                     color: AppColors.textMuted(isDark),
                   ),
                 ),
@@ -2515,21 +2836,20 @@ class _ViaTicketsMonitorCard extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
               foregroundColor: Colors.white,
               visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+                borderRadius: BorderRadius.circular(10),
               ),
-              elevation: 0,
             ),
             onPressed: onBook,
             child: Text(
-              '${lang.tr("Book", "বুক")} $legNumber',
-              style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+              lang.tr('Book', 'বুক'),
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w900),
             ),
           ),
         ],
