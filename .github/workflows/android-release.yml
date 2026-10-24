@@ -61,7 +61,8 @@ jobs:
         run: |
           touch .release-state-marker
           { git ls-files -m -o --exclude-standard; echo build/release-plan.json; echo .release-state-marker; } \
-            | sort -u | tr '\n' '\0' | tar --null -T - -czf release-state.tgz
+            | grep -v 'release-state.tgz' | sort -u | tr '\n' '\0' | tar --null -T - -czf /tmp/release-state.tgz
+          mv /tmp/release-state.tgz ./release-state.tgz
 
       - uses: actions/upload-artifact@v4
         with:
@@ -85,7 +86,7 @@ jobs:
           name: release-state
 
       - name: Apply release state
-        run: tar -xzf release-state.tgz && rm release-state.tgz
+        run: mv release-state.tgz /tmp/release-state.tgz && tar -xzf /tmp/release-state.tgz && rm -f /tmp/release-state.tgz
 
       # workmanager_apple 0.9.11 references iOS 26 SDK types.
       - name: Select Xcode 26.3
@@ -182,7 +183,7 @@ jobs:
           name: release-state
 
       - name: Apply release state
-        run: tar -xzf release-state.tgz && rm release-state.tgz
+        run: mv release-state.tgz /tmp/release-state.tgz && tar -xzf /tmp/release-state.tgz && rm -f /tmp/release-state.tgz
 
       - uses: actions/setup-java@v4
         with:
@@ -267,7 +268,7 @@ jobs:
           name: release-state
 
       - name: Apply release state
-        run: tar -xzf release-state.tgz && rm release-state.tgz
+        run: mv release-state.tgz /tmp/release-state.tgz && tar -xzf /tmp/release-state.tgz && rm -f /tmp/release-state.tgz
 
       - uses: actions/download-artifact@v4
         with:

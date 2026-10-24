@@ -61,3 +61,8 @@ node_modules/
 # Marketing
 marketing/
 
+# Release state artifacts
+*.tgz
+release-state.tgz
+.release-state-marker
+

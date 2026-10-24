@@ -1049,7 +1049,7 @@ class _CockpitMonitorHud extends StatelessWidget {
             : lang.tr('PAUSED', 'স্থগিত');
 
     final heroTitle = m.isScheduled
-        ? lang.tr('Scheduled for Ticket Release', 'টিকেট বিক্রির জন্য নির্ধারিত')
+        ? lang.tr('Search scheduled', 'অনুসন্ধান নির্ধারিত')
         : m.isMonitoring
             ? lang.tr("We're Looking for Your Ticket", 'আমরা আপনার টিকেটের সন্ধানে আছি')
             : lang.tr('Search Paused', 'অনুসন্ধান স্থগিত');
