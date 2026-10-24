@@ -23,6 +23,7 @@ class AdminUser {
   final bool isAdmin;
   final bool isBlocked;
   final DateTime? lastActiveAt;
+  final DateTime? createdAt;
 
   const AdminUser({
     required this.phone,
@@ -33,11 +34,32 @@ class AdminUser {
     required this.isAdmin,
     required this.isBlocked,
     required this.lastActiveAt,
+    this.createdAt,
   });
+
+  bool get isNewUser {
+    final now = DateTime.now();
+    if (createdAt != null) {
+      return now.difference(createdAt!).inDays < 7;
+    }
+    if (lastActiveAt != null) {
+      return now.difference(lastActiveAt!).inDays < 2;
+    }
+    return false;
+  }
 
   factory AdminUser.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
     final d = doc.data() ?? const <String, dynamic>{};
     final last = d['lastActiveAt'];
+    final created = d['createdAt'] ?? d['created_at'];
+
+    DateTime? parseDate(dynamic val) {
+      if (val is Timestamp) return val.toDate();
+      if (val is String) return DateTime.tryParse(val);
+      if (val is int) return DateTime.fromMillisecondsSinceEpoch(val);
+      return null;
+    }
+
     return AdminUser(
       phone: doc.id,
       displayName: d['displayName']?.toString() ?? '',
@@ -48,7 +70,8 @@ class AdminUser {
           d['is_admin'] == true ||
           d['role']?.toString().toLowerCase() == 'admin',
       isBlocked: d['is_blocked'] == true,
-      lastActiveAt: last is Timestamp ? last.toDate() : null,
+      lastActiveAt: parseDate(last),
+      createdAt: parseDate(created),
     );
   }
 }

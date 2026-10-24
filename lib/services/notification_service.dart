@@ -127,9 +127,19 @@ class NotificationService {
     sound: seatAlert
         ? const RawResourceAndroidNotificationSound('seat_found')
         : null,
+    audioAttributesUsage: seatAlert
+        ? AudioAttributesUsage.alarm
+        : AudioAttributesUsage.notification,
+    additionalFlags: seatAlert
+        ? Int32List.fromList(<int>[4]) // Notification.FLAG_INSISTENT: loops alarm sound until user opens or dismisses
+        : null,
     onlyAlertOnce: onlyAlertOnce,
     enableVibration: true,
-    vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+    vibrationPattern: seatAlert
+        ? Int64List.fromList([
+            0, 1000, 400, 1000, 400, 1000, 400, 1000, 400, 1000,
+          ])
+        : Int64List.fromList([0, 500, 250, 500]),
     visibility: NotificationVisibility.public,
     category: seatAlert
         ? AndroidNotificationCategory.alarm
@@ -717,21 +727,28 @@ class NotificationService {
           AndroidNotificationChannel(
             'br_seat_found_v3',
             'Seats found (High Alert Whistle)',
-            description: 'Instant seat alert with loud train whistle and vibration',
+            description: 'Instant seat alert with loud train whistle and alarm',
             importance: Importance.max,
             sound: const RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
-            vibrationPattern: Int64List.fromList([0, 1000, 500, 1000, 500, 1000]),
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            vibrationPattern: Int64List.fromList([
+              0, 1000, 400, 1000, 400, 1000, 400, 1000, 400, 1000,
+            ]),
           ),
-          const AndroidNotificationChannel(
+          AndroidNotificationChannel(
             'br_seat_found_v2',
             'Seats found',
-            description: 'Tap to book, with train whistle and Bangla voice',
+            description: 'Tap to book, with train whistle and alarm',
             importance: Importance.max,
-            sound: RawResourceAndroidNotificationSound('seat_found'),
+            sound: const RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            vibrationPattern: Int64List.fromList([
+              0, 1000, 400, 1000, 400, 1000, 400, 1000, 400, 1000,
+            ]),
           ),
           const AndroidNotificationChannel(
             'br_broadcast_alerts',
@@ -749,23 +766,31 @@ class NotificationService {
             playSound: true,
             enableVibration: true,
           ),
-          const AndroidNotificationChannel(
+          AndroidNotificationChannel(
             'br_reservations',
             'Reserved tickets',
             description: 'Reservation and OTP alerts',
             importance: Importance.max,
-            sound: RawResourceAndroidNotificationSound('seat_found'),
+            sound: const RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            vibrationPattern: Int64List.fromList([
+              0, 1000, 400, 1000, 400, 1000, 400, 1000, 400, 1000,
+            ]),
           ),
-          const AndroidNotificationChannel(
+          AndroidNotificationChannel(
             'br_reservations_v3',
             'Reserved tickets (High Alert)',
             description: 'Reservation and OTP alerts with loud train whistle',
             importance: Importance.max,
-            sound: RawResourceAndroidNotificationSound('seat_found'),
+            sound: const RawResourceAndroidNotificationSound('seat_found'),
             playSound: true,
             enableVibration: true,
+            audioAttributesUsage: AudioAttributesUsage.alarm,
+            vibrationPattern: Int64List.fromList([
+              0, 1000, 400, 1000, 400, 1000, 400, 1000, 400, 1000,
+            ]),
           ),
           const AndroidNotificationChannel(
             'br_booking_success',

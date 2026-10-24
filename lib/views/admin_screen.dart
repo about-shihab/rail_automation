@@ -135,6 +135,8 @@ class AdminScreen extends StatelessWidget {
 
 // ── Users Tab ────────────────────────────────────────────────────────────────
 
+enum _UserFilter { all, newUsers, active, blocked }
+
 class _UsersTab extends StatefulWidget {
   const _UsersTab();
   @override
@@ -146,6 +148,7 @@ class _UsersTabState extends State<_UsersTab>
   late final Stream<List<AdminUser>> _stream = AdminService().watchUsers();
   final _search = TextEditingController();
   String _q = '';
+  _UserFilter _filter = _UserFilter.all;
 
   @override
   bool get wantKeepAlive => true;
@@ -161,77 +164,164 @@ class _UsersTabState extends State<_UsersTab>
     super.build(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-          child: TextField(
-            controller: _search,
-            onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
-            decoration: InputDecoration(
-              hintText: 'Search phone, name or email',
-              prefixIcon: const Icon(Icons.search_rounded),
-              suffixIcon: _q.isEmpty
-                  ? null
-                  : IconButton(
-                      icon: const Icon(Icons.close_rounded),
-                      onPressed: () {
-                        _search.clear();
-                        setState(() => _q = '');
-                      },
+    return StreamBuilder<List<AdminUser>>(
+      stream: _stream,
+      builder: (context, snap) {
+        if (snap.hasError) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Text(
+                'Could not load users.\n${snap.error}',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppColors.textMuted(isDark)),
+              ),
+            ),
+          );
+        }
+        if (!snap.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final all = snap.data!;
+        final newCount = all.where((u) => u.isNewUser).length;
+        final activeCount = all.where((u) => u.isActive && !u.isBlocked).length;
+        final blockedCount = all.where((u) => u.isBlocked).length;
+
+        final users = all.where((u) {
+          if (_filter == _UserFilter.newUsers && !u.isNewUser) return false;
+          if (_filter == _UserFilter.active && (!u.isActive || u.isBlocked)) {
+            return false;
+          }
+          if (_filter == _UserFilter.blocked && !u.isBlocked) return false;
+          if (_q.isEmpty) return true;
+          return u.phone.toLowerCase().contains(_q) ||
+              u.displayName.toLowerCase().contains(_q) ||
+              u.email.toLowerCase().contains(_q);
+        }).toList();
+
+        if (_filter == _UserFilter.newUsers) {
+          users.sort((a, b) {
+            final at = a.createdAt ?? a.lastActiveAt;
+            final bt = b.createdAt ?? b.lastActiveAt;
+            if (at == null && bt == null) return 0;
+            if (at == null) return 1;
+            if (bt == null) return -1;
+            return bt.compareTo(at);
+          });
+        }
+
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: TextField(
+                controller: _search,
+                onChanged: (v) => setState(() => _q = v.trim().toLowerCase()),
+                decoration: InputDecoration(
+                  hintText: 'Search phone, name or email',
+                  prefixIcon: const Icon(Icons.search_rounded),
+                  suffixIcon: _q.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: () {
+                            _search.clear();
+                            setState(() => _q = '');
+                          },
+                        ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    ChoiceChip(
+                      label: Text('All (${all.length})'),
+                      selected: _filter == _UserFilter.all,
+                      onSelected: (_) => setState(() => _filter = _UserFilter.all),
+                    ),
+                    const SizedBox(width: 8),
+                    ChoiceChip(
+                      avatar: const Icon(
+                        Icons.fiber_new_rounded,
+                        size: 18,
+                        color: Color(0xFF10B981),
+                      ),
+                      label: Text(
+                        'New Users ($newCount)',
+                        style: TextStyle(
+                          color: _filter == _UserFilter.newUsers
+                              ? const Color(0xFF10B981)
+                              : null,
+                          fontWeight: _filter == _UserFilter.newUsers
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                      selected: _filter == _UserFilter.newUsers,
+                      selectedColor: const Color(0xFF10B981).withValues(alpha: 0.18),
+                      onSelected: (_) => setState(() => _filter = _UserFilter.newUsers),
+                    ),
+                    const SizedBox(width: 8),
+                    ChoiceChip(
+                      label: Text('Active ($activeCount)'),
+                      selected: _filter == _UserFilter.active,
+                      onSelected: (_) => setState(() => _filter = _UserFilter.active),
+                    ),
+                    const SizedBox(width: 8),
+                    ChoiceChip(
+                      label: Text('Blocked ($blockedCount)'),
+                      selected: _filter == _UserFilter.blocked,
+                      onSelected: (_) => setState(() => _filter = _UserFilter.blocked),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Expanded(
+              child: users.isEmpty
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _filter == _UserFilter.newUsers
+                                  ? Icons.person_add_disabled_rounded
+                                  : Icons.people_outline_rounded,
+                              size: 44,
+                              color: AppColors.textMuted(isDark),
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              _filter == _UserFilter.newUsers
+                                  ? 'No new users registered recently'
+                                  : 'No users found',
+                              style: TextStyle(color: AppColors.textMuted(isDark)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : ListView.separated(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                      itemCount: users.length,
+                      separatorBuilder: (_, _) => const SizedBox(height: 10),
+                      itemBuilder: (context, i) => _UserCard(
+                        user: users[i],
+                        isDark: isDark,
+                        onTap: () => _UserActionSheet.show(context, users[i]),
+                      ),
                     ),
             ),
-          ),
-        ),
-        Expanded(
-          child: StreamBuilder<List<AdminUser>>(
-            stream: _stream,
-            builder: (context, snap) {
-              if (snap.hasError) {
-                return Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Text(
-                      'Could not load users.\n${snap.error}',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: AppColors.textMuted(isDark)),
-                    ),
-                  ),
-                );
-              }
-              if (!snap.hasData) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final users = snap.data!.where((u) {
-                if (_q.isEmpty) return true;
-                return u.phone.toLowerCase().contains(_q) ||
-                    u.displayName.toLowerCase().contains(_q) ||
-                    u.email.toLowerCase().contains(_q);
-              }).toList();
-
-              if (users.isEmpty) {
-                return Center(
-                  child: Text(
-                    'No users found',
-                    style: TextStyle(color: AppColors.textMuted(isDark)),
-                  ),
-                );
-              }
-
-              return ListView.separated(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                itemCount: users.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 10),
-                itemBuilder: (context, i) => _UserCard(
-                  user: users[i],
-                  isDark: isDark,
-                  onTap: () => _UserActionSheet.show(context, users[i]),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -260,14 +350,22 @@ class _UserCard extends StatelessWidget {
                 radius: 22,
                 backgroundColor: user.isBlocked
                     ? AppColors.error.withValues(alpha: 0.15)
-                    : AppColors.primary.withValues(alpha: 0.15),
+                    : (user.isNewUser
+                        ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                        : AppColors.primary.withValues(alpha: 0.15)),
                 child: Icon(
                   user.isBlocked
                       ? Icons.block_rounded
                       : (user.isAdmin
                           ? Icons.admin_panel_settings_rounded
-                          : Icons.person_rounded),
-                  color: user.isBlocked ? AppColors.error : AppColors.primary,
+                          : (user.isNewUser
+                              ? Icons.person_add_rounded
+                              : Icons.person_rounded)),
+                  color: user.isBlocked
+                      ? AppColors.error
+                      : (user.isNewUser
+                          ? const Color(0xFF10B981)
+                          : AppColors.primary),
                 ),
               ),
               Positioned(
@@ -311,6 +409,34 @@ class _UserCard extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (user.isNewUser) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: const Color(0xFF10B981).withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.fiber_new_rounded, size: 12, color: Color(0xFF10B981)),
+                            SizedBox(width: 2),
+                            Text(
+                              'NEW',
+                              style: TextStyle(
+                                color: Color(0xFF10B981),
+                                fontSize: 9.5,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                     if (user.isBlocked) ...[
                       const SizedBox(width: 6),
                       Container(
@@ -358,6 +484,22 @@ class _UserCard extends StatelessWidget {
                     color: AppColors.textMuted(isDark),
                   ),
                 ),
+                if (user.createdAt != null) ...[
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      Icon(Icons.calendar_today_rounded, size: 10.5, color: AppColors.textMuted(isDark)),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Joined: ${_fmtDate(user.createdAt)}',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textMuted(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
@@ -502,6 +644,16 @@ class _UserActionSheet extends StatelessWidget {
                         color: AppColors.textMuted(isDark),
                       ),
                     ),
+                    if (user.createdAt != null) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        'Joined: ${_fmtDate(user.createdAt)}',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: AppColors.textMuted(isDark),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
