@@ -233,39 +233,47 @@ class ForegroundMonitor {
         .listen((event) async {
           final id = event?['id'] as String?;
           if (id == null) return;
+          final gate = TurnstileGate.instance;
+          final foreground = gate.canShowUi;
           FlutterBackgroundService().invoke('verification-ack', {
             'id': id,
-            'presented': TurnstileGate.instance.canShowUi,
+            'presented': foreground,
           });
-          if (!TurnstileGate.instance.canShowUi ||
+          if (!gate.canRunSilently ||
               _activeVerificationId != null ||
-              TurnstileGate.instance.isShowing ||
-              TurnstileSession.instance.generating ||
-              !TurnstileSession.instance.attached) {
+              gate.isShowing ||
+              TurnstileSession.instance.generating) {
             FlutterBackgroundService().invoke('verification-result', {
               'id': id,
               'presented':
-                  TurnstileGate.instance.canShowUi &&
-                  (TurnstileGate.instance.isShowing ||
-                      TurnstileSession.instance.generating),
+                  foreground &&
+                  (gate.isShowing || TurnstileSession.instance.generating),
             });
             return;
           }
           _activeVerificationId = id;
-          final gate = TurnstileGate.instance;
-          String? token;
           try {
-            if (gate.canShowUi) {
-              token = await gate.acquire(
-                label: event?['label'] as String? ?? '',
-                forceFresh: true,
-              );
-            }
+            // Foreground: may show the overlay. Background: one silent try only.
+            final token = await gate
+                .acquire(
+                  label: event?['label'] as String? ?? '',
+                  forceFresh: true,
+                  allowPrompt: foreground,
+                )
+                .timeout(
+                  foreground
+                      ? const Duration(seconds: 110)
+                      : const Duration(seconds: 20),
+                  onTimeout: () {
+                    TurnstileSession.instance.cancel();
+                    return null;
+                  },
+                );
             if (_activeVerificationId == id) {
               FlutterBackgroundService().invoke('verification-result', {
                 'id': id,
-                'token': gate.canShowUi ? token : null,
-                'presented': gate.canShowUi,
+                'token': token,
+                'presented': foreground,
               });
             }
           } finally {

@@ -20,7 +20,9 @@ class TurnstileHost extends StatefulWidget {
   State<TurnstileHost> createState() => _TurnstileHostState();
 }
 
-class _TurnstileHostState extends State<TurnstileHost> {
+class _TurnstileHostState extends State<TurnstileHost>
+    with WidgetsBindingObserver {
+  InAppWebViewController? _controller;
   final session = TurnstileSession.instance;
   bool get _isIos => defaultTargetPlatform == TargetPlatform.iOS;
   late final _bridgeId = base64UrlEncode(
@@ -59,6 +61,7 @@ class _TurnstileHostState extends State<TurnstileHost> {
       javaScriptBridgeForMainFrameOnly: true,
     ),
     onWebViewCreated: (controller) {
+      _controller = controller;
       if (!_isIos) {
         session.attach((source) => _evaluate(controller, source));
       }
@@ -119,7 +122,29 @@ class _TurnstileHostState extends State<TurnstileHost> {
   );
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      // Best effort: keep WebView JS timers alive so a silent solve can finish.
+      Future(() async {
+        try {
+          await _controller?.resume();
+          await _controller?.resumeTimers();
+        } catch (_) {}
+      });
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     session.detach();
     super.dispose();
   }

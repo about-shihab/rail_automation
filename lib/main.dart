@@ -141,6 +141,11 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !AppUpdateService.instance.required) {
+        TurnstileGate.instance.startBackgroundRefresh();
+      }
+    });
     if (widget.startLoggedIn) {
       // Token expired while the app was closed? Sign in again behind a
       // loading screen before the user hits an error.
@@ -206,7 +211,6 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || AppUpdateService.instance.required) return;
       NotificationService().openPendingBooking();
-      TurnstileGate.instance.warmInBackground();
     });
 
     return MaterialApp(
