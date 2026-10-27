@@ -114,6 +114,25 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>?>? _monitorUpdates;
   bool _syncingMonitor = false;
+  MonitorService? _watchedMonitor;
+  bool _warmWasWanted = false;
+
+  bool _warmWanted() {
+    final m = _watchedMonitor;
+    if (m == null) return false;
+    return m.isMonitoring &&
+        !m.isScheduled &&
+        (m.bookingIntent.autoReserve || m.needsTurnstile);
+  }
+
+  void _onMonitorChanged() {
+    final wanted = _warmWanted();
+    if (wanted && !_warmWasWanted) {
+      // Search just became active: have a token ready before seats appear.
+      TurnstileGate.instance.warmInBackground();
+    }
+    _warmWasWanted = wanted;
+  }
 
   Future<void> _syncMonitor({bool startTimers = false}) async {
     if (!mounted || _syncingMonitor) return;
@@ -142,7 +161,11 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !AppUpdateService.instance.required) {
+      if (!mounted) return;
+      _watchedMonitor = context.read<MonitorService>()
+        ..addListener(_onMonitorChanged);
+      TurnstileGate.instance.warmWanted = _warmWanted;
+      if (!AppUpdateService.instance.required) {
         TurnstileGate.instance.startBackgroundRefresh();
       }
     });
@@ -195,6 +218,8 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
 
   @override
   void dispose() {
+    _watchedMonitor?.removeListener(_onMonitorChanged);
+    TurnstileGate.instance.warmWanted = null;
     TurnstileGate.instance.stopBackgroundRefresh();
     _monitorUpdates?.cancel();
     unawaited(ForegroundMonitor.disconnectVerificationUi());

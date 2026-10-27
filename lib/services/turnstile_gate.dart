@@ -108,6 +108,10 @@ class TurnstileGate {
 
   Timer? _refreshTimer;
 
+  /// Set by the app: true only while a token could actually be needed
+  /// (an active auto-book search or a pending human check). Idle app = no solves.
+  bool Function()? warmWanted;
+
   /// Refresh once the cached token is this old (it stays usable until ~4m30s).
   static const _refreshAfter = Duration(minutes: 3);
   static const _checkEvery = Duration(seconds: 30);
@@ -152,6 +156,8 @@ class TurnstileGate {
   /// Silently solve a verification token in the background while the app is open.
   /// Valid for 5 minutes. Never presents any UI unless an interaction is required.
   void warmInBackground() {
+    final wanted = warmWanted;
+    if (wanted != null && !wanted()) return;
     if (!canShowUi || isShowing || _warming != null || _layoutAccess != null) {
       return;
     }
