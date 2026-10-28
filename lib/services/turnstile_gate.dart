@@ -297,7 +297,7 @@ class TurnstileGate {
     final session = TurnstileSession.instance;
     final pending = session.generating
         ? session.generate(targetKey)
-        : (forceFresh && workerAcquire == null && canRunSilently
+        : (forceFresh && workerAcquire == null && (canRunSilently || canShowUi)
               ? session.generateWhenAttached(targetKey)
               : null);
     if (forceFresh) {
@@ -308,7 +308,7 @@ class TurnstileGate {
     }
     final worker = workerAcquire;
     if (worker != null) return worker(label);
-    if (!canRunSilently) return null;
+    if (!canRunSilently && !canShowUi) return null;
 
     final request = pending ?? session.generateWhenAttached(targetKey);
     // Execute in the retained browser without navigating or interrupting the

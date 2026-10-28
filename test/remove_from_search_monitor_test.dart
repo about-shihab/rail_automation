@@ -13,7 +13,10 @@ void main() {
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
-    monitor = MonitorService(proService: ProService());
+    monitor = MonitorService(
+      proService: ProService(),
+      now: () => DateTime(2026, 10, 20),
+    );
   });
 
   tearDown(() {
