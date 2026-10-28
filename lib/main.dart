@@ -192,6 +192,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      unawaited(OverlayService.hideVerification());
       TurnstileGate.instance.startBackgroundRefresh();
       BookingActivity.instance.reset();
       unawaited(AdminPushService.instance.refresh());

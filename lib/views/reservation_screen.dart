@@ -48,6 +48,11 @@ class _ReservationScreenState extends State<ReservationScreen> {
     BookingActivity.instance.isReservationActive = true;
     BookingActivity.instance.clearWorkerStage();
     _load();
+    OtpVerifier.onOtpReceivedInForeground = (otp) {
+      if (!mounted || _busy) return;
+      _otpCtrl.text = otp;
+      _verify();
+    };
     OtpVerifier.listen();
     _promptGoogleOtpPermissionIfNeeded();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _load());
@@ -63,6 +68,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
           state['autoVerify'] = false;
           await BookingService.save(state);
           if (mounted) setState(() => _state = state);
+        } else {
+          await OtpVerifier.listen(force: true);
         }
       }
       unawaited(_checkClipboardForOtp());
@@ -320,6 +327,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
   void dispose() {
     ReservationScreen._openScreens--;
     BookingActivity.instance.isReservationActive = ReservationScreen.isActive;
+    OtpVerifier.onOtpReceivedInForeground = null;
     _timer?.cancel();
     _otpCtrl.dispose();
     super.dispose();
@@ -958,12 +966,13 @@ class _ReservationScreenState extends State<ReservationScreen> {
 
   Future<void> _enableGoogleOtpVerifier() async {
     final ok = await SmsService().requestSmsPermission();
-    if (ok) {
+    final consent = await SmsService().promptPendingConsent();
+    if (ok || consent) {
       final current = await BookingService.pending();
       if (current != null) {
         current['autoVerify'] = true;
         await BookingService.save(current);
-        await OtpVerifier.listen();
+        await OtpVerifier.listen(force: true);
         await NotificationService().showReservation(current);
         if (mounted) {
           setState(() => _state = current);

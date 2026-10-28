@@ -9,6 +9,8 @@ import 'notification_service.dart';
 
 class OtpVerifier {
   static bool _verifying = false;
+  static void Function(String otp)? onOtpReceivedInForeground;
+
   static Future<void> _manualFallback(String id) async {
     final current = await BookingService.pending();
     if (current?['id'] != id || current?['status'] != 'awaitingOtp') {
@@ -38,6 +40,11 @@ class OtpVerifier {
       forceRestart: force,
       onUnavailable: () async => _manualFallback('${state!['id']}'),
       onOtpReceived: (otp) async {
+        if (ReservationScreen.isActive && onOtpReceivedInForeground != null) {
+          SmsService().stopListening();
+          onOtpReceivedInForeground!(otp);
+          return;
+        }
         if (_verifying) return;
         _verifying = true;
         try {

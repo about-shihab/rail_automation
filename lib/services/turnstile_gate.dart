@@ -147,6 +147,41 @@ class TurnstileGate {
     _refreshTimer = Timer.periodic(_checkEvery, (_) => warmInBackground());
   }
 
+  /// Called as the app is leaving the foreground (used on iOS, which cannot
+  /// run a browser once suspended). Makes sure a token with a long remaining
+  /// life is cached so background checks can use it. Never shows UI.
+  Future<void> prepareForBackground({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final wanted = warmWanted;
+    if (wanted != null && !wanted()) return;
+    if (!canRunSilently || isShowing || _layoutAccess != null) return;
+    final pendingWarm = _warming;
+    if (pendingWarm != null) {
+      await pendingWarm.timeout(timeout, onTimeout: () {});
+      return;
+    }
+    try {
+      final age = await _cachedTokenAge();
+      // Keep a token that still has more than ~3.5 minutes of life.
+      if (age != null && age < const Duration(seconds: 90)) return;
+      final siteKey = _keyFor('', null);
+      final token = await acquire(
+        label: 'Verification',
+        forceFresh: true,
+        allowPrompt: false,
+        siteKey: siteKey,
+        keepCached: true,
+      ).timeout(timeout, onTimeout: () {
+        TurnstileSession.instance.cancel();
+        return null;
+      });
+      if (token != null && token.isNotEmpty) {
+        await storeToken(token, siteKey: siteKey);
+      }
+    } catch (_) {}
+  }
+
   /// Stops background refresh when the app is paused or inactive.
   void stopBackgroundRefresh() {
     _refreshTimer?.cancel();
@@ -191,6 +226,9 @@ class TurnstileGate {
     _warming = warming;
     unawaited(warming);
   }
+
+  /// Site key used for seat-layout verification (also used by the overlay).
+  String get seatLayoutSiteKey => _keyFor('', null);
 
   String _keyFor(String label, String? explicitKey) {
     final purpose = label == 'Railway login' ? 'sign_in' : 'seat_layout';

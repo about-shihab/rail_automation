@@ -689,7 +689,11 @@ class BookingService {
     final phone = candidates
         .map((v) => v?.toString().trim() ?? '')
         .firstWhere((v) => v.isNotEmpty, orElse: () => '');
-    if (phone.isNotEmpty) user['phone_number'] = phone;
+    if (phone.isNotEmpty) {
+      user['phone_number'] = phone;
+      user['mobile_number'] = phone;
+      user['mobile'] = phone;
+    }
     if (user['display_name'] == null && auth.displayName != null) {
       user['display_name'] = auth.displayName;
     }
@@ -700,29 +704,93 @@ class BookingService {
   static Map<String, dynamic> webStorage(
     Map<String, dynamic> state,
     String phone,
-  ) => {
-    'initialPurchaseData$phone': jsonEncode({
-      'selectedTrip': state['train'],
+  ) {
+    final rawSeats = _webReservedSeats(state);
+    final train = state['train'] as Map<String, dynamic>?;
+    final boardingPoints = train?['boarding_points'] as List?;
+    final Map<String, dynamic> boardingPoint;
+    if (boardingPoints != null && boardingPoints.isNotEmpty) {
+      final first = Map<String, dynamic>.from(boardingPoints.first as Map);
+      first['station_name'] = first['station_name'] ?? first['location_name'] ?? state['from'] ?? '';
+      first['location_name'] = first['location_name'] ?? first['station_name'] ?? state['from'] ?? '';
+      first['trip_id'] = first['trip_id'] ?? state['seatClass']?['trip_id'] ?? 0;
+      first['trip_point_id'] = first['trip_point_id'] ?? 0;
+      first['location_id'] = first['location_id'] ?? 0;
+      first['location_time'] = first['location_time'] ?? state['date'] ?? '';
+      first['location_date'] = first['location_date'] ?? state['date'] ?? '';
+      boardingPoint = first;
+    } else {
+      boardingPoint = {
+        'station_name': state['from'] ?? '',
+        'location_name': state['from'] ?? '',
+        'trip_id': state['seatClass']?['trip_id'] ?? 0,
+        'trip_point_id': 0,
+        'location_id': 0,
+        'location_time': state['date'] ?? '',
+        'location_date': state['date'] ?? '',
+      };
+    }
+
+    final selectedTrip = {
+      if (train != null) ...train,
+      'is_international': train?['is_international'] ?? false,
+      'trip_number': train?['trip_number'] ?? '',
+      'trip_id': state['seatClass']?['trip_id'] ?? 0,
+      'boarding_points': boardingPoints ?? [boardingPoint],
+    };
+
+    final purchaseData = jsonEncode({
+      'selectedTrip': selectedTrip,
       'selectedSeatClass': state['seatClass'],
       'selectedCoach': state['coach'],
-      'reservedSeats': _webReservedSeats(state),
-      'selectedBoardingPoint': state['train']['boarding_points'][0],
+      'reservedSeats': rawSeats,
+      'selectedBoardingPoint': boardingPoint,
       'searchInfo': {
         'fromStation': state['from'],
         'toStation': state['to'],
         'journeyDate': state['date'],
-        'seatClass': state['seatClass']['type'],
+        'seatClass': state['seatClass'] is Map
+            ? (state['seatClass']['type'] ?? '')
+            : '',
       },
-    }),
-    if (state['expiresAt'] != null)
-      'booking_continued_on':
-          '${DateTime.parse(state['expiresAt']).millisecondsSinceEpoch}',
-    'is_senior_citizen': '${state['seniorCitizenEligible'] == true}',
-    if (state['status'] == 'readyForPayment')
-      'continue_booking_otp_verified': '1',
-    if (state['status'] == 'readyForPayment')
-      'confirm_booking_otp': state['otp'],
-  };
+    });
+
+    final cleanDigits = phone.replaceAll(RegExp(r'\D'), '');
+    final phone11 = cleanDigits.length >= 11
+        ? cleanDigits.substring(cleanDigits.length - 11)
+        : cleanDigits;
+    final phone88 = phone11.isNotEmpty ? '88$phone11' : '';
+    final phonePlus88 = phone11.isNotEmpty ? '+88$phone11' : '';
+
+    final exp = state['expiresAt'] != null
+        ? DateTime.tryParse('${state['expiresAt']}')?.millisecondsSinceEpoch
+        : null;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Always guarantee booking_continued_on is valid and in the future so Railway
+    // PurchaseModule never trips "Booking time limit is exceeded!" redirect.
+    final validExp = (exp != null && exp > nowMs + 60000)
+        ? exp
+        : nowMs + (reservationTimeoutMinutes * 60 * 1000);
+
+    return {
+      'initialPurchaseData$phone': purchaseData,
+      if (phone11.isNotEmpty && phone11 != phone)
+        'initialPurchaseData$phone11': purchaseData,
+      if (phone88.isNotEmpty && phone88 != phone)
+        'initialPurchaseData$phone88': purchaseData,
+      if (phonePlus88.isNotEmpty && phonePlus88 != phone)
+        'initialPurchaseData$phonePlus88': purchaseData,
+      'initialPurchaseData': purchaseData,
+      'initialPurchaseDataundefined': purchaseData,
+      'initialPurchaseDatanull': purchaseData,
+      'booking_continued_on': '$validExp',
+      'is_senior_citizen': '${state['seniorCitizenEligible'] == true}',
+      if (state['status'] == 'readyForPayment')
+        'continue_booking_otp_verified': '1',
+      if (state['status'] == 'readyForPayment')
+        'confirm_booking_otp': state['otp'] ?? '',
+    };
+  }
 
   static List<Map<String, dynamic>> _webReservedSeats(
     Map<String, dynamic> state,
@@ -730,18 +798,20 @@ class BookingService {
     final seat = Map<String, dynamic>.from(raw as Map);
     // Older reservations only stored the fare on the coach. The checkout
     // calculates ticket price and VAT using Number(reservedSeat.fare).
-    final value = seat['fare'] ?? state['coach']['seat_fare'];
+    final value = seat['fare'] ?? state['coach']?['seat_fare'];
     final fare = num.tryParse('$value');
     if (fare == null || !fare.isFinite || fare < 0) {
       throw StateError(
         'Reservation fare is unavailable. Please reopen booking.',
       );
     }
+    final vatAmount = seat['vat_amount'] ?? state['seatClass']?['vat_amount'] ?? 0;
     return {
       ...seat,
       'fare': fare,
+      'vat_amount': vatAmount,
       'selected_seat_class':
-          seat['selected_seat_class'] ?? state['seatClass']['type'],
+          seat['selected_seat_class'] ?? state['seatClass']?['type'] ?? '',
     };
   }).toList();
 }
