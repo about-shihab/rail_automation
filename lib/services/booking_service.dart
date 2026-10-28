@@ -732,7 +732,7 @@ class BookingService {
     }
 
     final selectedTrip = {
-      if (train != null) ...train,
+      ...?train,
       'is_international': train?['is_international'] ?? false,
       'trip_number': train?['trip_number'] ?? '',
       'trip_id': state['seatClass']?['trip_id'] ?? 0,
