@@ -167,20 +167,16 @@ class TurnstileGate {
       // Keep a token that still has more than ~3.5 minutes of life.
       if (age != null && age < const Duration(seconds: 90)) return;
       final siteKey = _keyFor('', null);
-      final token =
-          await acquire(
-            label: 'Verification',
-            forceFresh: true,
-            allowPrompt: false,
-            siteKey: siteKey,
-            keepCached: true,
-          ).timeout(
-            timeout,
-            onTimeout: () {
-              TurnstileSession.instance.cancel();
-              return null;
-            },
-          );
+      final token = await acquire(
+        label: 'Verification',
+        forceFresh: true,
+        allowPrompt: false,
+        siteKey: siteKey,
+        keepCached: true,
+      ).timeout(timeout, onTimeout: () {
+        TurnstileSession.instance.cancel();
+        return null;
+      });
       if (token != null && token.isNotEmpty) {
         await storeToken(token, siteKey: siteKey);
       }
@@ -277,15 +273,14 @@ class TurnstileGate {
     }
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh, targetKey, allowPrompt, keepCached)
-        .whenComplete(() {
-          if (identical(_inflight, f)) {
-            _inflight = null;
-            _inflightSiteKey = null;
-            _route = null;
-            _navigator = null;
-          }
-        });
+    f = _acquire(label, forceFresh, targetKey, allowPrompt, keepCached).whenComplete(() {
+      if (identical(_inflight, f)) {
+        _inflight = null;
+        _inflightSiteKey = null;
+        _route = null;
+        _navigator = null;
+      }
+    });
     _inflight = f;
     _inflightSiteKey = targetKey;
     return f;
@@ -343,8 +338,9 @@ class TurnstileGate {
         // finished quickly, bring the verification card up so the browser is
         // exposed and can complete. Android never takes this branch.
         if (_exposesBrowserOnIos(label, allowPrompt))
-          Future<void>.delayed(_iosExposeAfter)
-              .then((_) => (interactive: true, token: null)),
+          Future<void>.delayed(
+            _iosExposeAfter,
+          ).then((_) => (interactive: true, token: null)),
       ]);
       if (!result.interactive) {
         final token = result.token;
