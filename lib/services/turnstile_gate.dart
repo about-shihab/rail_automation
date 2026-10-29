@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -166,16 +167,20 @@ class TurnstileGate {
       // Keep a token that still has more than ~3.5 minutes of life.
       if (age != null && age < const Duration(seconds: 90)) return;
       final siteKey = _keyFor('', null);
-      final token = await acquire(
-        label: 'Verification',
-        forceFresh: true,
-        allowPrompt: false,
-        siteKey: siteKey,
-        keepCached: true,
-      ).timeout(timeout, onTimeout: () {
-        TurnstileSession.instance.cancel();
-        return null;
-      });
+      final token =
+          await acquire(
+            label: 'Verification',
+            forceFresh: true,
+            allowPrompt: false,
+            siteKey: siteKey,
+            keepCached: true,
+          ).timeout(
+            timeout,
+            onTimeout: () {
+              TurnstileSession.instance.cancel();
+              return null;
+            },
+          );
       if (token != null && token.isNotEmpty) {
         await storeToken(token, siteKey: siteKey);
       }
@@ -272,14 +277,15 @@ class TurnstileGate {
     }
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh, targetKey, allowPrompt, keepCached).whenComplete(() {
-      if (identical(_inflight, f)) {
-        _inflight = null;
-        _inflightSiteKey = null;
-        _route = null;
-        _navigator = null;
-      }
-    });
+    f = _acquire(label, forceFresh, targetKey, allowPrompt, keepCached)
+        .whenComplete(() {
+          if (identical(_inflight, f)) {
+            _inflight = null;
+            _inflightSiteKey = null;
+            _route = null;
+            _navigator = null;
+          }
+        });
     _inflight = f;
     _inflightSiteKey = targetKey;
     return f;
@@ -331,8 +337,27 @@ class TurnstileGate {
       final result = await Future.any<({bool interactive, String? token})>([
         request.then((token) => (interactive: false, token: token)),
         interactive.future.then((_) => (interactive: true, token: null)),
+        // iOS only: a WKWebView often cannot finish the check while it sits
+        // unseen behind the app (no "interactive" phase is ever reported, so
+        // the seat-layout token just times out). If the silent solve has not
+        // finished quickly, bring the verification card up so the browser is
+        // exposed and can complete. Android never takes this branch.
+        if (_exposesBrowserOnIos(label, allowPrompt))
+          Future<void>.delayed(_iosExposeAfter)
+              .then((_) => (interactive: true, token: null)),
       ]);
-      if (!result.interactive) return result.token;
+      if (!result.interactive) {
+        final token = result.token;
+        // iOS last resort: the silent solve failed or timed out, so show the
+        // visible verification card and let it run (and retry) in front of
+        // the user. Android keeps its existing behaviour.
+        if ((token == null || token.isEmpty) &&
+            session.phase == TurnstilePhase.error &&
+            _exposesBrowserOnIos(label, allowPrompt)) {
+          return await _showInteraction(label, null);
+        }
+        return token;
+      }
       if (!allowPrompt || !canShowUi) {
         session.cancel();
         return null;
@@ -343,9 +368,21 @@ class TurnstileGate {
     }
   }
 
+  /// How long iOS waits for a silent solve before showing the card.
+  static const _iosExposeAfter = Duration(milliseconds: 2500);
+
+  /// Only seat-layout checks (auto-book included) that may show UI, and only
+  /// on iOS. Silent warming and background refresh stay invisible.
+  bool _exposesBrowserOnIos(String label, bool allowPrompt) =>
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS &&
+      allowPrompt &&
+      label != 'Railway login' &&
+      canShowUi;
+
   Future<String?> _showInteraction(
     String label,
-    Future<String?> request,
+    Future<String?>? request,
   ) async {
     final nav = NotificationService.navigatorKey.currentState!;
     HapticFeedback.mediumImpact();
