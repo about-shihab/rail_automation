@@ -39,6 +39,7 @@ class _BookingScreenState extends State<BookingScreen> {
   bool _checkoutRedirected = false;
   Future<List<PurchasedTicket>?>? _historyBeforeCheckout;
   bool _checkingPayment = false;
+  int _searchRecoveryAttempts = 0;
 
   @override
   void initState() {
@@ -129,8 +130,47 @@ class _BookingScreenState extends State<BookingScreen> {
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setNavigationDelegate(
           NavigationDelegate(
-            onPageStarted: (_) {
+            onPageStarted: (url) {
               if (mounted) setState(() => _loading = true);
+              if (WebSessionService.isRailwayUrl(url) && storage.isNotEmpty) {
+                _controller?.runJavaScript('''
+                  (function() {
+                    try {
+                      var vals = ${jsonEncode(values)};
+                      for (var k in vals) {
+                        try { localStorage.setItem(k, vals[k]); } catch(e){}
+                        try { sessionStorage.setItem(k, vals[k]); } catch(e){}
+                      }
+                      var stor = ${jsonEncode(storage)};
+                      for (var s in stor) {
+                        try { localStorage.setItem(s, String(stor[s])); } catch(e){}
+                        try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
+                      }
+                      var pData = stor['initialPurchaseData'] || '';
+                      if (!window.__railStorageGuarded) {
+                        window.__railStorageGuarded = true;
+                        var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                        sessionStorage.getItem = function(k) {
+                          var v = origSGet(k);
+                          if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                          if (stor[k] !== undefined) return String(stor[k]);
+                          if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                          if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                          if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                          return v;
+                        };
+                        var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                        sessionStorage.removeItem = function(k) {
+                          if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                            return;
+                          }
+                          return origSRemove(k);
+                        };
+                      }
+                    } catch(e) {}
+                  })();
+                ''');
+              }
             },
             onPageFinished: (url) async {
               if (!WebSessionService.isRailwayUrl(url)) {
@@ -145,7 +185,10 @@ class _BookingScreenState extends State<BookingScreen> {
               }
 
               if (!bootstrapped &&
-                  url.contains('/rail-pro-checkout-bootstrap')) {
+                  (url.contains('/rail-pro-checkout-bootstrap') ||
+                      url == 'about:blank' ||
+                      url.startsWith('data:') ||
+                      WebSessionService.isRailwayUrl(url))) {
                 bootstrapped = true;
                 if (session.isValid) {
                   try {
@@ -153,10 +196,36 @@ class _BookingScreenState extends State<BookingScreen> {
                     (function() {
                       Object.entries(${jsonEncode(values)}).forEach(([k,v]) => {
                         localStorage.setItem(k, v);
+                        try { sessionStorage.setItem(k, v); } catch(e){}
                       });
                       Object.entries(${jsonEncode(storage)}).forEach(([k,v]) => {
                         sessionStorage.setItem(k, String(v));
+                        try { localStorage.setItem(k, String(v)); } catch(e){}
                       });
+                      try {
+                        var stor = ${jsonEncode(storage)};
+                        var pData = stor['initialPurchaseData'] || '';
+                        if (!window.__railStorageGuarded) {
+                          window.__railStorageGuarded = true;
+                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                          sessionStorage.getItem = function(k) {
+                            var v = origSGet(k);
+                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                            if (stor[k] !== undefined) return String(stor[k]);
+                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                            return v;
+                          };
+                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                          sessionStorage.removeItem = function(k) {
+                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                              return;
+                            }
+                            return origSRemove(k);
+                          };
+                        }
+                      } catch(e) {}
                     })();
                   ''');
                     await _controller?.runJavaScript(
@@ -174,6 +243,81 @@ class _BookingScreenState extends State<BookingScreen> {
                     return;
                   }
                 }
+              }
+
+              // Keep storage warm on any Railway page so sessionStorage is preserved
+              if (session.isValid && storage.isNotEmpty) {
+                try {
+                  await _controller?.runJavaScript('''
+                    (function() {
+                      try {
+                        var vals = ${jsonEncode(values)};
+                        for (var k in vals) {
+                          try { localStorage.setItem(k, vals[k]); } catch(e){}
+                          try { sessionStorage.setItem(k, vals[k]); } catch(e){}
+                        }
+                        var stor = ${jsonEncode(storage)};
+                        for (var s in stor) {
+                          try { localStorage.setItem(s, String(stor[s])); } catch(e){}
+                          try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
+                        }
+                        var pData = stor['initialPurchaseData'] || '';
+                        if (!window.__railStorageGuarded) {
+                          window.__railStorageGuarded = true;
+                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                          sessionStorage.getItem = function(k) {
+                            var v = origSGet(k);
+                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                            if (stor[k] !== undefined) return String(stor[k]);
+                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                            return v;
+                          };
+                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                          sessionStorage.removeItem = function(k) {
+                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                              return;
+                            }
+                            return origSRemove(k);
+                          };
+                        }
+                      } catch(e) {}
+                    })();
+                  ''');
+                } catch (_) {}
+              }
+
+              final uri = Uri.tryParse(url);
+              final isSearchRedirect = isReadyForPayment &&
+                  (uri?.path == '/booking/train/search' ||
+                      uri?.path == '/' ||
+                      uri?.path.isEmpty == true);
+
+              // Auto-recover if redirected to search on mobile
+              if (isSearchRedirect && _searchRecoveryAttempts < 2) {
+                _searchRecoveryAttempts++;
+                try {
+                  await _controller?.runJavaScript('''
+                    (function() {
+                      try {
+                        var vals = ${jsonEncode(values)};
+                        for (var k in vals) {
+                          try { localStorage.setItem(k, vals[k]); } catch(e){}
+                          try { sessionStorage.setItem(k, vals[k]); } catch(e){}
+                        }
+                        var stor = ${jsonEncode(storage)};
+                        for (var s in stor) {
+                          try { localStorage.setItem(s, String(stor[s])); } catch(e){}
+                          try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
+                        }
+                        window.location.replace(${jsonEncode(BookingService.tripInfoUrl)});
+                      } catch(e) {
+                        window.location.href = ${jsonEncode(BookingService.tripInfoUrl)};
+                      }
+                    })();
+                  ''');
+                } catch (_) {}
               }
 
               if (defaultTargetPlatform == TargetPlatform.iOS &&
@@ -207,12 +351,13 @@ class _BookingScreenState extends State<BookingScreen> {
           ),
         );
 
+      await WebSessionService.configureLoginBrowser(controller);
       if (!mounted) return;
       setState(() => _controller = controller);
       // A blank document on the Railway origin lets us restore storage before
       // the site's router executes. Loading /login first races its redirects.
       await controller.loadHtmlString(
-        '<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body></body></html>',
+        '''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><script>(function(){try{var vals=${jsonEncode(values)};for(var k in vals){if(vals.hasOwnProperty(k)){localStorage.setItem(k,vals[k]);try{sessionStorage.setItem(k,vals[k]);}catch(e){}}}var stor=${jsonEncode(storage)};for(var s in stor){if(stor.hasOwnProperty(s)){sessionStorage.setItem(s,String(stor[s]));try{localStorage.setItem(s,String(stor[s]));}catch(e){}}}window.location.replace(${jsonEncode(targetUrl)});}catch(e){window.location.href=${jsonEncode(targetUrl)};}})();</script></head><body></body></html>''',
         baseUrl: 'https://eticket.railway.gov.bd/rail-pro-checkout-bootstrap',
       );
     } catch (error) {

@@ -118,6 +118,7 @@ class TrainTrip {
         'destination_city_name': destinationCityName,
         'train_model': trainModel,
         'is_open_for_all': isOpenForAll,
+        'is_international': false,
         'seat_types': seatTypes.map((e) => e.toJson()).toList(),
         'boarding_points': boardingPoints.map((e) => e.toJson()).toList(),
       };

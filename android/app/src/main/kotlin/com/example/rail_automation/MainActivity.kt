@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -24,6 +25,63 @@ class MainActivity : FlutterActivity() {
             OVERLAY_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
+                "canDrawOverlays" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        result.success(Settings.canDrawOverlays(this))
+                    } else {
+                        result.success(true)
+                    }
+                }
+
+                "requestOverlayPermission" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        val granted = Settings.canDrawOverlays(this)
+                        if (!granted) {
+                            try {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:$packageName")
+                                ).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                try {
+                                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    startActivity(intent)
+                                } catch (_: Exception) {}
+                            }
+                            result.success(false)
+                        } else {
+                            result.success(true)
+                        }
+                    } else {
+                        result.success(true)
+                    }
+                }
+
+                "showVerification" -> {
+                    val siteKey = call.argument<String>("siteKey")
+                    if (siteKey.isNullOrEmpty()) {
+                        result.success(null)
+                    } else {
+                        TurnstileOverlay.show(
+                            applicationContext,
+                            siteKey,
+                            call.argument<String>("title") ?: "",
+                            call.argument<String>("message") ?: "",
+                            result,
+                        )
+                    }
+                }
+
+                "hideVerification" -> {
+                    TurnstileOverlay.hide()
+                    result.success(null)
+                }
+
                 "appVersion" -> {
                     val info = packageManager.getPackageInfo(packageName, 0)
                     val code = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {

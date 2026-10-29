@@ -13,6 +13,7 @@ import 'monitor_service.dart';
 import 'notification_service.dart';
 import 'pro_service.dart';
 import 'otp_verifier.dart';
+import 'overlay_service.dart';
 import 'sms_service.dart';
 import 'turnstile_gate.dart';
 import 'turnstile_session.dart';
@@ -233,39 +234,72 @@ class ForegroundMonitor {
         .listen((event) async {
           final id = event?['id'] as String?;
           if (id == null) return;
+          final gate = TurnstileGate.instance;
+          final foreground = gate.canShowUi;
           FlutterBackgroundService().invoke('verification-ack', {
             'id': id,
-            'presented': TurnstileGate.instance.canShowUi,
+            'presented': foreground,
           });
-          if (!TurnstileGate.instance.canShowUi ||
+          final blocked =
               _activeVerificationId != null ||
-              TurnstileGate.instance.isShowing ||
-              TurnstileSession.instance.generating ||
-              !TurnstileSession.instance.attached) {
+              gate.isShowing ||
+              TurnstileSession.instance.generating;
+          final canOverlay =
+              OverlayService.isAndroid &&
+              !foreground &&
+              await OverlayService.canDrawOverlays();
+          if (blocked || (!gate.canRunSilently && !canOverlay)) {
             FlutterBackgroundService().invoke('verification-result', {
               'id': id,
               'presented':
-                  TurnstileGate.instance.canShowUi &&
-                  (TurnstileGate.instance.isShowing ||
-                      TurnstileSession.instance.generating),
+                  foreground &&
+                  (gate.isShowing || TurnstileSession.instance.generating),
             });
             return;
           }
           _activeVerificationId = id;
-          final gate = TurnstileGate.instance;
-          String? token;
           try {
-            if (gate.canShowUi) {
-              token = await gate.acquire(
-                label: event?['label'] as String? ?? '',
-                forceFresh: true,
+            String? token;
+            // 1) Silent solve. Foreground may show the in-app overlay; the
+            //    background gets one short silent try only.
+            if (gate.canRunSilently) {
+              token = await gate
+                  .acquire(
+                    label: event?['label'] as String? ?? '',
+                    forceFresh: true,
+                    allowPrompt: foreground,
+                  )
+                  .timeout(
+                    foreground
+                        ? const Duration(seconds: 110)
+                        : const Duration(seconds: 20),
+                    onTimeout: () {
+                      TurnstileSession.instance.cancel();
+                      return null;
+                    },
+                  );
+            }
+            // 2) Minimized and the silent try failed: a small visible card over
+            //    other apps. One tap, no need to open Rail Pro.
+            if ((token == null || token.isEmpty) &&
+                canOverlay &&
+                _activeVerificationId == id) {
+              final bn = await NotificationService.prefersBangla();
+              token = await OverlayService.solveVerification(
+                siteKey: gate.seatLayoutSiteKey,
+                title: bn
+                    ? 'টিকেট বুক করতে যাচাই করুন'
+                    : 'Verify to book your ticket',
+                message: bn
+                    ? 'সিট পাওয়া গেছে। একবার যাচাই করুন।'
+                    : 'Seats found. Complete the check to continue.',
               );
             }
             if (_activeVerificationId == id) {
               FlutterBackgroundService().invoke('verification-result', {
                 'id': id,
-                'token': gate.canShowUi ? token : null,
-                'presented': gate.canShowUi,
+                'token': token,
+                'presented': foreground,
               });
             }
           } finally {
@@ -279,6 +313,7 @@ class ForegroundMonitor {
             _activeVerificationId = null;
             TurnstileSession.instance.cancel();
             TurnstileGate.instance.dismiss();
+            unawaited(OverlayService.hideVerification());
           }
         });
   }

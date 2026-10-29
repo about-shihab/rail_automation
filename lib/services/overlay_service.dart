@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
@@ -25,6 +27,44 @@ class OverlayService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// Shows a small, visible card over other apps with its own verification
+  /// widget. The user solves the check in place. Returns the token, or null if
+  /// the overlay is unavailable, closed by the user, or timed out.
+  static Future<String?> solveVerification({
+    required String siteKey,
+    required String title,
+    required String message,
+    Duration timeout = const Duration(seconds: 90),
+  }) async {
+    if (!isAndroid || !await canDrawOverlays()) return null;
+    try {
+      final token = await _channel
+          .invokeMethod<String>('showVerification', {
+            'siteKey': siteKey,
+            'title': title,
+            'message': message,
+          })
+          .timeout(
+            timeout,
+            onTimeout: () {
+              unawaited(hideVerification());
+              return null;
+            },
+          );
+      return (token == null || token.isEmpty) ? null : token;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Removes the verification card, if shown.
+  static Future<void> hideVerification() async {
+    if (!isAndroid) return;
+    try {
+      await _channel.invokeMethod<void>('hideVerification');
+    } catch (_) {}
   }
 
   static bool get isAndroid =>

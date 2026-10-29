@@ -114,6 +114,25 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>?>? _monitorUpdates;
   bool _syncingMonitor = false;
+  MonitorService? _watchedMonitor;
+  bool _warmWasWanted = false;
+
+  bool _warmWanted() {
+    final m = _watchedMonitor;
+    if (m == null) return false;
+    return m.isMonitoring &&
+        !m.isScheduled &&
+        (m.bookingIntent.autoReserve || m.needsTurnstile);
+  }
+
+  void _onMonitorChanged() {
+    final wanted = _warmWanted();
+    if (wanted && !_warmWasWanted) {
+      // Search just became active: have a token ready before seats appear.
+      TurnstileGate.instance.warmInBackground();
+    }
+    _warmWasWanted = wanted;
+  }
 
   Future<void> _syncMonitor({bool startTimers = false}) async {
     if (!mounted || _syncingMonitor) return;
@@ -141,6 +160,15 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _watchedMonitor = context.read<MonitorService>()
+        ..addListener(_onMonitorChanged);
+      TurnstileGate.instance.warmWanted = _warmWanted;
+      if (!AppUpdateService.instance.required) {
+        TurnstileGate.instance.startBackgroundRefresh();
+      }
+    });
     if (widget.startLoggedIn) {
       // Token expired while the app was closed? Sign in again behind a
       // loading screen before the user hits an error.
@@ -164,6 +192,7 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     final monitor = context.read<MonitorService>();
     final firebaseUser = context.read<FirebaseUserService>();
     if (state == AppLifecycleState.resumed) {
+      unawaited(OverlayService.hideVerification());
       TurnstileGate.instance.startBackgroundRefresh();
       BookingActivity.instance.reset();
       unawaited(AdminPushService.instance.refresh());
@@ -190,6 +219,8 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
 
   @override
   void dispose() {
+    _watchedMonitor?.removeListener(_onMonitorChanged);
+    TurnstileGate.instance.warmWanted = null;
     TurnstileGate.instance.stopBackgroundRefresh();
     _monitorUpdates?.cancel();
     unawaited(ForegroundMonitor.disconnectVerificationUi());
@@ -206,7 +237,6 @@ class _BangladeshRailAppState extends State<BangladeshRailApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || AppUpdateService.instance.required) return;
       NotificationService().openPendingBooking();
-      TurnstileGate.instance.warmInBackground();
     });
 
     return MaterialApp(

@@ -108,16 +108,78 @@ class TurnstileGate {
 
   Timer? _refreshTimer;
 
+  /// Set by the app: true only while a token could actually be needed
+  /// (an active auto-book search or a pending human check). Idle app = no solves.
+  bool Function()? warmWanted;
+
+  /// Refresh once the cached token is this old (it stays usable until ~4m30s).
+  static const _refreshAfter = Duration(minutes: 3);
+  static const _checkEvery = Duration(seconds: 30);
+  static const _retryBackoff = Duration(minutes: 1);
+  DateTime _nextWarmAllowed = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// A silent (non-interactive) solve only needs the warm browser, not a
+  /// resumed UI. Interactive prompts still require [canShowUi].
+  bool get canRunSilently {
+    final nav = NotificationService.navigatorKey.currentState;
+    if (nav == null || !nav.mounted) return false;
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.detached) {
+      return false;
+    }
+    return TurnstileSession.instance.attached;
+  }
+
+  Future<Duration?> _cachedTokenAge() async {
+    final token = await cachedToken(); // validates, drops stale/submitted
+    if (token == null) return null;
+    final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
+    if (ts == null) return null;
+    return Duration(milliseconds: DateTime.now().millisecondsSinceEpoch - ts);
+  }
+
   /// Starts refreshing the turnstile token periodically in the background while
   /// the app is in the foreground, ensuring a fresh 5-minute token is always ready.
   void startBackgroundRefresh() {
     _refreshTimer?.cancel();
+    _nextWarmAllowed = DateTime.fromMillisecondsSinceEpoch(0);
     warmInBackground();
-    _refreshTimer = Timer.periodic(const Duration(minutes: 4), (_) {
-      if (canShowUi) {
-        warmInBackground();
+    // Cheap age check every 30s; a real solve only happens when needed.
+    _refreshTimer = Timer.periodic(_checkEvery, (_) => warmInBackground());
+  }
+
+  /// Called as the app is leaving the foreground (used on iOS, which cannot
+  /// run a browser once suspended). Makes sure a token with a long remaining
+  /// life is cached so background checks can use it. Never shows UI.
+  Future<void> prepareForBackground({
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final wanted = warmWanted;
+    if (wanted != null && !wanted()) return;
+    if (!canRunSilently || isShowing || _layoutAccess != null) return;
+    final pendingWarm = _warming;
+    if (pendingWarm != null) {
+      await pendingWarm.timeout(timeout, onTimeout: () {});
+      return;
+    }
+    try {
+      final age = await _cachedTokenAge();
+      // Keep a token that still has more than ~3.5 minutes of life.
+      if (age != null && age < const Duration(seconds: 90)) return;
+      final siteKey = _keyFor('', null);
+      final token = await acquire(
+        label: 'Verification',
+        forceFresh: true,
+        allowPrompt: false,
+        siteKey: siteKey,
+        keepCached: true,
+      ).timeout(timeout, onTimeout: () {
+        TurnstileSession.instance.cancel();
+        return null;
+      });
+      if (token != null && token.isNotEmpty) {
+        await storeToken(token, siteKey: siteKey);
       }
-    });
+    } catch (_) {}
   }
 
   /// Stops background refresh when the app is paused or inactive.
@@ -129,34 +191,34 @@ class TurnstileGate {
   /// Silently solve a verification token in the background while the app is open.
   /// Valid for 5 minutes. Never presents any UI unless an interaction is required.
   void warmInBackground() {
+    final wanted = warmWanted;
+    if (wanted != null && !wanted()) return;
     if (!canShowUi || isShowing || _warming != null || _layoutAccess != null) {
       return;
     }
+    if (DateTime.now().isBefore(_nextWarmAllowed)) return;
     late final Future<void> warming;
     warming =
         () async {
           try {
+            final age = await _cachedTokenAge();
+            if (age != null && age < _refreshAfter) return;
             final siteKey = _keyFor('', null);
-            final existing = await cachedToken();
-            if (existing != null && existing.isNotEmpty) {
-              final ts = int.tryParse(await SecureStore.read(_timeKey) ?? '');
-              if (ts != null) {
-                final age = DateTime.now().millisecondsSinceEpoch - ts;
-                // Token is still fresh (valid for more than 1 minute remaining)
-                if (age < const Duration(seconds: 240).inMilliseconds) return;
-              }
-            }
             final token = await acquire(
               label: 'Verification',
               forceFresh: true,
               allowPrompt: false,
               siteKey: siteKey,
+              keepCached: true, // never destroy a usable token on failure
             );
             if (token != null && token.isNotEmpty) {
               await storeToken(token, siteKey: siteKey);
+              _nextWarmAllowed = DateTime.fromMillisecondsSinceEpoch(0);
+            } else {
+              _nextWarmAllowed = DateTime.now().add(_retryBackoff);
             }
           } catch (_) {
-            // Silent background warm; keep app undisturbed
+            _nextWarmAllowed = DateTime.now().add(_retryBackoff);
           }
         }().whenComplete(() {
           if (identical(_warming, warming)) _warming = null;
@@ -164,6 +226,9 @@ class TurnstileGate {
     _warming = warming;
     unawaited(warming);
   }
+
+  /// Site key used for seat-layout verification (also used by the overlay).
+  String get seatLayoutSiteKey => _keyFor('', null);
 
   String _keyFor(String label, String? explicitKey) {
     final purpose = label == 'Railway login' ? 'sign_in' : 'seat_layout';
@@ -187,6 +252,7 @@ class TurnstileGate {
     bool forceFresh = false,
     String? siteKey,
     bool allowPrompt = true,
+    bool keepCached = false,
   }) {
     final targetKey = _keyFor(label, siteKey);
     final running = _inflight;
@@ -200,12 +266,13 @@ class TurnstileGate {
           forceFresh: true,
           siteKey: targetKey,
           allowPrompt: allowPrompt,
+          keepCached: keepCached,
         ),
       );
     }
 
     late final Future<String?> f;
-    f = _acquire(label, forceFresh, targetKey, allowPrompt).whenComplete(() {
+    f = _acquire(label, forceFresh, targetKey, allowPrompt, keepCached).whenComplete(() {
       if (identical(_inflight, f)) {
         _inflight = null;
         _inflightSiteKey = null;
@@ -223,24 +290,25 @@ class TurnstileGate {
     bool forceFresh, [
     String? siteKey,
     bool allowPrompt = true,
+    bool keepCached = false,
   ]) async {
     // Capture a pending silent execution before any async storage/navigation.
     final targetKey = _keyFor(label, siteKey);
     final session = TurnstileSession.instance;
     final pending = session.generating
         ? session.generate(targetKey)
-        : (forceFresh && workerAcquire == null && canShowUi
+        : (forceFresh && workerAcquire == null && (canRunSilently || canShowUi)
               ? session.generateWhenAttached(targetKey)
               : null);
     if (forceFresh) {
-      await invalidate();
+      if (!keepCached) await invalidate();
     } else {
       final cached = label == 'Railway login' ? null : await takeCachedToken();
       if (cached != null) return cached;
     }
     final worker = workerAcquire;
     if (worker != null) return worker(label);
-    if (!canShowUi) return null;
+    if (!canRunSilently && !canShowUi) return null;
 
     final request = pending ?? session.generateWhenAttached(targetKey);
     // Execute in the retained browser without navigating or interrupting the
@@ -333,6 +401,8 @@ class TurnstileGate {
         .then<void>((_) {}, onError: (Object _, StackTrace _) {})
         .whenComplete(() {
           if (identical(_layoutAccess, finished)) _layoutAccess = null;
+          // Tokens are single-use: prepare the next one right away.
+          if (canShowUi) warmInBackground();
         });
     _layoutAccess = finished;
     return result;

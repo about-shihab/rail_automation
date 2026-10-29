@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:rail_automation/models/booking_intent.dart';
@@ -9,11 +10,15 @@ import 'package:rail_automation/services/pro_service.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late MonitorService monitor;
+  late String journeyDate;
 
   setUp(() {
     SharedPreferences.setMockInitialValues({});
     FlutterSecureStorage.setMockInitialValues({});
     monitor = MonitorService(proService: ProService());
+    journeyDate = DateFormat('dd-MMM-yyyy', 'en_US').format(
+      DateTime.now().add(const Duration(days: 3)),
+    );
   });
 
   tearDown(() {
@@ -24,7 +29,7 @@ void main() {
     monitor.startMonitoring(
       fromCity: 'Chattogram',
       toCity: 'Dhaka',
-      dateOfJourney: '26-Oct-2026',
+      dateOfJourney: journeyDate,
       targetTrains: ['CHATTALA EXPRESS (801)'],
       intent: const BookingIntent(),
     );
@@ -47,7 +52,7 @@ void main() {
     monitor.startMonitoring(
       fromCity: 'Chattogram',
       toCity: 'Dhaka',
-      dateOfJourney: '26-Oct-2026',
+      dateOfJourney: journeyDate,
       intent: const BookingIntent(),
     );
 
@@ -68,7 +73,7 @@ void main() {
     monitor.startMonitoring(
       fromCity: 'Chattogram',
       toCity: 'Dhaka',
-      dateOfJourney: '26-Oct-2026',
+      dateOfJourney: journeyDate,
       targetTrains: ['CHATTALA EXPRESS (801)', 'MAHANAGAR GODHULI (703)'],
       intent: const BookingIntent(),
     );
@@ -88,4 +93,3 @@ void main() {
     expect(monitor.isTrainMonitored('COXS BAZAR EXPRESS (813)'), isFalse);
   });
 }
-

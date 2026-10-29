@@ -12,6 +12,7 @@ import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
 import 'package:rail_automation/services/language_service.dart';
+import 'package:rail_automation/services/otp_verifier.dart';
 import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/views/booking_screen.dart';
 import 'package:rail_automation/views/reservation_screen.dart';
@@ -106,6 +107,91 @@ void main() {
                 'data': {
                   'success': true,
                   'user': {'name': 'Verified user', 'mobile': '01700000000'},
+                },
+              }),
+              200,
+            );
+          }
+          return http.Response(jsonEncode({'data': []}), 200);
+        }),
+      );
+    },
+  );
+
+  testWidgets(
+    'Google OTP automatically inserts into input field, clicks verify, and navigates to payment',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
+      FlutterSecureStorage.setMockInitialValues({});
+      await LanguageService.instance.setLanguage(AppLanguage.en);
+      final platform = FakeWebViewPlatform();
+      WebViewPlatform.instance = platform;
+      await AuthSession.save(
+        AuthSession(
+          token: 'test-session',
+          deviceKey: 'key',
+          phoneNumber: '01711111111',
+        ),
+      );
+      await SecureStore.write(
+        'rail_user',
+        jsonEncode({'mobile_number': '01711111111', 'id': 456}),
+      );
+      final train = ApiService.getMockResponse().trains[1];
+      await BookingService.save({
+        'id': 'google-otp-test',
+        'status': 'awaitingOtp',
+        'credit_deducted': true,
+        'autoVerify': true,
+        'train': train.toJson(),
+        'seatClass': train.seatTypes.first.toJson(),
+        'coach': {'seat_fare': 550},
+        'seats': [
+          {'ticket_id': 202, 'seat_number': 'KHA-2'},
+        ],
+        'from': 'Dhaka',
+        'to': 'Chattogram',
+        'date': '12-Oct-2026',
+      });
+      var verified = 0;
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            ChangeNotifierProvider.value(
+              value: LanguageService.instance,
+              child: const MaterialApp(home: ReservationScreen()),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 100));
+
+          // Simulate Google SMS retriever / consent delivering the OTP
+          expect(OtpVerifier.onOtpReceivedInForeground, isNotNull);
+          OtpVerifier.onOtpReceivedInForeground!('654321');
+
+          await tester.pump(const Duration(milliseconds: 100));
+          await tester.pump(const Duration(milliseconds: 500));
+
+          expect(verified, 1);
+          expect(find.byType(BookingScreen), findsOneWidget);
+          expect(find.byType(ReservationScreen), findsNothing);
+          expect(
+            platform.controller.scripts.last,
+            contains(BookingService.tripInfoUrl),
+          );
+          expect(
+            (await BookingService.pending())?['status'],
+            'readyForPayment',
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient((req) async {
+          if (req.url.path.endsWith('verify-otp')) {
+            verified++;
+            return http.Response(
+              jsonEncode({
+                'data': {
+                  'success': true,
+                  'user': {'name': 'Google OTP user', 'mobile': '01711111111'},
                 },
               }),
               200,
