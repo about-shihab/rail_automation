@@ -295,6 +295,33 @@ jobs:
           gh auth setup-git
           python scripts/publish_github.py --repo "$PUBLIC_REPO"
 
+      - name: Prune old releases (keep latest 2)
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          # List all releases on the public repo, oldest first.
+          # gh release list returns newest-first; reverse so we can skip the 2 newest.
+          RELEASES=$(gh release list --repo "$PUBLIC_REPO" --limit 100 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft == false) | .tagName] | reverse | .[]')
+
+          TOTAL=$(echo "$RELEASES" | grep -c . || true)
+          KEEP=2
+          if [ "$TOTAL" -le "$KEEP" ]; then
+            echo "Only $TOTAL release(s) found — nothing to prune."
+            exit 0
+          fi
+
+          # Drop the last $KEEP entries (those are the newest after reversing).
+          DELETE=$(echo "$RELEASES" | head -n $(( TOTAL - KEEP )))
+          echo "Releases to delete: $(echo "$DELETE" | tr '\n' ' ')"
+
+          for TAG in $DELETE; do
+            echo "Deleting release and tag: $TAG"
+            # Delete the GitHub Release (and its uploaded assets).
+            gh release delete "$TAG" --repo "$PUBLIC_REPO" --yes --cleanup-tag || \
+              echo "Warning: could not delete release $TAG (may already be gone)."
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: signed-release-${{ needs.prepare.outputs.version }}
