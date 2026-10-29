@@ -259,6 +259,13 @@ class TurnstileSession extends ChangeNotifier {
 ''';
 
   /// iOS-only variant; the original Android script remains unchanged.
+  ///
+  /// Key iOS difference: `turnstile.reset()` does not reliably produce a fresh
+  /// token on WKWebView when the previous widget was already used or expired
+  /// (the expired-callback fires instead of the success-callback). To guarantee
+  /// a new token on every booking attempt, the iOS build always removes the old
+  /// widget and calls `render()` again. The extra DOM work is negligible because
+  /// the widget is hidden until an interaction is required.
   static String bootstrapForBridge(String bridgeId) => bootstrap
       .replaceFirst(
         'var defaultSiteKey',
@@ -267,5 +274,27 @@ class TurnstileSession extends ChangeNotifier {
       .replaceFirst(
         'Object.assign({status:',
         'Object.assign({bridgeId: bridgeId, status:',
+      )
+      // Replace the reset-or-execute branch with a remove-and-re-render so that
+      // every call to __railBegin starts from a clean widget on iOS. The
+      // `widget === null` branch (first call or after site-key change) is
+      // already correct; only the `else` path needs changing.
+      .replaceFirst(
+        '    } else {\n'
+        '      if (used) turnstile.reset(widget);\n'
+        '      used = true;\n'
+        '      active = id;\n'
+        '      turnstile.execute(widget);\n'
+        '    }',
+        '    } else {\n'
+        '      // iOS: always re-render for a fresh token instead of reset.\n'
+        '      try { turnstile.remove(widget); } catch (e) {}\n'
+        '      widget = null;\n'
+        '      used = false;\n'
+        '      active = id;\n'
+        '      render(target);\n'
+        '      used = true;\n'
+        '      turnstile.execute(widget);\n'
+        '    }',
       );
 }

@@ -107,7 +107,9 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     CreditService().addListener(_onStateChanged);
     BookingActivity.instance.addListener(_onStateChanged);
 
-    final isTest = WidgetsBinding.instance.runtimeType.toString().contains('Test');
+    final isTest = WidgetsBinding.instance.runtimeType.toString().contains(
+      'Test',
+    );
     _anim = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 2600),
@@ -117,7 +119,10 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     }
 
     _refresh();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (_) => _refresh());
+    _refreshTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _refresh(),
+    );
   }
 
   @override
@@ -157,7 +162,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         final is5MinElapsed = isReady
             ? (expiry != null && !now.isBefore(expiry))
             : ((started != null && now.difference(started).inMinutes >= 5) ||
-                (expiry != null && !now.isBefore(expiry)));
+                  (expiry != null && !now.isBefore(expiry)));
 
         if (is5MinElapsed) {
           await BookingService.clear();
@@ -175,16 +180,19 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
             !ReservationScreen.isActive &&
             !_openingReservation &&
             mounted) {
-          final elapsedSeconds =
-              started != null ? now.difference(started).inSeconds : 0;
+          final elapsedSeconds = started != null
+              ? now.difference(started).inSeconds
+              : 0;
           if (value['autoVerify'] != true || elapsedSeconds >= 20) {
             _openingReservation = true;
             Navigator.of(context, rootNavigator: true)
-                .push(MaterialPageRoute(builder: (_) => const ReservationScreen()))
+                .push(
+                  MaterialPageRoute(builder: (_) => const ReservationScreen()),
+                )
                 .then((_) {
-              _openingReservation = false;
-              _refresh();
-            });
+                  _openingReservation = false;
+                  _refresh();
+                });
           }
         }
       } else if (_reservation != null) {
@@ -266,8 +274,12 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     HapticFeedback.lightImpact();
     final baseTrain = isFirstLeg ? journey.first : journey.second;
     final legSeat = isFirstLeg ? journey.firstSeat : journey.secondSeat;
-    final legFrom = isFirstLeg ? canonicalStation(fromCity) : canonicalStation(journey.leg2From);
-    final legTo = isFirstLeg ? canonicalStation(journey.leg1To) : canonicalStation(toCity);
+    final legFrom = isFirstLeg
+        ? canonicalStation(fromCity)
+        : canonicalStation(journey.leg2From);
+    final legTo = isFirstLeg
+        ? canonicalStation(journey.leg1To)
+        : canonicalStation(toCity);
     final legDate = isFirstLeg ? journey.firstDate : journey.secondDate;
 
     // Single-ticket TrainTrip instance: prevents parallel multi-ticket requests and server hang
@@ -327,7 +339,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final isExpired = expiry != null && !expiry.isAfter(DateTime.now());
     final hasReservation = p != null && !isExpired;
 
-    final isReservationExpired = (p != null && isExpired) ||
+    final isReservationExpired =
+        (p != null && isExpired) ||
         (!m.isMonitoring &&
             (m.lastReservationExpired ||
                 (m.bookingFailureReason != null &&
@@ -346,7 +359,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
     final dateOfJourney = (p?['date']?.toString().isNotEmpty == true)
         ? p!['date'].toString()
         : m.dateOfJourney;
-    final trainName = (p?['train']?['trip_number']?.toString().isNotEmpty == true)
+    final trainName =
+        (p?['train']?['trip_number']?.toString().isNotEmpty == true)
         ? p!['train']['trip_number'].toString()
         : (m.targetTrains.isNotEmpty ? m.targetTrains.join(', ') : 'Train');
 
@@ -484,7 +498,8 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
 // ═══════════════════════════════════════════════════════════════════════════════
 // App bar
 // ═══════════════════════════════════════════════════════════════════════════════
-class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidget {
+class _ScenicMonitorAppBar extends StatelessWidget
+    implements PreferredSizeWidget {
   final int credits;
   final bool isMonitoring;
   final bool isScheduled;
@@ -533,7 +548,10 @@ class _ScenicMonitorAppBar extends StatelessWidget implements PreferredSizeWidge
                 borderRadius: BorderRadius.circular(20),
                 onTap: () => RechargeCreditDialog.show(context),
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
                   decoration: BoxDecoration(
                     color: low ? _kAmber : Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
@@ -753,7 +771,9 @@ class _ProgressSteps extends StatelessWidget {
                     child: Container(
                       height: 3,
                       decoration: BoxDecoration(
-                        color: steps[i].state == _StepState.done ? accent : track,
+                        color: steps[i].state == _StepState.done
+                            ? accent
+                            : track,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -782,7 +802,9 @@ class _ProgressSteps extends StatelessWidget {
         AnimatedBuilder(
           animation: anim,
           builder: (context, child) {
-            final glow = active ? 0.5 + 0.5 * math.sin(anim.value * 2 * math.pi) : 0.0;
+            final glow = active
+                ? 0.5 + 0.5 * math.sin(anim.value * 2 * math.pi)
+                : 0.0;
             return Container(
               width: 30,
               height: 30,
@@ -791,9 +813,7 @@ class _ProgressSteps extends StatelessWidget {
                 color: done
                     ? accent
                     : (active ? accent.withValues(alpha: 0.16) : track),
-                border: active
-                    ? Border.all(color: accent, width: 2)
-                    : null,
+                border: active ? Border.all(color: accent, width: 2) : null,
                 boxShadow: active
                     ? [
                         BoxShadow(
@@ -949,7 +969,11 @@ class _RouteTrack extends StatelessWidget {
                     Positioned.fill(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: Center(child: _DashedLine(color: accent.withValues(alpha: 0.4))),
+                        child: Center(
+                          child: _DashedLine(
+                            color: accent.withValues(alpha: 0.4),
+                          ),
+                        ),
                       ),
                     ),
                     AnimatedBuilder(
@@ -1149,34 +1173,34 @@ class _MonitorSection extends StatelessWidget {
     final statusText = m.isScheduled
         ? lang.tr('SCHEDULED', 'নির্ধারিত')
         : m.isMonitoring
-            ? lang.tr('LIVE', 'চলছে')
-            : lang.tr('PAUSED', 'স্থগিত');
+        ? lang.tr('LIVE', 'চলছে')
+        : lang.tr('PAUSED', 'স্থগিত');
 
     final title = m.isScheduled
         ? lang.tr('Search scheduled', 'অনুসন্ধান নির্ধারিত')
         : m.isMonitoring
-            ? lang.tr("We're finding your ticket", 'আমরা আপনার টিকেট খুঁজছি')
-            : lang.tr('Search is paused', 'অনুসন্ধান স্থগিত');
+        ? lang.tr("We're finding your ticket", 'আমরা আপনার টিকেট খুঁজছি')
+        : lang.tr('Search is paused', 'অনুসন্ধান স্থগিত');
 
     final subtitle = m.isScheduled
         ? (m.scheduledStartLabel?.isNotEmpty == true
-            ? lang.tr(
-                'Starts ${m.scheduledStartLabel} (BD Time)',
-                'শুরু: ${m.scheduledStartLabel} (বাংলাদেশ সময়)',
-              )
-            : lang.tr(
-                'Starts when tickets open',
-                'টিকেট ছাড়া মাত্রই শুরু হবে',
-              ))
+              ? lang.tr(
+                  'Starts ${m.scheduledStartLabel} (BD Time)',
+                  'শুরু: ${m.scheduledStartLabel} (বাংলাদেশ সময়)',
+                )
+              : lang.tr(
+                  'Starts when tickets open',
+                  'টিকেট ছাড়া মাত্রই শুরু হবে',
+                ))
         : m.isMonitoring
-            ? lang.tr(
-                'Relax. We will grab the seat and alert you.',
-                'নিশ্চিন্তে থাকুন। সিট পেলেই ধরব ও জানাব।',
-              )
-            : lang.tr(
-                'Tap Resume to search again.',
-                'আবার খুঁজতে "চালু করুন" চাপুন।',
-              );
+        ? lang.tr(
+            'Relax. We will grab the seat and alert you.',
+            'নিশ্চিন্তে থাকুন। সিট পেলেই ধরব ও জানাব।',
+          )
+        : lang.tr(
+            'Tap Resume to search again.',
+            'আবার খুঁজতে "চালু করুন" চাপুন।',
+          );
 
     final qty = m.bookingIntent.quantity;
     final auto = m.bookingIntent.autoReserve;
@@ -1213,11 +1237,15 @@ class _MonitorSection extends StatelessWidget {
               _StatusChip(text: statusText, color: color),
               const Spacer(),
               _MiniAction(
-                icon: m.isMonitoring ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                icon: m.isMonitoring
+                    ? Icons.pause_rounded
+                    : Icons.play_arrow_rounded,
                 label: m.isMonitoring
                     ? lang.tr('Pause', 'স্থগিত')
                     : lang.tr('Resume', 'চালু'),
-                color: m.isMonitoring ? AppColors.textPrimary(isDark) : AppColors.primary,
+                color: m.isMonitoring
+                    ? AppColors.textPrimary(isDark)
+                    : AppColors.primary,
                 isDark: isDark,
                 onTap: m.isMonitoring
                     ? onStop
@@ -1312,11 +1340,16 @@ class _MonitorSection extends StatelessWidget {
                     ),
                     _MiniTag(
                       icon: Icons.people_alt_rounded,
-                      label: lang.tr('$qty seat${qty > 1 ? 's' : ''}', '$qtyটি আসন'),
+                      label: lang.tr(
+                        '$qty seat${qty > 1 ? 's' : ''}',
+                        '$qtyটি আসন',
+                      ),
                       isDark: isDark,
                     ),
                     _MiniTag(
-                      icon: auto ? Icons.bolt_rounded : Icons.notifications_active_rounded,
+                      icon: auto
+                          ? Icons.bolt_rounded
+                          : Icons.notifications_active_rounded,
                       label: auto
                           ? lang.tr('Auto-book', 'অটো-বুক')
                           : lang.tr('Loud alarm', 'অ্যালার্ম'),
@@ -1325,7 +1358,10 @@ class _MonitorSection extends StatelessWidget {
                     ),
                     _MiniTag(
                       icon: Icons.radar_rounded,
-                      label: lang.tr('${m.totalChecksCount} checks', '${m.totalChecksCount} বার চেক'),
+                      label: lang.tr(
+                        '${m.totalChecksCount} checks',
+                        '${m.totalChecksCount} বার চেক',
+                      ),
                       isDark: isDark,
                     ),
                   ],
@@ -1334,7 +1370,11 @@ class _MonitorSection extends StatelessWidget {
                   const SizedBox(height: 10),
                   Row(
                     children: [
-                      const Icon(Icons.train_rounded, size: 15, color: AppColors.primary),
+                      const Icon(
+                        Icons.train_rounded,
+                        size: 15,
+                        color: AppColors.primary,
+                      ),
                       const SizedBox(width: 6),
                       Text(
                         '${lang.tr("Watching", "নজরে")}: ',
@@ -1461,7 +1501,11 @@ class _NextStepsCard extends StatelessWidget {
   final bool isDark;
   final Animation<double> anim;
 
-  const _NextStepsCard({required this.m, required this.isDark, required this.anim});
+  const _NextStepsCard({
+    required this.m,
+    required this.isDark,
+    required this.anim,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1496,12 +1540,21 @@ class _NextStepsCard extends StatelessWidget {
                 Icons.search_rounded,
                 isLive ? _StepState.active : _StepState.pending,
               ),
-              _StepData(lang.tr('Seat locked', 'সিট লক'), Icons.lock_rounded,
-                  _StepState.pending),
-              _StepData(lang.tr('Verify OTP', 'ওটিপি'), Icons.sms_rounded,
-                  _StepState.pending),
-              _StepData(lang.tr('Pay in 5 min', '৫ মিনিটে পেমেন্ট'),
-                  Icons.payments_rounded, _StepState.pending),
+              _StepData(
+                lang.tr('Seat locked', 'সিট লক'),
+                Icons.lock_rounded,
+                _StepState.pending,
+              ),
+              _StepData(
+                lang.tr('Verify OTP', 'ওটিপি'),
+                Icons.sms_rounded,
+                _StepState.pending,
+              ),
+              _StepData(
+                lang.tr('Pay in 5 min', '৫ মিনিটে পেমেন্ট'),
+                Icons.payments_rounded,
+                _StepState.pending,
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -1565,7 +1618,8 @@ class _ReservationCard extends StatelessWidget {
     final isReady = status == 'readyForPayment';
 
     final train = reservation['train'] as Map<String, dynamic>?;
-    final trainName = train?['trip_number']?.toString() ??
+    final trainName =
+        train?['trip_number']?.toString() ??
         train?['train_name']?.toString() ??
         'Train';
     final from = canonicalStation('${reservation['from'] ?? ''}');
@@ -1573,32 +1627,35 @@ class _ReservationCard extends StatelessWidget {
     final date = '${reservation['date'] ?? ''}';
 
     final rawSeats = reservation['seats'] as List?;
-    final coach = reservation['coach_names']?.toString() ??
+    final coach =
+        reservation['coach_names']?.toString() ??
         (rawSeats?.firstOrNull is Map
             ? rawSeats!.first['floor_name']?.toString() ?? ''
             : '');
     final seatNumbers = rawSeats != null
         ? rawSeats
-            .map((s) => s is Map ? s['seat_number']?.toString() ?? '' : '')
-            .where((s) => s.isNotEmpty)
-            .join(', ')
+              .map((s) => s is Map ? s['seat_number']?.toString() ?? '' : '')
+              .where((s) => s.isNotEmpty)
+              .join(', ')
         : '';
     final seatClass = rawSeats?.firstOrNull is Map
         ? (rawSeats!.first['selected_seat_class']?.toString() ?? '')
         : (reservation['seatClass'] is Map
-            ? reservation['seatClass']['type']?.toString() ?? ''
-            : '');
+              ? reservation['seatClass']['type']?.toString() ?? ''
+              : '');
 
     final totalFare = reservation['total_fare'] != null
         ? double.tryParse('${reservation['total_fare']}') ?? 0.0
         : (rawSeats != null
-            ? rawSeats.fold<double>(
-                0.0,
-                (sum, s) =>
-                    sum +
-                    (s is Map ? (double.tryParse('${s['fare']}') ?? 0.0) : 0.0),
-              )
-            : 0.0);
+              ? rawSeats.fold<double>(
+                  0.0,
+                  (sum, s) =>
+                      sum +
+                      (s is Map
+                          ? (double.tryParse('${s['fare']}') ?? 0.0)
+                          : 0.0),
+                )
+              : 0.0);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1693,10 +1750,16 @@ class _ReservationCard extends StatelessWidget {
                 isDark: isDark,
                 anim: anim,
                 steps: [
-                  _StepData(lang.tr('Seat found', 'আসন পাওয়া'),
-                      Icons.search_rounded, _StepState.done),
-                  _StepData(lang.tr('Seat locked', 'সিট লক'),
-                      Icons.lock_rounded, _StepState.done),
+                  _StepData(
+                    lang.tr('Seat found', 'আসন পাওয়া'),
+                    Icons.search_rounded,
+                    _StepState.done,
+                  ),
+                  _StepData(
+                    lang.tr('Seat locked', 'সিট লক'),
+                    Icons.lock_rounded,
+                    _StepState.done,
+                  ),
                   _StepData(
                     lang.tr('OTP verified', 'ওটিপি যাচাই'),
                     Icons.sms_rounded,
@@ -1726,8 +1789,11 @@ class _ReservationCard extends StatelessWidget {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.confirmation_number_rounded,
-                            size: 16, color: _kGreen),
+                        const Icon(
+                          Icons.confirmation_number_rounded,
+                          size: 16,
+                          color: _kGreen,
+                        ),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
@@ -1900,7 +1966,10 @@ class _CountdownRingState extends State<_CountdownRing> {
   void initState() {
     super.initState();
     _calcRemaining();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _calcRemaining());
+    _timer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _calcRemaining(),
+    );
   }
 
   @override
@@ -1910,7 +1979,9 @@ class _CountdownRingState extends State<_CountdownRing> {
   }
 
   void _calcRemaining() {
-    final expiry = DateTime.tryParse('${widget.reservation['expiresAt'] ?? ''}');
+    final expiry = DateTime.tryParse(
+      '${widget.reservation['expiresAt'] ?? ''}',
+    );
     if (expiry != null) {
       final diff = expiry.difference(DateTime.now()).inSeconds;
       if (diff <= 0) {
@@ -1987,10 +2058,14 @@ class _CountdownRingState extends State<_CountdownRing> {
               const SizedBox(height: 3),
               Text(
                 _secondsLeft <= 60
-                    ? lang.tr('Hurry! The seat will be released soon.',
-                        'তাড়াতাড়ি করুন! আসন শীঘ্রই ছেড়ে দেওয়া হবে।')
-                    : lang.tr('Your seat is held for you until the timer ends.',
-                        'টাইমার শেষ না হওয়া পর্যন্ত আসনটি আপনার জন্য ধরা আছে।'),
+                    ? lang.tr(
+                        'Hurry! The seat will be released soon.',
+                        'তাড়াতাড়ি করুন! আসন শীঘ্রই ছেড়ে দেওয়া হবে।',
+                      )
+                    : lang.tr(
+                        'Your seat is held for you until the timer ends.',
+                        'টাইমার শেষ না হওয়া পর্যন্ত আসনটি আপনার জন্য ধরা আছে।',
+                      ),
                 style: TextStyle(
                   fontSize: 11.5,
                   height: 1.35,
@@ -2044,15 +2119,22 @@ class _ReservationExpiredCard extends StatelessWidget {
     final lang = LanguageService.of(context);
 
     final headline = isOtpFailure
-        ? lang.tr('Hold Expired — OTP Not Verified', 'সময় শেষ — ওটিপি যাচাই হয়নি')
+        ? lang.tr(
+            'Hold Expired — OTP Not Verified',
+            'সময় শেষ — ওটিপি যাচাই হয়নি',
+          )
         : (isPaymentFailure
-            ? lang.tr('Hold Expired — Payment Timed Out', 'সময় শেষ — পেমেন্টের সময় শেষ')
-            : lang.tr(
-                'Seat Hold Expired — Seats Released',
-                'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত',
-              ));
+              ? lang.tr(
+                  'Hold Expired — Payment Timed Out',
+                  'সময় শেষ — পেমেন্টের সময় শেষ',
+                )
+              : lang.tr(
+                  'Seat Hold Expired — Seats Released',
+                  'আসন সংরক্ষণের মেয়াদ শেষ — আসন মুক্ত',
+                ));
 
-    final isStandardReason = reason == null ||
+    final isStandardReason =
+        reason == null ||
         reason!.isEmpty ||
         reason!.contains('Seats were reserved') ||
         reason!.contains('5 minutes') ||
@@ -2092,9 +2174,13 @@ class _ReservationExpiredCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
                   decoration: BoxDecoration(
-                    color: _surface(isDark).withValues(alpha: isDark ? 0.5 : 0.9),
+                    color: _surface(isDark)
+                        .withValues(alpha: isDark ? 0.5 : 0.9),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: Text(
@@ -2115,8 +2201,11 @@ class _ReservationExpiredCard extends StatelessWidget {
                 onTap: onDismiss,
                 child: Padding(
                   padding: const EdgeInsets.all(4),
-                  child: Icon(Icons.close_rounded,
-                      size: 20, color: AppColors.textMuted(isDark)),
+                  child: Icon(
+                    Icons.close_rounded,
+                    size: 20,
+                    color: AppColors.textMuted(isDark),
+                  ),
                 ),
               ),
             ],
@@ -2130,7 +2219,10 @@ class _ReservationExpiredCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Text(
-                lang.tr('5-Minute Time Limit Reached', '৫ মিনিটের সময়সীমা সমাপ্ত'),
+                lang.tr(
+                  '5-Minute Time Limit Reached',
+                  '৫ মিনিটের সময়সীমা সমাপ্ত',
+                ),
                 style: const TextStyle(
                   color: _kRed,
                   fontSize: 11,
@@ -2148,8 +2240,11 @@ class _ReservationExpiredCard extends StatelessWidget {
                 shape: BoxShape.circle,
                 color: _kRed.withValues(alpha: 0.12),
               ),
-              child: const Icon(Icons.hourglass_bottom_rounded,
-                  size: 34, color: _kRed),
+              child: const Icon(
+                Icons.hourglass_bottom_rounded,
+                size: 34,
+                color: _kRed,
+              ),
             ),
           ),
           const SizedBox(height: 14),
@@ -2206,7 +2301,10 @@ class _ReservationExpiredCard extends StatelessWidget {
                   icon: const Icon(Icons.bolt_rounded, size: 17),
                   label: Text(
                     lang.tr('Re-Auto Book', 'পুনরায় অটো-বুক'),
-                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
@@ -2225,7 +2323,10 @@ class _ReservationExpiredCard extends StatelessWidget {
                   icon: const Icon(Icons.stop_rounded, size: 17),
                   label: Text(
                     lang.tr('Stop & Clear', 'বন্ধ ও মুছুন'),
-                    style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ),
               ),
@@ -2274,7 +2375,11 @@ class _ZeroCreditBanner extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: _kAmber.withValues(alpha: 0.2),
                 ),
-                child: const Icon(Icons.stars_rounded, color: _kAmber, size: 26),
+                child: const Icon(
+                  Icons.stars_rounded,
+                  color: _kAmber,
+                  size: 26,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -2286,7 +2391,9 @@ class _ZeroCreditBanner extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w900,
-                        color: isDark ? const Color(0xFFFDE68A) : const Color(0xFF92400E),
+                        color: isDark
+                            ? const Color(0xFFFDE68A)
+                            : const Color(0xFF92400E),
                       ),
                     ),
                     const SizedBox(height: 2),
@@ -2298,7 +2405,9 @@ class _ZeroCreditBanner extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 11.5,
                         height: 1.3,
-                        color: isDark ? const Color(0xFFFCD34D) : const Color(0xFFB45309),
+                        color: isDark
+                            ? const Color(0xFFFCD34D)
+                            : const Color(0xFFB45309),
                       ),
                     ),
                   ],
@@ -2396,21 +2505,30 @@ class _EmptyMonitorView extends StatelessWidget {
             Icons.radar_rounded,
             AppColors.primary,
             lang.tr('We watch 24/7', 'আমরা সারাক্ষণ নজরে রাখি'),
-            lang.tr('Even split routes via other stations', 'ভায়া স্টেশনের বিকল্প রুটও দেখি'),
+            lang.tr(
+              'Even split routes via other stations',
+              'ভায়া স্টেশনের বিকল্প রুটও দেখি',
+            ),
           ),
           _howRow(
             3,
             Icons.notifications_active_rounded,
             _kAmber,
             lang.tr('Loud alert + auto-book', 'জোরে অ্যালার্ম + অটো-বুক'),
-            lang.tr('Works even if your phone is locked', 'ফোন লক থাকলেও কাজ করে'),
+            lang.tr(
+              'Works even if your phone is locked',
+              'ফোন লক থাকলেও কাজ করে',
+            ),
           ),
           _howRow(
             4,
             Icons.payments_rounded,
             _kGreen,
             lang.tr('Pay within 5 minutes', '৫ মিনিটের মধ্যে পেমেন্ট'),
-            lang.tr('Confirm OTP and pay to get the ticket', 'ওটিপি দিয়ে পেমেন্ট করলেই টিকেট'),
+            lang.tr(
+              'Confirm OTP and pay to get the ticket',
+              'ওটিপি দিয়ে পেমেন্ট করলেই টিকেট',
+            ),
             isLast: true,
           ),
 
@@ -2558,8 +2676,14 @@ class _ViaSection extends StatelessWidget {
                 children: [
                   Text(
                     found
-                        ? lang.tr('Another way to travel found!', 'যাওয়ার আরেকটি উপায় পাওয়া গেছে!')
-                        : lang.tr('Split-route tickets', 'ভায়া / স্প্লিট টিকেট'),
+                        ? lang.tr(
+                            'Another way to travel found!',
+                            'যাওয়ার আরেকটি উপায় পাওয়া গেছে!',
+                          )
+                        : lang.tr(
+                            'Split-route tickets',
+                            'ভায়া / স্প্লিট টিকেট',
+                          ),
                     style: TextStyle(
                       fontSize: 14.5,
                       fontWeight: FontWeight.w900,
@@ -2591,7 +2715,10 @@ class _ViaSection extends StatelessWidget {
                 width: 26,
                 height: 26,
                 alignment: Alignment.center,
-                decoration: const BoxDecoration(shape: BoxShape.circle, color: _kGreen),
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _kGreen,
+                ),
                 child: Text(
                   '${journeys.length}',
                   style: const TextStyle(
@@ -2626,13 +2753,19 @@ class _ViaSection extends StatelessWidget {
                     ),
                   )
                 else
-                  Icon(Icons.hourglass_empty_rounded,
-                      size: 16, color: AppColors.textMuted(isDark)),
+                  Icon(
+                    Icons.hourglass_empty_rounded,
+                    size: 16,
+                    color: AppColors.textMuted(isDark),
+                  ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     isSearching
-                        ? lang.tr('Checking split routes now…', 'এখন বিকল্প রুট খোঁজা হচ্ছে…')
+                        ? lang.tr(
+                            'Checking split routes now…',
+                            'এখন বিকল্প রুট খোঁজা হচ্ছে…',
+                          )
                         : lang.tr(
                             'No split routes right now. They will appear here the moment one opens up.',
                             'এখন কোনো বিকল্প রুট নেই। পেলেই এখানে দেখাবে।',
@@ -2654,7 +2787,9 @@ class _ViaSection extends StatelessWidget {
     return AnimatedBuilder(
       animation: anim,
       builder: (context, child) {
-        final glow = found ? 0.5 + 0.5 * math.sin(anim.value * 2 * math.pi) : 0.0;
+        final glow = found
+            ? 0.5 + 0.5 * math.sin(anim.value * 2 * math.pi)
+            : 0.0;
         return Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
@@ -2670,8 +2805,9 @@ class _ViaSection extends StatelessWidget {
             ),
             boxShadow: [
               BoxShadow(
-                color: (found ? _kGreen : Colors.black)
-                    .withValues(alpha: found ? 0.1 + 0.12 * glow : (isDark ? 0.18 : 0.06)),
+                color: (found ? _kGreen : Colors.black).withValues(
+                  alpha: found ? 0.1 + 0.12 * glow : (isDark ? 0.18 : 0.06),
+                ),
                 blurRadius: found ? 20 + 8 * glow : 18,
                 offset: const Offset(0, 6),
               ),
@@ -2703,7 +2839,9 @@ class _ViaSection extends StatelessWidget {
           Row(
             children: [
               Icon(
-                journey.isOverlapping ? Icons.shuffle_rounded : Icons.place_rounded,
+                journey.isOverlapping
+                    ? Icons.shuffle_rounded
+                    : Icons.place_rounded,
                 size: 15,
                 color: _kGreen,
               ),
@@ -2754,7 +2892,11 @@ class _ViaSection extends StatelessWidget {
             child: Row(
               children: [
                 const SizedBox(width: 12),
-                Icon(Icons.more_vert_rounded, size: 15, color: AppColors.textMuted(isDark)),
+                Icon(
+                  Icons.more_vert_rounded,
+                  size: 15,
+                  color: AppColors.textMuted(isDark),
+                ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
@@ -2811,7 +2953,10 @@ class _ViaSection extends StatelessWidget {
             width: 26,
             height: 26,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(shape: BoxShape.circle, color: _kGreen),
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: _kGreen,
+            ),
             child: Text(
               '$legNumber',
               style: const TextStyle(
@@ -2857,7 +3002,9 @@ class _ViaSection extends StatelessWidget {
               foregroundColor: Colors.white,
               visualDensity: VisualDensity.compact,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             onPressed: onBook,
             child: Text(
