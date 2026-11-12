@@ -10,6 +10,7 @@ import 'notification_service.dart';
 import 'secure_store.dart';
 import 'seat_layout_challenge.dart';
 import 'turnstile_session.dart';
+import 'rail_api_config.dart';
 
 /// Coordinates in-app verification for seat-layout reads.
 /// Tokens are solved silently in the background while the app is open and are
@@ -236,7 +237,7 @@ class TurnstileGate {
     return explicitKey ??
         AppConfig.instance.siteKey(purpose) ??
         (purpose == 'sign_in'
-            ? '0x4AAAAAAB5VTjZ90pUxRuXR'
+            ? RailApiConfig.turnstileInteractiveSiteKey
             : TurnstileSession.defaultSiteKey);
   }
 

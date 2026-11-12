@@ -176,7 +176,7 @@ class RailApiClient {
         final cft = await TurnstileGate.instance.acquire(
           label: 'Railway login',
           forceFresh: true,
-          siteKey: '0x4AAAAAAB5VTjZ90pUxRuXR',
+          siteKey: RailApiConfig.turnstileInteractiveSiteKey,
         );
         if (cft == null || cft.isEmpty) {
           throw const LoginRecoveryRequired(
@@ -282,12 +282,16 @@ class RailApiClient {
         ? Map<String, dynamic>.from(
             RailApiConfig.render(settings['payload'], runtime),
           )
-        : runtime;
+        : Map<String, dynamic>.from(runtime);
     if (operation == 'seat_layout' &&
         runtime['cft_response'] is String &&
         (runtime['cft_response'] as String).isNotEmpty) {
       // Remote payload templates must not drop or substitute this one-use value.
       body['cft_response'] = runtime['cft_response'];
+    }
+    if (url.startsWith(RailApiConfig.appBaseUrl) && verb == 'GET') {
+      body.putIfAbsent('android_app_version', () => '11');
+      body.putIfAbsent('android_device_id', () => '2');
     }
     var uri = Uri.parse(url);
     if (verb == 'GET' && body.isNotEmpty) {

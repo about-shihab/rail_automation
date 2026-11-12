@@ -6,46 +6,47 @@ import '../widgets/scenic_rail_header.dart';
 // ─── Design Tokens ──────────────────────────────────────────────────────────
 
 class AppColors {
-  // Brand palette
-  static const primary = Color(0xFF00C896);
-  static const primaryDark = Color(0xFF00A07A);
-  static const primaryGlow = Color(0x3300C896);
-  static const accent = Color(0xFF3DEFE9);
-  static const gold = Color(0xFFFBBF24);
+  // Brand palette (futuristic cyber-mint & hyper-cyan)
+  static const primary = Color(0xFF00F5A0);
+  static const primaryDark = Color(0xFF00C87E);
+  static const primaryGlow = Color(0x4D00F5A0);
+  static const accent = Color(0xFF00E5FF);
+  static const accentGlow = Color(0x4000E5FF);
+  static const gold = Color(0xFFFFC72C);
 
-  // Dark mode surfaces
-  static const darkBg = Color(0xFF060D1A);
-  static const darkSurface = Color(0xFF0B1628);
-  static const darkCard = Color(0xFF0F1F35);
-  static const darkCardBorder = Color(0xFF1E3A55);
-  static const darkInput = Color(0xFF0A1728);
-  static const darkInputBorder = Color(0xFF1A3048);
+  // Dark mode surfaces (deep space obsidian HUD)
+  static const darkBg = Color(0xFF040914);
+  static const darkSurface = Color(0xFF081324);
+  static const darkCard = Color(0xFF0D1C30);
+  static const darkCardBorder = Color(0xFF183454);
+  static const darkInput = Color(0xFF060F1C);
+  static const darkInputBorder = Color(0xFF142B46);
 
-  // Light mode surfaces
-  static const lightBg = Color(0xFFF0F5FF);
+  // Light mode surfaces (aero-clean titanium)
+  static const lightBg = Color(0xFFF1F6FB);
   static const lightSurface = Color(0xFFFFFFFF);
   static const lightCard = Color(0xFFFFFFFF);
-  static const lightCardBorder = Color(0xFFDDE8F5);
-  static const lightInput = Color(0xFFF5F9FF);
-  static const lightInputBorder = Color(0xFFCBDCF0);
+  static const lightCardBorder = Color(0xFFD6E4F0);
+  static const lightInput = Color(0xFFF6F9FD);
+  static const lightInputBorder = Color(0xFFC3D7EC);
 
   // Text
-  static const darkTextPrimary = Color(0xFFEDF2FF);
-  static const darkTextSecondary = Color(0xFF8AA4C0);
-  static const darkTextMuted = Color(0xFF91A5BC);
-  static const lightTextPrimary = Color(0xFF0A1628);
-  static const lightTextSecondary = Color(0xFF3A5270);
-  static const lightTextMuted = Color(0xFF53677F);
+  static const darkTextPrimary = Color(0xFFF0F6FF);
+  static const darkTextSecondary = Color(0xFF8DA8C8);
+  static const darkTextMuted = Color(0xFF5B7898);
+  static const lightTextPrimary = Color(0xFF061120);
+  static const lightTextSecondary = Color(0xFF334E6F);
+  static const lightTextMuted = Color(0xFF647B95);
 
   // Status
-  static const success = Color(0xFF00C896);
-  static const warning = Color(0xFFFBBF24);
-  static const error = Color(0xFFFF4757);
-  static const info = Color(0xFF60A5FA);
+  static const success = Color(0xFF00F5A0);
+  static const warning = Color(0xFFFFB800);
+  static const error = Color(0xFFFF3B5C);
+  static const info = Color(0xFF00E5FF);
 
   // AppBar
-  static const appBarGradientStart = Color(0xFF003D2B);
-  static const appBarGradientEnd = Color(0xFF006649);
+  static const appBarGradientStart = Color(0xFF02171E);
+  static const appBarGradientEnd = Color(0xFF004434);
 
   // Helpers
   static Color scaffoldBg(bool isDark) => isDark ? darkBg : lightBg;
@@ -253,7 +254,7 @@ class PrimaryButton extends StatelessWidget {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: onPressed == null || loading
-                ? [Colors.grey.shade600, Colors.grey.shade700]
+                ? [Colors.grey.shade700, Colors.grey.shade800]
                 : [AppColors.primary, AppColors.primaryDark],
           ),
           borderRadius: BorderRadius.circular(14),
@@ -261,10 +262,10 @@ class PrimaryButton extends StatelessWidget {
               ? [
                   BoxShadow(
                     color: AppColors.primary.withValues(
-                      alpha: isDark ? 0.35 : 0.25,
+                      alpha: isDark ? 0.40 : 0.28,
                     ),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
+                    blurRadius: 18,
+                    offset: const Offset(0, 5),
                   ),
                 ]
               : null,
@@ -336,7 +337,13 @@ class AppCard extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: radius,
         boxShadow: isDark
-            ? null
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ]
             : [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.06),
@@ -379,9 +386,16 @@ class StatusBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        color: color.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.4)),
+        border: Border.all(color: color.withValues(alpha: 0.45)),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.12),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

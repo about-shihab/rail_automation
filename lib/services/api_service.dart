@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'rail_api_client.dart';
+import 'rail_api_config.dart';
 import 'app_config.dart';
 import 'booking_activity.dart';
 import 'secure_store.dart';
@@ -26,7 +27,7 @@ class ApiService {
         : normalized;
   }
 
-  static const String baseUrl = 'https://railspaapi.shohoz.com/v1.0/web';
+  static const String baseUrl = RailApiConfig.baseUrl;
 
   /// Searches trips on Bangladesh Railway via Shohoz API.
   /// Example date: "23-Sep-2026"

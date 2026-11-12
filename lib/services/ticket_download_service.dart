@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'rail_api_config.dart';
+
 class TicketDownloadService {
   static const _channel = MethodChannel('com.example.rail_automation/overlay');
 
@@ -14,7 +16,7 @@ class TicketDownloadService {
 
   /// Shohoz direct ticket download API URL
   static String directDownloadUrl(int orderId) =>
-      'https://railspaapi.shohoz.com/v1.0/web/trips/download-ticket/$orderId';
+      '${RailApiConfig.baseUrl}/trips/download-ticket/$orderId';
 
   /// Opens any URL in the external system browser (e.g. Chrome)
   static Future<bool> openInBrowser(String urlString) async {

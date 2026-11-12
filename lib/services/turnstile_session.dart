@@ -3,13 +3,16 @@ import 'dart:convert';
 
 import 'package:flutter/widgets.dart';
 
+import 'rail_api_config.dart';
+
 enum TurnstilePhase { idle, connecting, interactive, success, error }
 
 /// One rendered browser, kept by the UI engine while the foreground monitor
 /// runs. The service isolate requests tokens through ForegroundMonitor's bridge;
 /// it must never construct another browser or share a token between bookings.
 class TurnstileSession extends ChangeNotifier {
-  static const defaultSiteKey = '0x4AAAAAACNkZ_TxQr_zpcZW';
+  static const defaultSiteKey = RailApiConfig.turnstileInvisibleSiteKey;
+  static const interactiveSiteKey = RailApiConfig.turnstileInteractiveSiteKey;
   static final instance = TurnstileSession();
   final challengeLink = LayerLink();
   TurnstilePhase phase = TurnstilePhase.idle;

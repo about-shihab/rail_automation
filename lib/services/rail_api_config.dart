@@ -5,9 +5,20 @@
 /// file ever accepts credentials from the database: auth headers, tokens and
 /// passwords are always injected on the device.
 class RailApiConfig {
-  static const baseUrl = 'https://railspaapi.shohoz.com/v1.0/web';
+  static const appBaseUrl = 'https://railspaapi.shohoz.com/v1.0/app';
+  static const webBaseUrl = 'https://railspaapi.shohoz.com/v1.0/web';
+
+  /// Primary API URL (defaults to App API first)
+  static const baseUrl = appBaseUrl;
   static const allowedHost = 'railspaapi.shohoz.com';
   static const allowedOrigin = 'https://eticket.railway.gov.bd';
+
+  /// Official Cloudflare Turnstile & security keys extracted from the official Rail Sheba app
+  static const turnstileInvisibleSiteKey = '0x4AAAAAACNkZ_TxQr_zpcZW';
+  static const turnstileInteractiveSiteKey = '0x4AAAAAAB5VTjZ90pUxRuXR';
+  static const recaptchaSiteKey = '6LcufsUhAAAAADFOLSJnrKI0XP_8JKaIuEi7kCMI';
+  static const websocketUrl = 'https://train-websocket.shohoz.com/';
+
   static const paths = <String, String>{
     'sign_in': '/auth/sign-in',
     'search_trips': '/bookings/search-trips-v2',
@@ -20,6 +31,19 @@ class RailApiConfig {
     'passenger_details': '/bookings/passenger-details',
     'verify_otp': '/bookings/verify-otp',
     'resend_otp': '/bookings/resend-otp',
+    'release_seat': '/bookings/release-seat',
+    'bulk_release_seat': '/bookings/bulk-release-seat',
+    'confirm_payment': '/bookings/confirm-payment',
+    'confirm_booking': '/bookings/confirm',
+    'trips_upcoming': '/trips/upcoming-v2',
+    'trips_past': '/trips/past-v2',
+    'trips_details': '/trips-v2',
+    'verify_ticket': '/trips/verify-ticket',
+    'refund_calculation': '/bookings/refund-calculation',
+    'refund_request': '/bookings/refund-request',
+    'refund_request_otp': '/bookings/refund-request-otp',
+    'all_trains_info': '/all-trains/info',
+    'statistics_available': '/statistics/tickets-available',
   };
 
   /// HTTP verbs the database may select for an operation.
