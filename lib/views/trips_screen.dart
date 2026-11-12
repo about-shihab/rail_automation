@@ -352,6 +352,15 @@ class _TripsScreenState extends State<TripsScreen> {
                           ],
                         ),
                       ),
+                      IconButton(
+                        tooltip: lang.tr('Verify Ticket', 'টিকেট যাচাই'),
+                        icon: const Icon(
+                          Icons.verified_outlined,
+                          color: Colors.white,
+                          size: 22,
+                        ),
+                        onPressed: () => _openVerifyTicketSheet(context, isDark, lang),
+                      ),
                       if (_activeTab == _MainTab.purchased)
                         IconButton(
                           tooltip: lang.tr('Refresh tickets', 'টিকেট রিফ্রেশ করুন'),
@@ -724,6 +733,13 @@ class _TripsScreenState extends State<TripsScreen> {
             isDark: isDark,
             isDownloading: _downloadingOrderIds.contains(ticket.orderId),
             onDownload: () => _downloadTicket(ticket),
+            onVerify: () => _openVerifyTicketSheet(
+              context,
+              isDark,
+              lang,
+              initialPnr: ticket.pnr,
+            ),
+            onRefund: () => _openRefundSheet(context, ticket, isDark, lang),
           );
         },
       ),
@@ -983,6 +999,40 @@ class _TripsScreenState extends State<TripsScreen> {
       await history.clearHistory();
     }
   }
+
+  void _openVerifyTicketSheet(
+    BuildContext context,
+    bool isDark,
+    LanguageService lang, {
+    String? initialPnr,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _VerifyTicketSheet(
+        isDark: isDark,
+        initialPnr: initialPnr,
+      ),
+    );
+  }
+
+  void _openRefundSheet(
+    BuildContext context,
+    PurchasedTicket ticket,
+    bool isDark,
+    LanguageService lang,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _RefundCalculationSheet(
+        ticket: ticket,
+        isDark: isDark,
+      ),
+    );
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -994,12 +1044,16 @@ class _PurchasedTicketCard extends StatelessWidget {
   final bool isDark;
   final bool isDownloading;
   final VoidCallback onDownload;
+  final VoidCallback? onVerify;
+  final VoidCallback? onRefund;
 
   const _PurchasedTicketCard({
     required this.ticket,
     required this.isDark,
     required this.isDownloading,
     required this.onDownload,
+    this.onVerify,
+    this.onRefund,
   });
 
   @override
@@ -1208,7 +1262,11 @@ class _PurchasedTicketCard extends StatelessWidget {
                     ),
                   ),
                   onSelected: (val) {
-                    if (val == 'portal') {
+                    if (val == 'verify') {
+                      onVerify?.call();
+                    } else if (val == 'refund') {
+                      onRefund?.call();
+                    } else if (val == 'portal') {
                       TicketDownloadService.openInBrowser(
                         TicketDownloadService.purchaseHistoryUrl,
                       );
@@ -1231,6 +1289,32 @@ class _PurchasedTicketCard extends StatelessWidget {
                     }
                   },
                   itemBuilder: (context) => [
+                    PopupMenuItem(
+                      value: 'verify',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.verified_outlined, size: 18, color: AppColors.primary),
+                          const SizedBox(width: 8),
+                          Text(
+                            lang.tr('Verify Authenticity', 'টিকেট যাচাইকরণ'),
+                            style: const TextStyle(fontSize: 12.5),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'refund',
+                      child: Row(
+                        children: [
+                          const Icon(Icons.currency_exchange_rounded, size: 18, color: Color(0xFFD97706)),
+                          const SizedBox(width: 8),
+                          Text(
+                            lang.tr('Refund Calculation & Policy', 'রিফান্ড হিসাব ও পলিসি'),
+                            style: const TextStyle(fontSize: 12.5),
+                          ),
+                        ],
+                      ),
+                    ),
                     PopupMenuItem(
                       value: 'portal',
                       child: Row(
@@ -1601,6 +1685,515 @@ class _TripCard extends StatelessWidget {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ── Verify Ticket Sheet ─────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _VerifyTicketSheet extends StatefulWidget {
+  final bool isDark;
+  final String? initialPnr;
+
+  const _VerifyTicketSheet({
+    required this.isDark,
+    this.initialPnr,
+  });
+
+  @override
+  State<_VerifyTicketSheet> createState() => _VerifyTicketSheetState();
+}
+
+class _VerifyTicketSheetState extends State<_VerifyTicketSheet> {
+  late final TextEditingController _pnrCtrl;
+  late final TextEditingController _phoneCtrl;
+  bool _loading = false;
+  String? _error;
+  Map<String, dynamic>? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    _pnrCtrl = TextEditingController(text: widget.initialPnr ?? '');
+    _phoneCtrl = TextEditingController();
+    _prefillUserPhone();
+  }
+
+  Future<void> _prefillUserPhone() async {
+    final session = await AuthSession.load();
+    if (session?.phoneNumber?.isNotEmpty == true && mounted) {
+      _phoneCtrl.text = session!.phoneNumber!;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pnrCtrl.dispose();
+    _phoneCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _verify() async {
+    final pnr = _pnrCtrl.text.trim();
+    final phone = _phoneCtrl.text.trim();
+    if (pnr.isEmpty || phone.isEmpty) {
+      setState(() => _error = 'Please enter both PNR and Phone number');
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      _result = null;
+    });
+
+    try {
+      final res = await ApiService.verifyTicket(pnr: pnr, phoneNumber: phone);
+      if (mounted) {
+        setState(() {
+          _result = res;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString().replaceFirst('Exception: ', '');
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>();
+    final isDark = widget.isDark;
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 12, 20, 20 + bottomInset),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.verified_outlined,
+                    color: AppColors.primary,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        lang.tr('Verify Railway Ticket', 'রেলওয়ে টিকিট যাচাইকরণ'),
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary(isDark),
+                        ),
+                      ),
+                      Text(
+                        lang.tr(
+                          'Official Bangladesh Railway authenticity check',
+                          'অফিসিয়াল বাংলাদেশ রেলওয়ে ডাটাবেজ থেকে যাচাই',
+                        ),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: _pnrCtrl,
+              textCapitalization: TextCapitalization.characters,
+              decoration: InputDecoration(
+                labelText: lang.tr('PNR Number', 'পিএনআর (PNR) নম্বর'),
+                hintText: 'e.g. 7823901452',
+                prefixIcon: const Icon(Icons.confirmation_number_outlined),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phoneCtrl,
+              keyboardType: TextInputType.phone,
+              decoration: InputDecoration(
+                labelText: lang.tr('Passenger Phone Number', 'যাত্রীর মোবাইল নম্বর'),
+                hintText: 'e.g. 01700000000',
+                prefixIcon: const Icon(Icons.phone_outlined),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_error != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.error, fontSize: 13),
+                ),
+              ),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: _loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.check_circle_outline_rounded, size: 20),
+              label: Text(
+                _loading
+                    ? lang.tr('Verifying...', 'যাচাই করা হচ্ছে...')
+                    : lang.tr('Verify Ticket', 'টিকেট যাচাই করুন'),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              ),
+              onPressed: _loading ? null : _verify,
+            ),
+            if (_result != null) ...[
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF009B78).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF009B78).withValues(alpha: 0.3)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.verified_rounded, color: Color(0xFF009B78), size: 20),
+                        const SizedBox(width: 8),
+                        Text(
+                          lang.tr('Verified Authentic Ticket', 'যাচাইকৃত আসল টিকিট'),
+                          style: const TextStyle(
+                            color: Color(0xFF009B78),
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 20),
+                    if (_result!['train_name'] != null || _result!['trip_number'] != null)
+                      _verifyRow('Train', '${_result!['train_name'] ?? _result!['trip_number']}'),
+                    if (_result!['journey_date'] != null)
+                      _verifyRow('Journey Date', '${_result!['journey_date']}'),
+                    if (_result!['seats'] != null)
+                      _verifyRow('Seats', '${_result!['seats']}'),
+                    if (_result!['fare'] != null || _result!['total_fare'] != null)
+                      _verifyRow('Fare', '৳${_result!['total_fare'] ?? _result!['fare']}'),
+                    if (_result!['passenger_name'] != null)
+                      _verifyRow('Passenger', '${_result!['passenger_name']}'),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _verifyRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.grey, fontSize: 13)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ── Refund Calculation Sheet ────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+
+class _RefundCalculationSheet extends StatefulWidget {
+  final PurchasedTicket ticket;
+  final bool isDark;
+
+  const _RefundCalculationSheet({
+    required this.ticket,
+    required this.isDark,
+  });
+
+  @override
+  State<_RefundCalculationSheet> createState() => _RefundCalculationSheetState();
+}
+
+class _RefundCalculationSheetState extends State<_RefundCalculationSheet> {
+  bool _loading = true;
+  String? _error;
+  Map<String, dynamic>? _refundData;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRefund();
+  }
+
+  Future<void> _fetchRefund() async {
+    try {
+      final res = await ApiService.calculateRefund(
+        orderId: widget.ticket.orderId,
+        pnr: widget.ticket.pnr,
+      );
+      if (mounted) {
+        setState(() {
+          _refundData = res;
+          _loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString().replaceFirst('Exception: ', '');
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lang = context.watch<LanguageService>();
+    final isDark = widget.isDark;
+    final ticket = widget.ticket;
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+      decoration: BoxDecoration(
+        color: AppColors.cardBg(isDark),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD97706).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.currency_exchange_rounded,
+                    color: Color(0xFFD97706),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        lang.tr('Refund Calculation & Policy', 'রিফান্ড হিসাব ও পলিসি'),
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary(isDark),
+                        ),
+                      ),
+                      Text(
+                        '${ticket.trainName} • PNR: ${ticket.pnr}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary(isDark),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            if (_loading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(28),
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            else if (_error != null)
+              Container(
+                padding: const EdgeInsets.all(14),
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: AppColors.error.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.error.withValues(alpha: 0.3)),
+                ),
+                child: Text(
+                  _error!,
+                  style: const TextStyle(color: AppColors.error, fontSize: 13),
+                ),
+              )
+            else if (_refundData != null) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                  ),
+                ),
+                child: Column(
+                  children: [
+                    _refundRow('Ticket Fare', '৳${_refundData!['ticket_fare'] ?? _refundData!['total_amount'] ?? '---'}'),
+                    _refundRow('Deduction / Service Charge', '৳${_refundData!['deducted_amount'] ?? _refundData!['cancellation_charge'] ?? '---'}', isDeduction: true),
+                    const Divider(height: 20),
+                    _refundRow('Net Refund Amount', '৳${_refundData!['refund_amount'] ?? _refundData!['net_refund'] ?? '---'}', isHighlight: true),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+            // Official Railway Refund Schedule
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    lang.tr('Official Railway Refund Rules:', 'অফিসিয়াল রেলওয়ে রিফান্ড নিয়মাবলী:'),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                  const SizedBox(height: 6),
+                  _ruleRow('> 48 Hours before departure', '10% deduction'),
+                  _ruleRow('24 - 48 Hours before departure', '25% deduction'),
+                  _ruleRow('12 - 24 Hours before departure', '50% deduction'),
+                  _ruleRow('< 6 Hours before departure', 'Non-refundable (0%)'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: const Icon(Icons.open_in_browser_rounded, size: 18),
+              label: Text(
+                lang.tr('Open Railway Portal for Refund', 'রিফান্ডের জন্য রেলওয়ে পোর্টাল খুলুন'),
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              onPressed: () => TicketDownloadService.openInBrowser(
+                TicketDownloadService.purchaseHistoryUrl,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _refundRow(String label, String value, {bool isDeduction = false, bool isHighlight = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              fontSize: isHighlight ? 16 : 14,
+              color: isHighlight
+                  ? const Color(0xFF009B78)
+                  : (isDeduction ? AppColors.error : null),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ruleRow(String time, String charge) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('• $time', style: const TextStyle(fontSize: 11.5, color: Colors.grey)),
+          Text(charge, style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600)),
         ],
       ),
     );

@@ -174,7 +174,37 @@ class BookingService {
     return SecureStore.write(storageKey, jsonEncode(value));
   }
 
-  static Future<void> clear() async {
+  /// Releases any currently held seats via official Railway release API
+  static Future<bool> releaseHeldSeats({
+    Map<String, dynamic>? reservation,
+    AuthSession? authSession,
+  }) async {
+    try {
+      final res = reservation ?? await pending();
+      if (res == null) return false;
+      final ticketIds = (res['confirmedTicketIds'] as List<dynamic>?)
+          ?.map((e) => int.tryParse(e.toString()) ?? 0)
+          .where((id) => id > 0)
+          .toList();
+      if (ticketIds != null && ticketIds.isNotEmpty) {
+        final session = authSession ?? (await AuthSession.load());
+        if (session != null) {
+          return await ApiService.bulkReleaseSeats(
+            ticketIds: ticketIds,
+            authSession: session,
+          );
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  static Future<void> clear({bool releaseRemote = false}) async {
+    if (releaseRemote) {
+      try {
+        await releaseHeldSeats();
+      } catch (_) {}
+    }
     await SecureStore.delete(storageKey);
     try {
       await NotificationService().clearAlerts();

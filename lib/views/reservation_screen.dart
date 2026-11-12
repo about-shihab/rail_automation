@@ -293,18 +293,22 @@ class _ReservationScreenState extends State<ReservationScreen> {
   }
 
   Future<void> _clearBooking() async {
+    final lang = Provider.of<LanguageService>(context, listen: false);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-        title: const Text('Clear Booking Record?'),
-        content: const Text(
-          'First check payment or release held seats on the official site. Clearing does not cancel a Railway reservation.',
+        title: Text(lang.tr('Release Seat & Clear Record?', 'সিট মুক্ত ও রেকর্ড মুছবেন?')),
+        content: Text(
+          lang.tr(
+            'Held seats will be immediately released back to Railway public availability.',
+            'সংরক্ষিত সিটগুলো অবিলম্বে রেলওয়ের জনসাধারণের জন্য মুক্ত করে দেওয়া হবে।',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Keep'),
+            child: Text(lang.tr('Keep', 'রাখুন')),
           ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
@@ -312,15 +316,20 @@ class _ReservationScreenState extends State<ReservationScreen> {
               foregroundColor: Colors.white,
             ),
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Clear'),
+            child: Text(lang.tr('Release & Clear', 'মুক্ত ও সাফ করুন')),
           ),
         ],
       ),
     );
     if (confirmed == true) {
-      await BookingService.clear();
-      await NotificationService().clearAlerts();
-      await _load();
+      setState(() => _busy = true);
+      try {
+        await BookingService.clear(releaseRemote: true);
+        await NotificationService().clearAlerts();
+        await _load();
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
     }
   }
 

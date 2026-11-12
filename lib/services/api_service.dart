@@ -1229,4 +1229,166 @@ class ApiService {
       }
     });
   }
+
+  /// Verifies a ticket using PNR and passenger phone number.
+  static Future<Map<String, dynamic>> verifyTicket({
+    required String pnr,
+    required String phoneNumber,
+    AuthSession? authSession,
+  }) async {
+    final session = authSession ??
+        (await AuthSession.load()) ??
+        AuthSession(token: '', deviceKey: '');
+    final response = await RailApiClient.request(
+      operation: 'verify_ticket',
+      method: 'POST',
+      payload: {
+        'pnr_number': pnr.trim(),
+        'phone_number': phoneNumber.trim(),
+      },
+      auth: session,
+    );
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      if (json['data'] is Map<String, dynamic>) {
+        return json['data'] as Map<String, dynamic>;
+      }
+      return json;
+    } else {
+      String message = 'Verification failed (${response.statusCode})';
+      try {
+        final err = jsonDecode(response.body);
+        if (err['message'] != null) message = err['message'].toString();
+      } catch (_) {}
+      throw Exception(message);
+    }
+  }
+
+  /// Calculates refund details for a purchased ticket.
+  static Future<Map<String, dynamic>> calculateRefund({
+    required int orderId,
+    required String pnr,
+    AuthSession? authSession,
+  }) async {
+    final session = authSession ??
+        (await AuthSession.load()) ??
+        AuthSession(token: '', deviceKey: '');
+    final response = await RailApiClient.request(
+      operation: 'refund_calculation',
+      method: 'POST',
+      payload: {
+        'order_id': orderId,
+        'pnr': pnr.trim(),
+      },
+      auth: session,
+    );
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      if (json['data'] is Map<String, dynamic>) {
+        return json['data'] as Map<String, dynamic>;
+      }
+      return json;
+    } else {
+      String message = 'Refund calculation failed (${response.statusCode})';
+      try {
+        final err = jsonDecode(response.body);
+        if (err['message'] != null) message = err['message'].toString();
+      } catch (_) {}
+      throw Exception(message);
+    }
+  }
+
+  /// Releases a reserved seat hold on Bangladesh Railway servers.
+  static Future<bool> releaseSeat({
+    required int ticketId,
+    int? routeId,
+    AuthSession? authSession,
+  }) async {
+    try {
+      final session = authSession ?? (await AuthSession.load());
+      if (session == null || !session.isValid) return false;
+      final payload = <String, dynamic>{'ticket_id': ticketId};
+      if (routeId != null) payload['route_id'] = routeId;
+      final response = await RailApiClient.request(
+        operation: 'release_seat',
+        method: 'POST',
+        payload: payload,
+        auth: session,
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true || data['ack'] == 1;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Releases multiple held seats in bulk.
+  static Future<bool> bulkReleaseSeats({
+    required List<int> ticketIds,
+    AuthSession? authSession,
+  }) async {
+    if (ticketIds.isEmpty) return true;
+    try {
+      final session = authSession ?? (await AuthSession.load());
+      if (session == null || !session.isValid) return false;
+      final response = await RailApiClient.request(
+        operation: 'bulk_release_seat',
+        method: 'POST',
+        payload: {'ticket_ids': ticketIds},
+        auth: session,
+      );
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['success'] == true || data['ack'] == 1;
+      }
+    } catch (_) {}
+    var any = false;
+    for (final id in ticketIds) {
+      final ok = await releaseSeat(ticketId: id, authSession: authSession);
+      if (ok) any = true;
+    }
+    return any;
+  }
+
+  /// Fetches upcoming trips directly from Railway upcoming API.
+  static Future<List<Map<String, dynamic>>> getUpcomingTrips({
+    AuthSession? authSession,
+  }) async {
+    final session = authSession ?? (await AuthSession.load());
+    if (session == null || !session.isValid) return [];
+    final response = await RailApiClient.request(
+      operation: 'trips_upcoming',
+      method: 'GET',
+      payload: <String, dynamic>{},
+      auth: session,
+    );
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = json['data'] as List<dynamic>? ?? [];
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
+
+  /// Fetches official all trains catalog.
+  static Future<List<Map<String, dynamic>>> getAllTrainsInfo({
+    AuthSession? authSession,
+  }) async {
+    final session = authSession ??
+        (await AuthSession.load()) ??
+        AuthSession(token: '', deviceKey: '');
+    final response = await RailApiClient.request(
+      operation: 'all_trains_info',
+      method: 'GET',
+      payload: <String, dynamic>{},
+      auth: session,
+    );
+    if (response.statusCode == 200) {
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      final data = json['data'] as List<dynamic>? ?? [];
+      return data.cast<Map<String, dynamic>>();
+    }
+    return [];
+  }
 }
