@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../services/app_config.dart';
 
@@ -595,6 +596,29 @@ class _ReservationScreenState extends State<ReservationScreen> {
                     ),
                   ),
                   if (ready) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        side: BorderSide(color: AppColors.primary),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.open_in_browser_rounded, size: 18),
+                      label: Text(
+                        lang.tr(
+                          'Open in Native Browser',
+                          'নেটিভ ব্রাউজারে খুলুন',
+                        ),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: () async {
+                        final uri = Uri.parse(BookingService.tripInfoUrl);
+                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      },
+                    ),
                     const SizedBox(height: 10),
                     OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(

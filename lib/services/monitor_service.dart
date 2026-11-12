@@ -260,10 +260,8 @@ class MonitorService extends ChangeNotifier {
       final verification = prefs.getString(_verificationKey);
       _turnstileRequestedForBooking = verification != null;
       _turnstileWaitingForUi = verification == 'pending';
-      _bookingNeedsVerification =
-          verification == 'pending' || verification == 'presented';
-      _lastBookingError =
-          verification == 'pending' || verification == 'presented'
+      _bookingNeedsVerification = verification == 'pending';
+      _lastBookingError = verification == 'pending'
           ? const SeatLayoutChallenge().toString()
           : null;
       final status = prefs.getString('ticket_status_$_searchId');

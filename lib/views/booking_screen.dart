@@ -12,6 +12,7 @@ import '../services/web_session_service.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/auth_session.dart';
@@ -128,6 +129,8 @@ class _BookingScreenState extends State<BookingScreen> {
 
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
+        ..setUserAgent(
+            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36')
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (url) {
@@ -459,6 +462,16 @@ class _BookingScreenState extends State<BookingScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.open_in_browser_rounded, color: Colors.white),
+            tooltip: 'Open in native browser',
+            onPressed: () async {
+              final uri = Uri.tryParse(widget.url);
+              if (uri != null) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh_rounded, color: Colors.white),
             onPressed: () {
