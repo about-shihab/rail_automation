@@ -284,20 +284,20 @@ class TurnstileSession extends ChangeNotifier {
       // already correct; only the `else` path needs changing.
       .replaceFirst(
         '    } else {\n'
-        '      if (used) turnstile.reset(widget);\n'
-        '      used = true;\n'
-        '      active = id;\n'
-        '      turnstile.execute(widget);\n'
-        '    }',
+            '      if (used) turnstile.reset(widget);\n'
+            '      used = true;\n'
+            '      active = id;\n'
+            '      turnstile.execute(widget);\n'
+            '    }',
         '    } else {\n'
-        '      // iOS: always re-render for a fresh token instead of reset.\n'
-        '      try { turnstile.remove(widget); } catch (e) {}\n'
-        '      widget = null;\n'
-        '      used = false;\n'
-        '      active = id;\n'
-        '      render(target);\n'
-        '      used = true;\n'
-        '      turnstile.execute(widget);\n'
-        '    }',
+            '      // iOS: always re-render for a fresh token instead of reset.\n'
+            '      try { turnstile.remove(widget); } catch (e) {}\n'
+            '      widget = null;\n'
+            '      used = false;\n'
+            '      active = id;\n'
+            '      render(target);\n'
+            '      used = true;\n'
+            '      turnstile.execute(widget);\n'
+            '    }',
       );
 }

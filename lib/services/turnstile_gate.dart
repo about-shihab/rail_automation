@@ -233,12 +233,9 @@ class TurnstileGate {
   String get seatLayoutSiteKey => _keyFor('', null);
 
   String _keyFor(String label, String? explicitKey) {
-    final purpose = label == 'Railway login' ? 'sign_in' : 'seat_layout';
     return explicitKey ??
-        AppConfig.instance.siteKey(purpose) ??
-        (purpose == 'sign_in'
-            ? RailApiConfig.turnstileInteractiveSiteKey
-            : TurnstileSession.defaultSiteKey);
+        AppConfig.instance.siteKey(label == 'Railway login' ? 'sign_in' : 'seat_layout') ??
+        RailApiConfig.turnstileInvisibleSiteKey;
   }
 
   // ── Acquire ──────────────────────────────────────────────────────────────

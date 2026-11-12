@@ -1,4 +1,5 @@
 import 'rail_api_client.dart';
+import 'rail_api_config.dart';
 import 'railway_credentials_rejected.dart';
 
 import 'dart:async';
@@ -661,6 +662,7 @@ class MonitorService extends ChangeNotifier {
       final verification = TurnstileGate.instance.acquire(
         label: label ?? _turnstileLabel(),
         forceFresh: true,
+        siteKey: RailApiConfig.turnstileInvisibleSiteKey,
       );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_verificationKey, 'presented');

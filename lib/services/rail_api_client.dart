@@ -172,11 +172,11 @@ class RailApiClient {
             'Save your Railway credentials in Login to enable session recovery.',
           );
         }
-        // Acquire fresh Cloudflare token for the sign-in endpoint.
+        // Acquire fresh Cloudflare token for the sign-in endpoint using the invisible key.
         final cft = await TurnstileGate.instance.acquire(
           label: 'Railway login',
           forceFresh: true,
-          siteKey: RailApiConfig.turnstileInteractiveSiteKey,
+          siteKey: RailApiConfig.turnstileInvisibleSiteKey,
         );
         if (cft == null || cft.isEmpty) {
           throw const LoginRecoveryRequired(
