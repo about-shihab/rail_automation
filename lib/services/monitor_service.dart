@@ -672,7 +672,13 @@ class MonitorService extends ChangeNotifier {
         await TurnstileGate.instance.invalidate();
         return;
       }
-      if (token != null && token.isNotEmpty) await onTurnstileSolved(token);
+      if (token != null && token.isNotEmpty) {
+        await onTurnstileSolved(token);
+      } else {
+        _bookingNeedsVerification = false;
+        await prefs.remove(_verificationKey);
+        notifyListeners();
+      }
     } finally {
       _resolvingTurnstile = false;
     }

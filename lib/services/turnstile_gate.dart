@@ -342,12 +342,12 @@ class TurnstileGate {
       ]);
       if (!result.interactive) {
         final token = result.token;
-        // iOS last resort: the silent solve failed or timed out, so show the
-        // visible verification card and let it run (and retry) in front of
-        // the user. Android keeps its existing behaviour.
+        // If silent solve failed or timed out, show the visible verification
+        // card and let it run (and retry) in front of the user so it never gets stuck.
         if ((token == null || token.isEmpty) &&
             session.phase == TurnstilePhase.error &&
-            _exposesBrowserOnIos(label, allowPrompt)) {
+            allowPrompt &&
+            canShowUi) {
           return await _showInteraction(label, null);
         }
         return token;

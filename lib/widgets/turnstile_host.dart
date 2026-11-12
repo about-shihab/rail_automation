@@ -59,6 +59,8 @@ class _TurnstileHostState extends State<TurnstileHost>
       transparentBackground: true,
       useShouldOverrideUrlLoading: true,
       javaScriptBridgeForMainFrameOnly: true,
+      domStorageEnabled: true,
+      databaseEnabled: true,
     ),
     onWebViewCreated: (controller) {
       _controller = controller;
