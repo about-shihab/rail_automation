@@ -25,18 +25,39 @@ class LoginFlow {
   /// (or the session after a successful manual login).
   static Future<AuthSession?> ensureSession() async {
     final session = await AuthSession.load();
-    if (session == null || !session.isLoggedIn || session.isValid) {
+    if (session != null && session.isLoggedIn && session.isValid) {
       return session;
     }
-    try {
-      return await RailApiClient.refresh(session);
-    } catch (e) {
-      if (!needsLogin(e)) return null;
-      final ok = await openManualLogin(
-        credentialsRejected: RailwayCredentialsRejected.isError(e),
-      );
-      return ok ? await AuthSession.load() : null;
+
+    // Try automatic API login using saved credentials with invisible Turnstile key!
+    if (await AuthSession.hasSavedCredentials()) {
+      try {
+        return await RailApiClient.loginWithSavedCredentials(
+          existingSession: session,
+        );
+      } catch (e) {
+        if (!needsLogin(e)) return null;
+        if (RailwayCredentialsRejected.isError(e)) {
+          final ok = await openManualLogin(credentialsRejected: true);
+          return ok ? await AuthSession.load() : null;
+        }
+      }
     }
+
+    if (session != null) {
+      try {
+        return await RailApiClient.refresh(session);
+      } catch (e) {
+        if (!needsLogin(e)) return null;
+        final ok = await openManualLogin(
+          credentialsRejected: RailwayCredentialsRejected.isError(e),
+        );
+        return ok ? await AuthSession.load() : null;
+      }
+    }
+
+    final ok = await openManualLogin();
+    return ok ? await AuthSession.load() : null;
   }
 
   /// For a "login required" prompt (e.g. notification tap): the token may
@@ -44,6 +65,19 @@ class LoginFlow {
   /// login first and fall back to the visible login.
   static Future<void> recoverNow() async {
     final session = await AuthSession.load();
+    if (await AuthSession.hasSavedCredentials()) {
+      try {
+        await RailApiClient.loginWithSavedCredentials(
+          existingSession: session,
+        );
+        return;
+      } catch (e) {
+        if (RailwayCredentialsRejected.isError(e)) {
+          await openManualLogin(credentialsRejected: true);
+          return;
+        }
+      }
+    }
     if (session == null) {
       await openManualLogin();
       return;

@@ -137,117 +137,41 @@ class RailApiClient {
             'Open Rail Pro to renew your Railway session.',
           );
         }
-        if (SessionRecovery.instance.canRunWebView) {
-          return await SessionRecovery.instance.recover(
-            previous: auth,
-            rejectedToken: rejectedToken ?? auth.token,
-          );
-        }
 
-        final last = int.tryParse(
-          await SecureStore.read('rail_login_attempt_at') ?? '',
-        );
-        if (last != null &&
-            DateTime.now().millisecondsSinceEpoch - last <
-                AppConfig.instance.number('login_retry_interval_seconds') *
-                    1000) {
-          final seconds =
-              ((AppConfig.instance.number('login_retry_interval_seconds') *
-                              1000 -
-                          (DateTime.now().millisecondsSinceEpoch - last)) /
-                      1000)
-                  .ceil();
-          throw LoginRecoveryRequired(
-            'Automatic login can retry in $seconds seconds. Tap Log in to continue now.',
-          );
-        }
+        // 1. Try direct API login with saved credentials first using invisible Turnstile key!
         final credentials = await AuthSession.getSavedUserCredentials();
         final phone = credentials['phone'] ?? '';
         final password = credentials['password'] ?? '';
-        if (phone.isEmpty ||
-            password.isEmpty ||
-            (auth.phoneNumber?.isNotEmpty == true &&
-                phone != auth.phoneNumber)) {
-          throw const LoginRecoveryRequired(
-            'Save your Railway credentials in Login to enable session recovery.',
-          );
+        if (phone.isNotEmpty && password.isNotEmpty) {
+          try {
+            return await loginWithCredentials(
+              phone: phone,
+              password: password,
+              existingSession: auth,
+            );
+          } catch (e) {
+            if (RailwayCredentialsRejected.isError(e)) {
+              rethrow;
+            }
+            // Silent API login failed (e.g. rate limit or interactive captcha needed);
+            // fallback to WebView recovery below.
+          }
         }
-        // Acquire fresh Cloudflare token for the sign-in endpoint using the invisible key.
-        final cft = await TurnstileGate.instance.acquire(
-          label: 'Railway login',
-          forceFresh: true,
-          siteKey: RailApiConfig.turnstileInvisibleSiteKey,
+
+        // 2. Fall back to background WebView recovery if available
+        if (SessionRecovery.instance.canRunWebView) {
+          try {
+            return await SessionRecovery.instance.recover(
+              previous: auth,
+              rejectedToken: rejectedToken ?? auth.token,
+            );
+          } catch (_) {}
+        }
+
+        throw const LoginRecoveryRequired(
+          'Please sign in again to continue.',
         );
-        if (cft == null || cft.isEmpty) {
-          throw const LoginRecoveryRequired(
-            'Tap Log in to verify Railway login.',
-          );
-        }
-        await TurnstileGate.instance.invalidate();
-        // A cancelled or unavailable human check is not a login API attempt.
-        await SecureStore.write(
-          'rail_login_attempt_at',
-          '${DateTime.now().millisecondsSinceEpoch}',
-        );
-        final response = await _send(
-          'sign_in',
-          'POST',
-          {'mobile_number': phone, 'password': password, 'cft_response': cft},
-          auth,
-          {},
-          authenticated: false,
-        );
-        if (RailwayCredentialsRejected.isResponse(response.body)) {
-          throw const RailwayCredentialsRejected();
-        }
-        if (response.statusCode != 200) {
-          throw const LoginRecoveryRequired(
-            'Railway login recovery failed. Please sign in again.',
-          );
-        }
-        final decoded = jsonDecode(response.body);
-        final data = decoded is Map ? decoded['data'] : null;
-        final token = data is Map
-            ? (data['token'] ?? data['access_token'])
-            : null;
-        if (token is! String ||
-            token.isEmpty ||
-            (data is Map && data['success'] == false)) {
-          throw const LoginRecoveryRequired(
-            'Railway login did not return a valid token. Tap Log in to continue.',
-          );
-        }
-        final user = (data is Map && data['user'] is Map)
-            ? Map<String, dynamic>.from(data['user'] as Map)
-            : null;
-        if (user != null && user.isNotEmpty) {
-          await SecureStore.write('rail_user', jsonEncode(user));
-        }
-        final updated = AuthSession(
-          token: token,
-          deviceId: auth.deviceId,
-          deviceKey: auth.deviceKey,
-          phoneNumber: phone,
-          displayName:
-              user?['display_name']?.toString() ??
-              user?['name']?.toString() ??
-              auth.displayName,
-          email: user?['email']?.toString() ?? auth.email,
-          cookie: auth.cookie,
-          isPro: auth.isPro,
-        );
-        if (!updated.isValid) {
-          throw const LoginRecoveryRequired(
-            'Railway returned an expired token. Tap Log in to continue.',
-          );
-        }
-        await AuthSession.save(updated);
-        await SecureStore.delete('rail_action_token');
-        await NotificationService().clearLoginAlert();
-        return updated;
       } catch (_) {
-        // In the foreground the app opens the login screen itself; the
-        // notification is only for the background search service.
         if (!SessionRecovery.instance.canRunWebView) {
           await NotificationService().showLoginRequired();
         }
@@ -256,6 +180,121 @@ class RailApiClient {
         _refreshes.remove(key);
       }
     });
+  }
+
+  /// Direct official API sign-in using phone number, password, and invisible Turnstile key.
+  static Future<AuthSession> loginWithCredentials({
+    required String phone,
+    required String password,
+    AuthSession? existingSession,
+  }) async {
+    final cleanPhone = phone.trim();
+    final cleanPassword = password.trim();
+    if (cleanPhone.isEmpty || cleanPassword.isEmpty) {
+      throw const LoginRecoveryRequired('Enter both mobile number and password.');
+    }
+
+    final session = existingSession ??
+        (await AuthSession.load()) ??
+        AuthSession(token: '', deviceKey: AuthSession.generateUuid());
+
+    // Acquire fresh Cloudflare token for the sign-in endpoint using official invisible key
+    final cft = await TurnstileGate.instance.acquire(
+      label: 'Railway login',
+      forceFresh: true,
+      siteKey: RailApiConfig.turnstileInvisibleSiteKey,
+    );
+    if (cft == null || cft.isEmpty) {
+      throw const LoginRecoveryRequired('Could not obtain security verification token.');
+    }
+    await TurnstileGate.instance.invalidate();
+
+    await SecureStore.write(
+      'rail_login_attempt_at',
+      '${DateTime.now().millisecondsSinceEpoch}',
+    );
+
+    final response = await _send(
+      'sign_in',
+      'POST',
+      {
+        'mobile_number': cleanPhone,
+        'password': cleanPassword,
+        'cft_response': cft,
+      },
+      session,
+      {},
+      authenticated: false,
+    );
+
+    if (RailwayCredentialsRejected.isResponse(response.body)) {
+      await AuthSession.clearSavedPassword();
+      throw const RailwayCredentialsRejected();
+    }
+    if (response.statusCode != 200) {
+      String message = 'Railway login failed (${response.statusCode})';
+      try {
+        final err = jsonDecode(response.body);
+        if (err['message'] != null) message = err['message'].toString();
+      } catch (_) {}
+      throw LoginRecoveryRequired(message);
+    }
+
+    final decoded = jsonDecode(response.body);
+    final data = decoded is Map ? decoded['data'] : null;
+    final token = data is Map ? (data['token'] ?? data['access_token']) : null;
+    if (token is! String || token.isEmpty || (data is Map && data['success'] == false)) {
+      throw const LoginRecoveryRequired(
+        'Railway login did not return a valid token.',
+      );
+    }
+
+    final user = (data is Map && data['user'] is Map)
+        ? Map<String, dynamic>.from(data['user'] as Map)
+        : null;
+    if (user != null && user.isNotEmpty) {
+      await SecureStore.write('rail_user', jsonEncode(user));
+    }
+
+    final updated = AuthSession(
+      token: token,
+      deviceId: session.deviceId,
+      deviceKey: session.deviceKey,
+      phoneNumber: cleanPhone,
+      displayName: user?['display_name']?.toString() ??
+          user?['name']?.toString() ??
+          session.displayName,
+      email: user?['email']?.toString() ?? session.email,
+      cookie: session.cookie,
+      isPro: session.isPro,
+    );
+
+    if (!updated.isValid) {
+      throw const LoginRecoveryRequired('Railway returned an invalid token.');
+    }
+
+    await AuthSession.save(updated);
+    await AuthSession.saveUserCredentials(cleanPhone, cleanPassword);
+    await SecureStore.delete('rail_action_token');
+    await NotificationService().clearLoginAlert();
+    return updated;
+  }
+
+  /// Convenience wrapper that uses saved credentials in SecureStore.
+  static Future<AuthSession> loginWithSavedCredentials({
+    AuthSession? existingSession,
+  }) async {
+    final creds = await AuthSession.getSavedUserCredentials();
+    final phone = creds['phone'] ?? '';
+    final password = creds['password'] ?? '';
+    if (phone.isEmpty || password.isEmpty) {
+      throw const LoginRecoveryRequired('No saved credentials available.');
+    }
+    return await loginWithCredentials(
+      phone: phone,
+      password: password,
+      existingSession: existingSession,
+    );
   }
 
   static Future<http.Response> _send(

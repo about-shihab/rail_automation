@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import '../models/auth_session.dart';
+import '../services/rail_api_client.dart';
 import '../services/web_login_support.dart';
 import '../services/web_session_service.dart';
 import '../services/secure_store.dart';
@@ -77,6 +78,33 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   Future<void> _prepareWebView() async {
     try {
       await _loadSavedCredentials();
+      // If we have saved credentials and no explicit error notice, try instant
+      // API sign-in with invisible Turnstile key before loading heavy WebView!
+      if (_savedPhone.isNotEmpty &&
+          _savedPassword.isNotEmpty &&
+          widget.notice == null) {
+        setState(() => _isLoading = true);
+        try {
+          final session = await RailApiClient.loginWithCredentials(
+            phone: _savedPhone,
+            password: _savedPassword,
+          );
+          if (session.isValid && mounted) {
+            if (widget.popOnSuccess) {
+              Navigator.pop(context, true);
+            } else {
+              _navigateToSearch();
+            }
+            return;
+          }
+        } catch (e) {
+          if (RailwayCredentialsRejected.isError(e)) {
+            await AuthSession.clearSavedPassword();
+          }
+          // Silent API login could not proceed; fallback to WebView loading below
+        }
+      }
+
       if (widget.clearSession) {
         await AuthSession.clear();
         await SecureStore.delete('rail_action_token');
