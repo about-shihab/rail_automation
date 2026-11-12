@@ -15,6 +15,8 @@ import '../models/seat_type.dart';
 import '../models/train_trip.dart';
 import '../services/intermediate_station_search.dart';
 import '../services/login_flow.dart';
+import '../services/notification_service.dart';
+import '../services/otp_verifier.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
 import '../utils/railway_stations.dart';
@@ -393,6 +395,7 @@ class _MonitorDashboardScreenState extends State<MonitorDashboardScreen>
         anim: _anim,
         onPayNow: _handlePayNow,
         onClear: _confirmClearReservation,
+        onVerified: _refresh,
         onTimeout: () async {
           await BookingService.clear();
           await _refresh();
@@ -1594,13 +1597,14 @@ class _NextStepsCard extends StatelessWidget {
 // ═══════════════════════════════════════════════════════════════════════════════
 // 2) Seat reserved – OTP / Pay
 // ═══════════════════════════════════════════════════════════════════════════════
-class _ReservationCard extends StatelessWidget {
+class _ReservationCard extends StatefulWidget {
   final Map<String, dynamic> reservation;
   final bool isDark;
   final Animation<double> anim;
   final VoidCallback onPayNow;
   final VoidCallback onClear;
   final VoidCallback onTimeout;
+  final VoidCallback? onVerified;
 
   const _ReservationCard({
     required this.reservation,
@@ -1609,11 +1613,102 @@ class _ReservationCard extends StatelessWidget {
     required this.onPayNow,
     required this.onClear,
     required this.onTimeout,
+    this.onVerified,
   });
+
+  @override
+  State<_ReservationCard> createState() => _ReservationCardState();
+}
+
+class _ReservationCardState extends State<_ReservationCard> {
+  final _otpCtrl = TextEditingController();
+  bool _busy = false;
+  String? _error;
+  int _resendCooldown = 0;
+  Timer? _resendTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _startForegroundSmsListener();
+  }
+
+  void _startForegroundSmsListener() {
+    OtpVerifier.listen();
+    OtpVerifier.onOtpReceivedInForeground = (otp) {
+      if (mounted) {
+        _otpCtrl.text = otp;
+        _verifyOtp();
+      }
+    };
+  }
+
+  @override
+  void dispose() {
+    if (OtpVerifier.onOtpReceivedInForeground != null) {
+      OtpVerifier.onOtpReceivedInForeground = null;
+    }
+    _otpCtrl.dispose();
+    _resendTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _verifyOtp({bool resend = false}) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final auth = await AuthSession.load();
+      if (auth == null) throw StateError('Please log in again.');
+      if (resend) {
+        await BookingService.resendOtp(auth);
+        await OtpVerifier.listen(force: true);
+        setState(() => _resendCooldown = 60);
+        _resendTimer?.cancel();
+        _resendTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+          if (!mounted) {
+            t.cancel();
+            return;
+          }
+          if (_resendCooldown <= 1) {
+            t.cancel();
+            setState(() => _resendCooldown = 0);
+          } else {
+            setState(() => _resendCooldown--);
+          }
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('OTP resent successfully'),
+              backgroundColor: AppColors.primary,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } else {
+        final code = _otpCtrl.text.trim();
+        if (code.isEmpty) {
+          throw StateError('Please enter the OTP received via SMS.');
+        }
+        final updatedState = await BookingService.verifyOtp(code, auth);
+        await NotificationService().showReservation(updatedState);
+        widget.onVerified?.call();
+      }
+    } catch (e) {
+      if (mounted) setState(() => _error = friendlyErrorMessage(e));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final lang = LanguageService.of(context);
+    final isDark = widget.isDark;
+    final reservation = widget.reservation;
     final status = reservation['status'] as String? ?? 'readyForPayment';
     final isReady = status == 'readyForPayment';
 
@@ -1743,12 +1838,12 @@ class _ReservationCard extends StatelessWidget {
               _CountdownRing(
                 reservation: reservation,
                 isDark: isDark,
-                onTimeout: onTimeout,
+                onTimeout: widget.onTimeout,
               ),
               const SizedBox(height: 16),
               _ProgressSteps(
                 isDark: isDark,
-                anim: anim,
+                anim: widget.anim,
                 steps: [
                   _StepData(
                     lang.tr('Seat found', 'আসন পাওয়া'),
@@ -1822,7 +1917,7 @@ class _ReservationCard extends StatelessWidget {
                       from: from,
                       to: to,
                       isDark: isDark,
-                      anim: anim,
+                      anim: widget.anim,
                       moving: false,
                       accent: _kGreen,
                     ),
@@ -1901,31 +1996,253 @@ class _ReservationCard extends StatelessWidget {
             ],
           ),
         ),
-        const SizedBox(height: 16),
-
-        // ── Pay ──
-        FilledButton.icon(
-          style: FilledButton.styleFrom(
-            backgroundColor: _kGreen,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
+        // ── OTP verification input (shown during awaitingOtp) ──
+        if (!isReady) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: _cardDeco(isDark, accent: _kGreen, radius: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: _kGreen.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.sms_rounded, color: _kGreen, size: 20),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            lang.tr('Enter OTP Code', 'ওটিপি কোড দিন'),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.textPrimary(isDark),
+                            ),
+                          ),
+                          Text(
+                            lang.tr(
+                              'Auto-reading SMS or enter code manually',
+                              'স্বয়ংক্রিয় এসএমএস রিড হচ্ছে বা নিজে লিখুন',
+                            ),
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: AppColors.textSecondary(isDark),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _kGreen.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: _kGreen.withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: _kGreen,
+                            ),
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            lang.tr('Auto-listen', 'অটো-লিসেন'),
+                            style: const TextStyle(
+                              color: _kGreen,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                TextField(
+                  controller: _otpCtrl,
+                  keyboardType: TextInputType.number,
+                  autofillHints: const [AutofillHints.oneTimeCode],
+                  textAlign: TextAlign.center,
+                  maxLength: 8,
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 8,
+                    color: AppColors.textPrimary(isDark),
+                  ),
+                  decoration: InputDecoration(
+                    counterText: '',
+                    hintText: '------',
+                    hintStyle: TextStyle(
+                      letterSpacing: 8,
+                      fontSize: 22,
+                      color: AppColors.textMuted(isDark),
+                    ),
+                    filled: true,
+                    fillColor: isDark
+                        ? const Color(0xFF0F1A1E)
+                        : const Color(0xFFF1F5F9),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: BorderSide(color: _outline(isDark)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(14),
+                      borderSide: const BorderSide(color: _kGreen, width: 2),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                  onChanged: (val) {
+                    const bnDigits = {
+                      '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4',
+                      '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+                    };
+                    final normalized =
+                        val.trim().split('').map((c) => bnDigits[c] ?? c).join();
+                    if (normalized != val) {
+                      _otpCtrl.text = normalized;
+                      _otpCtrl.selection = TextSelection.fromPosition(
+                        TextPosition(offset: normalized.length),
+                      );
+                    }
+                    if (normalized.length >= 6 && !_busy) {
+                      _verifyOtp();
+                    }
+                  },
+                ),
+                if (_error != null) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: _kRed.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: _kRed.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.error_outline_rounded, size: 16, color: _kRed),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            _error!,
+                            style: const TextStyle(color: _kRed, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 14),
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 3,
+                      child: FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _kGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: _busy ? null : _verifyOtp,
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Icon(Icons.verified_rounded, size: 18),
+                        label: Text(
+                          _busy
+                              ? lang.tr('Verifying…', 'যাচাই হচ্ছে…')
+                              : lang.tr('Verify OTP', 'ওটিপি যাচাই করুন'),
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      flex: 2,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppColors.textSecondary(isDark),
+                          side: BorderSide(color: _outline(isDark)),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        onPressed: (_busy || _resendCooldown > 0)
+                            ? null
+                            : () => _verifyOtp(resend: true),
+                        icon: const Icon(Icons.refresh_rounded, size: 16),
+                        label: Text(
+                          _resendCooldown > 0
+                              ? '$_resendCooldown s'
+                              : lang.tr('Resend', 'পুনরায় পাঠান'),
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            elevation: 4,
-            shadowColor: _kGreen.withValues(alpha: 0.5),
           ),
-          onPressed: onPayNow,
-          icon: const Icon(Icons.payment_rounded, size: 20),
-          label: Text(
-            lang.tr('Pay Now', 'পেমেন্ট করুন'),
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+        ] else ...[
+          const SizedBox(height: 16),
+          // ── Pay Now (when verified) ──
+          FilledButton.icon(
+            style: FilledButton.styleFrom(
+              backgroundColor: _kGreen,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              elevation: 4,
+              shadowColor: _kGreen.withValues(alpha: 0.5),
+            ),
+            onPressed: widget.onPayNow,
+            icon: const Icon(Icons.payment_rounded, size: 20),
+            label: Text(
+              lang.tr('Pay Now', 'পেমেন্ট করুন'),
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+            ),
           ),
-        ),
+        ],
         const SizedBox(height: 4),
         Center(
           child: TextButton.icon(
-            onPressed: onClear,
+            onPressed: widget.onClear,
             icon: const Icon(Icons.delete_outline_rounded, size: 16),
             label: Text(
               lang.tr('Clear record', 'রেকর্ড মুছুন'),
