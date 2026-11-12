@@ -22,7 +22,7 @@ if (releaseRequested && !hasReleaseKeys) {
 android {
     namespace = "com.example.rail_automation"
     compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         isCoreLibraryDesugaringEnabled = true
