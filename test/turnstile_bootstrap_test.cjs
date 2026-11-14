@@ -26,7 +26,8 @@ const context = vm.createContext({
       renders++; options = config;
       assert.equal(config.execution, 'execute');
       assert.equal(config.retry, 'never');
-      assert.equal(config['refresh-expired'], 'auto');
+      assert.equal(config['refresh-expired'], 'manual');
+      assert.equal(config['refresh-timeout'], 'manual');
       return 7;
     },
     execute: id => { assert.equal(id, 7); executions++; },
