@@ -14,6 +14,7 @@ import '../models/auth_session.dart';
 import '../models/purchased_ticket.dart';
 import '../models/train_trip.dart';
 import '../models/seat_layout.dart';
+import '../utils/friendly_error.dart';
 
 class ApiService {
   static final _searchRequests = <String, Future<TripSearchResponse>>{};
@@ -473,24 +474,6 @@ class ApiService {
         headers: headers,
       );
       if (response.statusCode != 200) {
-        String? serverMsg;
-        try {
-          final parsed = jsonDecode(response.body);
-          if (parsed is Map) {
-            serverMsg =
-                parsed['message']?.toString() ??
-                parsed['error']?.toString() ??
-                parsed['detail']?.toString() ??
-                parsed['msg']?.toString();
-          }
-        } catch (_) {
-          if (response.body.isNotEmpty && response.body.length < 200) {
-            serverMsg = response.body;
-          }
-        }
-        final detail = (serverMsg != null && serverMsg.isNotEmpty)
-            ? ': $serverMsg'
-            : '';
         if (response.statusCode == 401) {
           throw Exception('Railway session expired • Please sign in again');
         }
@@ -503,8 +486,13 @@ class ApiService {
         if (response.statusCode == 429) {
           throw Exception('Railway server busy (429) • Please wait a moment');
         }
+        // Railway nests account-lock messages under error.messages (a list).
+        // Parse the original JSON so the wait duration reaches the user intact.
+        final message = friendlyErrorMessage(response.body);
         throw Exception(
-          'Seat layout request failed (${response.statusCode})$detail',
+          message.isNotEmpty
+              ? message
+              : 'Seat layout request failed (${response.statusCode}).',
         );
       }
       dynamic decoded;
@@ -1156,6 +1144,67 @@ class ApiService {
     return BookingActivity.instance.run(BookingActivityStage.tickets, perform);
   }
 
+  /// Fetches past tickets from Bangladesh Railway to confirm payment:
+  /// GET /trips/past-v2
+  static Future<List<PurchasedTicket>> getPastTickets({
+    required AuthSession authSession,
+    bool silent = false,
+  }) async {
+    Future<List<PurchasedTicket>> perform() async {
+      final headers = <String, String>{
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Origin': 'https://eticket.railway.gov.bd',
+        'Referer': 'https://eticket.railway.gov.bd/',
+        'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
+        'X-Requested-With': 'XMLHttpRequest',
+        'sec-ch-ua':
+            '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-ch-ua-mobile': '?0',
+      };
+
+      if (authSession.token.isNotEmpty) {
+        headers['Authorization'] = authSession.token.startsWith('Bearer ')
+            ? authSession.token
+            : 'Bearer ${authSession.token}';
+      }
+      if (authSession.deviceKey.isNotEmpty) {
+        headers['X-Device-Key'] = authSession.deviceKey;
+      }
+      if (authSession.deviceId.isNotEmpty) {
+        headers['X-Device-Id'] = authSession.deviceId;
+      }
+
+      final response = await RailApiClient.request(
+        operation: 'trips_past',
+        method: 'GET',
+        payload: <String, dynamic>{},
+        auth: authSession,
+        headers: headers,
+      );
+      if (response.statusCode == 200) {
+        final json = jsonDecode(response.body) as Map<String, dynamic>;
+        final data = json['data'] as List<dynamic>? ?? [];
+        return data
+            .map(
+              (item) => PurchasedTicket.fromJson(item as Map<String, dynamic>),
+            )
+            .toList();
+      } else {
+        throw Exception(
+          'Failed to fetch past tickets (${response.statusCode}): ${response.body}',
+        );
+      }
+    }
+
+    if (silent) {
+      return perform();
+    }
+    return BookingActivity.instance.run(BookingActivityStage.tickets, perform);
+  }
+
   /// Downloads the official PDF ticket for a given order ID.
   static Future<Uint8List> downloadTicketPdf({
     required int orderId,
@@ -1307,11 +1356,13 @@ class ApiService {
     try {
       final session = authSession ?? (await AuthSession.load());
       if (session == null || !session.isValid) return false;
-      final payload = <String, dynamic>{'ticket_id': ticketId};
-      if (routeId != null) payload['route_id'] = routeId;
+      final payload = <String, dynamic>{
+        'ticket_id': ticketId,
+        if (routeId != null) 'route_id': routeId,
+      };
       final response = await RailApiClient.request(
         operation: 'release_seat',
-        method: 'POST',
+        method: 'PATCH',
         payload: payload,
         auth: session,
       );
@@ -1326,16 +1377,21 @@ class ApiService {
   /// Releases multiple held seats in bulk.
   static Future<bool> bulkReleaseSeats({
     required List<int> ticketIds,
+    int? routeId,
     AuthSession? authSession,
   }) async {
     if (ticketIds.isEmpty) return true;
     try {
       final session = authSession ?? (await AuthSession.load());
       if (session == null || !session.isValid) return false;
+      final payload = <String, dynamic>{
+        'ticket_id': ticketIds.length == 1 ? ticketIds.first : ticketIds,
+        if (routeId != null) 'route_id': routeId,
+      };
       final response = await RailApiClient.request(
         operation: 'bulk_release_seat',
-        method: 'POST',
-        payload: {'ticket_ids': ticketIds},
+        method: 'PATCH',
+        payload: payload,
         auth: session,
       );
       if (response.statusCode == 200) {
@@ -1345,7 +1401,11 @@ class ApiService {
     } catch (_) {}
     var any = false;
     for (final id in ticketIds) {
-      final ok = await releaseSeat(ticketId: id, authSession: authSession);
+      final ok = await releaseSeat(
+        ticketId: id,
+        routeId: routeId,
+        authSession: authSession,
+      );
       if (ok) any = true;
     }
     return any;

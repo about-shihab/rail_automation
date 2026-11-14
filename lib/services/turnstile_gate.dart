@@ -233,9 +233,12 @@ class TurnstileGate {
   String get seatLayoutSiteKey => _keyFor('', null);
 
   String _keyFor(String label, String? explicitKey) {
+    final purpose = label == 'Railway login' ? 'sign_in' : 'seat_layout';
     return explicitKey ??
-        AppConfig.instance.siteKey(label == 'Railway login' ? 'sign_in' : 'seat_layout') ??
-        RailApiConfig.turnstileInvisibleSiteKey;
+        AppConfig.instance.siteKey(purpose) ??
+        (purpose == 'sign_in'
+            ? RailApiConfig.turnstileInteractiveSiteKey
+            : RailApiConfig.turnstileInvisibleSiteKey);
   }
 
   // ── Acquire ──────────────────────────────────────────────────────────────
@@ -325,20 +328,22 @@ class TurnstileGate {
         !interactive.isCompleted) {
       interactive.complete();
     }
+    Timer? exposeTimer;
+    Completer<({bool interactive, String? token})>? exposeCompleter;
+    if (_exposesBrowserOnIos(label, allowPrompt)) {
+      exposeCompleter = Completer<({bool interactive, String? token})>();
+      exposeTimer = Timer(_iosExposeAfter, () {
+        if (!exposeCompleter!.isCompleted) {
+          exposeCompleter.complete((interactive: true, token: null));
+        }
+      });
+    }
     try {
       watchInteraction();
       final result = await Future.any<({bool interactive, String? token})>([
         request.then((token) => (interactive: false, token: token)),
         interactive.future.then((_) => (interactive: true, token: null)),
-        // iOS only: a WKWebView often cannot finish the check while it sits
-        // unseen behind the app (no "interactive" phase is ever reported, so
-        // the seat-layout token just times out). If the silent solve has not
-        // finished quickly, bring the verification card up so the browser is
-        // exposed and can complete. Android never takes this branch.
-        if (_exposesBrowserOnIos(label, allowPrompt))
-          Future<void>.delayed(
-            _iosExposeAfter,
-          ).then((_) => (interactive: true, token: null)),
+        if (exposeCompleter != null) exposeCompleter.future,
       ]);
       if (!result.interactive) {
         final token = result.token;
@@ -358,6 +363,7 @@ class TurnstileGate {
       }
       return await _showInteraction(label, request);
     } finally {
+      exposeTimer?.cancel();
       session.removeListener(watchInteraction);
     }
   }

@@ -13,6 +13,7 @@ import '../services/rail_api_client.dart';
 import '../services/web_login_support.dart';
 import '../services/web_session_service.dart';
 import '../services/secure_store.dart';
+import '../services/turnstile_session.dart';
 import '../services/theme_service.dart';
 import '../services/language_service.dart';
 import '../services/monitor_service.dart';
@@ -65,6 +66,7 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
     WebviewLoginScreen._open--;
     _sessionRetry?.cancel();
     _loadingTimeoutTimer?.cancel();
+    TurnstileSession.instance.cancel();
     super.dispose();
   }
 
@@ -78,9 +80,11 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
   Future<void> _prepareWebView() async {
     try {
       await _loadSavedCredentials();
-      // If we have saved credentials and no explicit error notice, try instant
-      // API sign-in with invisible Turnstile key before loading heavy WebView!
-      if (_savedPhone.isNotEmpty &&
+      if (widget.clearSession) {
+        await AuthSession.clear();
+        await SecureStore.delete('rail_action_token');
+        await WebSessionService.clear();
+      } else if (_savedPhone.isNotEmpty &&
           _savedPassword.isNotEmpty &&
           widget.notice == null) {
         setState(() => _isLoading = true);
@@ -103,12 +107,6 @@ class _WebviewLoginScreenState extends State<WebviewLoginScreen> {
           }
           // Silent API login could not proceed; fallback to WebView loading below
         }
-      }
-
-      if (widget.clearSession) {
-        await AuthSession.clear();
-        await SecureStore.delete('rail_action_token');
-        await WebSessionService.clear();
       }
       if (mounted) await _initWebView();
     } catch (_) {

@@ -138,6 +138,24 @@ class RailApiClient {
           );
         }
 
+        final last = int.tryParse(
+          await SecureStore.read('rail_login_attempt_at') ?? '',
+        );
+        if (last != null &&
+            DateTime.now().millisecondsSinceEpoch - last <
+                AppConfig.instance.number('login_retry_interval_seconds') *
+                    1000) {
+          final seconds =
+              ((AppConfig.instance.number('login_retry_interval_seconds') *
+                              1000 -
+                          (DateTime.now().millisecondsSinceEpoch - last)) /
+                      1000)
+                  .ceil();
+          throw LoginRecoveryRequired(
+            'Automatic login can retry in $seconds seconds. Tap Log in to continue now.',
+          );
+        }
+
         // 1. Try direct API login with saved credentials first using invisible Turnstile key!
         final credentials = await AuthSession.getSavedUserCredentials();
         final phone = credentials['phone'] ?? '';
@@ -328,7 +346,7 @@ class RailApiClient {
       // Remote payload templates must not drop or substitute this one-use value.
       body['cft_response'] = runtime['cft_response'];
     }
-    if (url.startsWith(RailApiConfig.appBaseUrl) && verb == 'GET') {
+    if (url.startsWith(RailApiConfig.appBaseUrl) && verb == 'GET' && operation == 'seat_layout') {
       body.putIfAbsent('android_app_version', () => '11');
       body.putIfAbsent('android_device_id', () => '2');
     }

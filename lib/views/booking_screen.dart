@@ -40,7 +40,6 @@ class _BookingScreenState extends State<BookingScreen> {
   bool _checkoutRedirected = false;
   Future<List<PurchasedTicket>?>? _historyBeforeCheckout;
   bool _checkingPayment = false;
-  int _searchRecoveryAttempts = 0;
 
   @override
   void initState() {
@@ -65,12 +64,13 @@ class _BookingScreenState extends State<BookingScreen> {
       }
       final reservation = await BookingService.pending();
       bool bootstrapped = false;
-      _historyBeforeCheckout ??=
-          ApiService.getPurchaseHistory(authSession: session)
-              .then<List<PurchasedTicket>?>(
-                (tickets) => tickets,
-                onError: (Object _) => null,
-              );
+      _historyBeforeCheckout ??= ApiService.getPastTickets(
+        authSession: session,
+        silent: true,
+      ).catchError((_) => ApiService.getPurchaseHistory(authSession: session)).then<List<PurchasedTicket>?>(
+            (tickets) => tickets,
+            onError: (Object _) => null,
+          );
 
       // Sync cookies from session if available
       if (session.cookie != null && session.cookie!.isNotEmpty) {
@@ -130,53 +130,21 @@ class _BookingScreenState extends State<BookingScreen> {
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setUserAgent(
-            'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36')
+          'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36',
+        )
         ..setNavigationDelegate(
           NavigationDelegate(
             onPageStarted: (url) {
               if (mounted) setState(() => _loading = true);
-              if (WebSessionService.isRailwayUrl(url) && storage.isNotEmpty) {
-                _controller?.runJavaScript('''
-                  (function() {
-                    try {
-                      var vals = ${jsonEncode(values)};
-                      for (var k in vals) {
-                        try { localStorage.setItem(k, vals[k]); } catch(e){}
-                        try { sessionStorage.setItem(k, vals[k]); } catch(e){}
-                      }
-                      var stor = ${jsonEncode(storage)};
-                      for (var s in stor) {
-                        try { localStorage.setItem(s, String(stor[s])); } catch(e){}
-                        try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
-                      }
-                      var pData = stor['initialPurchaseData'] || '';
-                      if (!window.__railStorageGuarded) {
-                        window.__railStorageGuarded = true;
-                        var origSGet = sessionStorage.getItem.bind(sessionStorage);
-                        sessionStorage.getItem = function(k) {
-                          var v = origSGet(k);
-                          if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
-                          if (stor[k] !== undefined) return String(stor[k]);
-                          if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
-                          if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
-                          if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
-                          return v;
-                        };
-                        var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
-                        sessionStorage.removeItem = function(k) {
-                          if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
-                            return;
-                          }
-                          return origSRemove(k);
-                        };
-                      }
-                    } catch(e) {}
-                  })();
-                ''');
-              }
             },
             onPageFinished: (url) async {
-              if (!WebSessionService.isRailwayUrl(url)) {
+              final isBootstrap =
+                  !bootstrapped &&
+                  (url == 'about:blank' ||
+                      (WebSessionService.isRailwayUrl(url) &&
+                          Uri.tryParse(url)?.path ==
+                              '/rail-pro-checkout-bootstrap'));
+              if (!isBootstrap && !WebSessionService.isRailwayUrl(url)) {
                 // Payment providers must remain visible during checkout.
                 if (mounted) {
                   setState(() {
@@ -187,16 +155,13 @@ class _BookingScreenState extends State<BookingScreen> {
                 return;
               }
 
-              if (!bootstrapped &&
-                  (url.contains('/rail-pro-checkout-bootstrap') ||
-                      url == 'about:blank' ||
-                      url.startsWith('data:') ||
-                      WebSessionService.isRailwayUrl(url))) {
+              if (isBootstrap) {
                 bootstrapped = true;
                 if (session.isValid) {
                   try {
                     await _controller?.runJavaScript('''
                     (function() {
+                      sessionStorage.removeItem('orderFailedMessage');
                       Object.entries(${jsonEncode(values)}).forEach(([k,v]) => {
                         localStorage.setItem(k, v);
                         try { sessionStorage.setItem(k, v); } catch(e){}
@@ -205,30 +170,6 @@ class _BookingScreenState extends State<BookingScreen> {
                         sessionStorage.setItem(k, String(v));
                         try { localStorage.setItem(k, String(v)); } catch(e){}
                       });
-                      try {
-                        var stor = ${jsonEncode(storage)};
-                        var pData = stor['initialPurchaseData'] || '';
-                        if (!window.__railStorageGuarded) {
-                          window.__railStorageGuarded = true;
-                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
-                          sessionStorage.getItem = function(k) {
-                            var v = origSGet(k);
-                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
-                            if (stor[k] !== undefined) return String(stor[k]);
-                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
-                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
-                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
-                            return v;
-                          };
-                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
-                          sessionStorage.removeItem = function(k) {
-                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
-                              return;
-                            }
-                            return origSRemove(k);
-                          };
-                        }
-                      } catch(e) {}
                     })();
                   ''');
                     await _controller?.runJavaScript(
@@ -248,86 +189,29 @@ class _BookingScreenState extends State<BookingScreen> {
                 }
               }
 
-              // Keep storage warm on any Railway page so sessionStorage is preserved
-              if (session.isValid && storage.isNotEmpty) {
-                try {
-                  await _controller?.runJavaScript('''
-                    (function() {
-                      try {
-                        var vals = ${jsonEncode(values)};
-                        for (var k in vals) {
-                          try { localStorage.setItem(k, vals[k]); } catch(e){}
-                          try { sessionStorage.setItem(k, vals[k]); } catch(e){}
-                        }
-                        var stor = ${jsonEncode(storage)};
-                        for (var s in stor) {
-                          try { localStorage.setItem(s, String(stor[s])); } catch(e){}
-                          try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
-                        }
-                        var pData = stor['initialPurchaseData'] || '';
-                        if (!window.__railStorageGuarded) {
-                          window.__railStorageGuarded = true;
-                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
-                          sessionStorage.getItem = function(k) {
-                            var v = origSGet(k);
-                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
-                            if (stor[k] !== undefined) return String(stor[k]);
-                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
-                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
-                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
-                            return v;
-                          };
-                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
-                          sessionStorage.removeItem = function(k) {
-                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
-                              return;
-                            }
-                            return origSRemove(k);
-                          };
-                        }
-                      } catch(e) {}
-                    })();
-                  ''');
-                } catch (_) {}
-              }
-
-              final uri = Uri.tryParse(url);
-              final isSearchRedirect = isReadyForPayment &&
-                  (uri?.path == '/booking/train/search' ||
-                      uri?.path == '/' ||
-                      uri?.path.isEmpty == true);
-
-              // Auto-recover if redirected to search on mobile
-              if (isSearchRedirect && _searchRecoveryAttempts < 2) {
-                _searchRecoveryAttempts++;
-                try {
-                  await _controller?.runJavaScript('''
-                    (function() {
-                      try {
-                        var vals = ${jsonEncode(values)};
-                        for (var k in vals) {
-                          try { localStorage.setItem(k, vals[k]); } catch(e){}
-                          try { sessionStorage.setItem(k, vals[k]); } catch(e){}
-                        }
-                        var stor = ${jsonEncode(storage)};
-                        for (var s in stor) {
-                          try { localStorage.setItem(s, String(stor[s])); } catch(e){}
-                          try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
-                        }
-                        window.location.replace(${jsonEncode(BookingService.tripInfoUrl)});
-                      } catch(e) {
-                        window.location.href = ${jsonEncode(BookingService.tripInfoUrl)};
-                      }
-                    })();
-                  ''');
-                } catch (_) {}
-              }
-
               if (defaultTargetPlatform == TargetPlatform.iOS &&
                   !url.contains('/rail-pro-checkout-bootstrap')) {
                 await _controller?.runJavaScript(
                   WebSessionService.iosCheckoutLocationScript,
                 );
+              }
+
+              if (Uri.tryParse(url)?.path == '/booking/train/error') {
+                try {
+                  final raw = await _controller?.runJavaScriptReturningResult(
+                    "sessionStorage.getItem('orderFailedMessage') || '{}'",
+                  );
+                  dynamic failure = raw;
+                  if (failure is String) failure = jsonDecode(failure);
+                  if (failure is String) failure = jsonDecode(failure);
+                  if (failure is Map && mounted) {
+                    final message = failure['message']?.toString();
+                    if (message != null && message.isNotEmpty) {
+                      ScaffoldMessenger.of(context)
+                          .showSnackBar(SnackBar(content: Text(message)));
+                    }
+                  }
+                } catch (_) {}
               }
 
               // Finished loading target booking / payment page
@@ -360,7 +244,9 @@ class _BookingScreenState extends State<BookingScreen> {
       // A blank document on the Railway origin lets us restore storage before
       // the site's router executes. Loading /login first races its redirects.
       await controller.loadHtmlString(
-        '''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><script>(function(){try{var vals=${jsonEncode(values)};for(var k in vals){if(vals.hasOwnProperty(k)){localStorage.setItem(k,vals[k]);try{sessionStorage.setItem(k,vals[k]);}catch(e){}}}var stor=${jsonEncode(storage)};for(var s in stor){if(stor.hasOwnProperty(s)){sessionStorage.setItem(s,String(stor[s]));try{localStorage.setItem(s,String(stor[s]));}catch(e){}}}window.location.replace(${jsonEncode(targetUrl)});}catch(e){window.location.href=${jsonEncode(targetUrl)};}})();</script></head><body></body></html>''',
+        '<!doctype html><html><head>'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        '</head><body></body></html>',
         baseUrl: 'https://eticket.railway.gov.bd/rail-pro-checkout-bootstrap',
       );
     } catch (error) {
@@ -407,7 +293,12 @@ class _BookingScreenState extends State<BookingScreen> {
         return;
       }
       final tripId = int.tryParse('${reservation!['seatClass']['trip_id']}');
-      final tickets = await ApiService.getPurchaseHistory(authSession: session);
+      List<PurchasedTicket> tickets = [];
+      try {
+        tickets = await ApiService.getPastTickets(authSession: session, silent: true);
+      } catch (_) {
+        tickets = await ApiService.getPurchaseHistory(authSession: session);
+      }
       final oldIds = before.map((ticket) => ticket.orderId).toSet();
       final paid = tickets.any(
         (ticket) =>
@@ -463,7 +354,10 @@ class _BookingScreenState extends State<BookingScreen> {
         ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.open_in_browser_rounded, color: Colors.white),
+            icon: const Icon(
+              Icons.open_in_browser_rounded,
+              color: Colors.white,
+            ),
             tooltip: 'Open in native browser',
             onPressed: () async {
               final uri = Uri.tryParse(widget.url);

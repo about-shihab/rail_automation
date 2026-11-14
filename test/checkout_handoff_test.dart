@@ -207,6 +207,7 @@ void main() {
     final state = (await BookingService.pending())!;
     state['status'] = 'awaitingOtp';
     await BookingService.save(state);
+    final deadline = state['expiresAt'];
     await SecureStore.write('rail_user', jsonEncode({'id': 123}));
     await http.runWithClient(
       () async {
@@ -216,14 +217,20 @@ void main() {
         );
         expect(user['phone_number'], '01700000000');
         expect(user['display_name'], 'Verified user');
+        expect(user['email'], 'verified@example.com');
         expect(user['id'], 123);
+        expect((await BookingService.pending())!['expiresAt'], deadline);
       },
       () => MockClient(
         (_) async => http.Response(
           jsonEncode({
             'data': {
               'success': true,
-              'user': {'name': 'Verified user', 'mobile': '01700000000'},
+              'user': {
+                'name': 'Verified user',
+                'mobile': '01700000000',
+                'email': 'verified@example.com',
+              },
             },
           }),
           200,
@@ -282,6 +289,81 @@ void main() {
           200,
         );
       }),
+    );
+  });
+
+  test('checkout preserves the last minute of the actual seat hold', () async {
+    final state = (await BookingService.pending())!;
+    final deadline = DateTime.now().add(const Duration(seconds: 30));
+    state['expiresAt'] = deadline.toUtc().toIso8601String();
+    final storage = BookingService.webStorage(state, '01700000000');
+    expect(
+      storage['booking_continued_on'],
+      '${deadline.millisecondsSinceEpoch}',
+    );
+    state['expiresAt'] = DateTime.now()
+        .subtract(const Duration(seconds: 1))
+        .toUtc()
+        .toIso8601String();
+    expect(
+      () => BookingService.webStorage(state, '01700000000'),
+      throwsStateError,
+    );
+  });
+
+  testWidgets('checkout restores once and respects Railway cleanup on return', (
+    tester,
+  ) async {
+    await http.runWithClient(
+      () async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: BookingScreen(url: BookingService.tripInfoUrl),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        final browser = webview.controller;
+        expect(browser.scripts, hasLength(2));
+        expect(
+          browser.scripts.join(),
+          isNot(contains('sessionStorage.removeItem =')),
+        );
+        final count = browser.scripts.length;
+        for (final url in [
+          BookingService.tripInfoUrl,
+          'https://payment.example/checkout',
+          'https://eticket.railway.gov.bd/payment/cancel',
+          'https://eticket.railway.gov.bd/booking/train/search',
+        ]) {
+          browser.delegate!.pageStarted!(url);
+          browser.delegate!.pageFinished!(url);
+          await tester.pump();
+        }
+        expect(
+          browser.scripts,
+          hasLength(count),
+          reason: 'Return navigation must not restore cleared OTP/booking data',
+        );
+        expect((await BookingService.pending())!['status'], 'readyForPayment');
+        browser.javascriptResult = jsonEncode(
+          jsonEncode({
+            'errorKey': 'RequestTimeLimitExceeded',
+            'message': 'Railway says the payment time limit expired.',
+          }),
+        );
+        browser.delegate!.pageFinished!(
+          'https://eticket.railway.gov.bd/booking/train/error',
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(
+          find.text('Railway says the payment time limit expired.'),
+          findsOneWidget,
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+      () =>
+          MockClient((_) async => http.Response(jsonEncode({'data': []}), 200)),
     );
   });
 

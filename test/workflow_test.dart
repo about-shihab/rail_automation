@@ -268,6 +268,27 @@ void main() {
       () => MockClient((_) async => http.Response('{}', 403)),
     );
   });
+  test('seat layout exposes the ongoing-purchase wait from Railway', () async {
+    const message = 'Sorry! Your purchase process is on-going. '
+        'Please try again after 9 minutes 54 seconds.';
+    var requests = 0;
+    await http.runWithClient(
+      () => expectLater(
+        ApiService.fetchSeatLayout(
+          tripId: 1, tripRouteId: 2, authSession: auth,
+        ),
+        throwsA(predicate((e) => e.toString() == 'Exception: $message')),
+      ),
+      () => MockClient((_) async {
+        requests++;
+        return http.Response(jsonEncode({
+          'error': {'code': 422, 'messages': [message]},
+        }), 422);
+      }),
+    );
+    expect(requests, 1, reason: 'An account lock must not trigger layout retries');
+  });
+
   test(
     'seat layout sends single device headers and uses server availability',
     () async {
@@ -291,6 +312,8 @@ void main() {
             'trip_id': '8608105',
             'trip_route_id': '59340076',
             'cft_response': 'fresh-verification',
+            'android_app_version': '11',
+            'android_device_id': '2',
           });
           expect(request.headers['X-Device-Id'], 'device');
           expect(request.headers['X-Device-Key'], 'key');

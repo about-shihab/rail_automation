@@ -118,6 +118,23 @@
         "trip_route_id": "{{trip_route_id}}",
         "ticket_ids": "{{ticket_ids}}"
       }
+    },
+    "release_seat": {
+      "enabled": true,
+      "method": "PATCH",
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/release-seat",
+      "min_interval_seconds": 0
+    },
+    "bulk_release_seat": {
+      "enabled": true,
+      "method": "PATCH",
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/bulk-release-seat",
+      "min_interval_seconds": 0
+    },
+    "trips_past": {
+      "url": "https://railspaapi.shohoz.com/v1.0/web/trips/past-v2",
+      "min_interval_seconds": 0,
+      "payload": {}
     }
   }
 }

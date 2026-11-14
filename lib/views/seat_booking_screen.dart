@@ -436,6 +436,75 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
+                                  if (_error!.contains('reservation is already in progress') ||
+                                      _error!.contains('existing reservation') ||
+                                      _error!.contains('needs your attention')) ...[
+                                    TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.receipt_long_rounded,
+                                        size: 14,
+                                      ),
+                                      label: const Text(
+                                        'View Reservation',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      onPressed: () {
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (_) => const ReservationScreen(),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(width: 6),
+                                    TextButton.icon(
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: AppColors.error,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 4,
+                                        ),
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      icon: const Icon(
+                                        Icons.refresh_rounded,
+                                        size: 14,
+                                      ),
+                                      label: const Text(
+                                        'Release & Reset',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                      onPressed: () async {
+                                        setState(() => _busy = true);
+                                        try {
+                                          await BookingService.clear(
+                                            releaseRemote: true,
+                                            releaseSeatsOnRailway: true,
+                                          );
+                                          BookingService.resetReserving();
+                                          setState(() => _error = null);
+                                          await _load();
+                                        } finally {
+                                          if (mounted) setState(() => _busy = false);
+                                        }
+                                      },
+                                    ),
+                                    const SizedBox(width: 6),
+                                  ],
                                   if (_error!.contains('422')) ...[
                                     TextButton.icon(
                                       style: TextButton.styleFrom(

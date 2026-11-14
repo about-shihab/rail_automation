@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../services/app_config.dart';
 
 import '../models/auth_session.dart';
+import '../models/purchased_ticket.dart';
 import '../services/api_service.dart';
 import '../services/booking_activity.dart';
 import '../services/booking_service.dart';
@@ -162,32 +163,43 @@ class _ReservationScreenState extends State<ReservationScreen> {
     try {
       final auth = await AuthSession.load();
       if (auth == null) return;
-      final tickets = await ApiService.getPurchaseHistory(
-        authSession: auth,
-        silent: true,
-      );
+      List<PurchasedTicket> tickets = [];
+      try {
+        tickets = await ApiService.getPastTickets(
+          authSession: auth,
+          silent: true,
+        );
+      } catch (_) {
+        tickets = await ApiService.getPurchaseHistory(
+          authSession: auth,
+          silent: true,
+        );
+      }
       final tripId = int.tryParse('${state['seatClass']?['trip_id']}');
       final trainName = state['train']?['trip_number']?.toString() ??
           state['train']?['train_name']?.toString() ?? '';
       final doj = state['date']?.toString() ?? '';
 
-      final confirmed = tickets.where((t) => t.isConfirmed && !t.isRefunded && t.pnr.isNotEmpty).firstWhere(
-        (t) {
-          if (tripId != null && t.tripId == tripId) return true;
-          if (trainName.isNotEmpty &&
-              t.trainName.toLowerCase().contains(trainName.toLowerCase())) {
-            return true;
-          }
-          if (doj.isNotEmpty && t.journeyDate.contains(doj)) return true;
-          return false;
-        },
-        orElse: () => tickets.firstWhere(
-          (t) => t.isConfirmed && !t.isRefunded && t.pnr.isNotEmpty && tripId != null && t.tripId == tripId,
-          orElse: () => tickets.first,
-        ),
-      );
+      PurchasedTicket? confirmed;
+      for (final t in tickets) {
+        if (!t.isConfirmed || t.isRefunded || t.pnr.isEmpty) continue;
+        if (tripId != null && t.tripId == tripId) {
+          confirmed = t;
+          break;
+        }
+        if (trainName.isNotEmpty &&
+            t.trainName.toLowerCase().contains(trainName.toLowerCase())) {
+          confirmed = t;
+          break;
+        }
+        if (doj.isNotEmpty && t.journeyDate.contains(doj)) {
+          confirmed = t;
+          break;
+        }
+      }
 
-      final matches = confirmed.isConfirmed &&
+      final matches = confirmed != null &&
+          confirmed.isConfirmed &&
           !confirmed.isRefunded &&
           confirmed.pnr.isNotEmpty &&
           ((tripId != null && confirmed.tripId == tripId) ||

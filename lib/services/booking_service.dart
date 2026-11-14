@@ -53,6 +53,25 @@ class BookingService {
 
   static final _layoutRequests = <(int, int, String), Future<BookingLayout>>{};
   static bool _reserving = false;
+  static DateTime? _reservingStartedAt;
+
+  static bool get isReserving {
+    if (_reserving) {
+      if (_reservingStartedAt != null &&
+          DateTime.now().difference(_reservingStartedAt!).inSeconds > 30) {
+        _reserving = false;
+        _reservingStartedAt = null;
+        return false;
+      }
+      return true;
+    }
+    return false;
+  }
+
+  static void resetReserving() {
+    _reserving = false;
+    _reservingStartedAt = null;
+  }
 
   static Future<BookingLayout> loadLayout({
     required SeatType seat,
@@ -108,7 +127,8 @@ class BookingService {
       // Automatically clear after 5 minutes (300 seconds) from start or when expired.
       // Once OTP is verified (readyForPayment), only the payment expiration deadline (expiresAt) applies.
       final bool isReadyForPayment = map['status'] == 'readyForPayment';
-      final bool isExpiredByStartedAt = !isReadyForPayment &&
+      final bool isExpiredByStartedAt =
+          !isReadyForPayment &&
           started != null &&
           now.difference(started).inSeconds >= (reservationTimeoutMinutes * 60);
       final bool isExpiredByExpiresAt =
@@ -122,6 +142,14 @@ class BookingService {
           failureReason:
               'Reservation timed out after $reservationTimeoutMinutes minutes',
         );
+        await clear(releaseRemote: true);
+        return null;
+      }
+
+      // If marked as reserving but no reservation is currently running in memory,
+      // it was an interrupted/orphaned reservation. Clear it and release held seats.
+      if (map['status'] == 'reserving' && !isReserving) {
+        await releaseHeldSeats(reservation: map);
         await clear();
         return null;
       }
@@ -186,11 +214,16 @@ class BookingService {
           ?.map((e) => int.tryParse(e.toString()) ?? 0)
           .where((id) => id > 0)
           .toList();
+      final routeId = int.tryParse(
+            res['seatClass']?['trip_route_id']?.toString() ?? '',
+          ) ??
+          int.tryParse(res['route_id']?.toString() ?? '');
       if (ticketIds != null && ticketIds.isNotEmpty) {
         final session = authSession ?? (await AuthSession.load());
         if (session != null) {
           return await ApiService.bulkReleaseSeats(
             ticketIds: ticketIds,
+            routeId: routeId,
             authSession: session,
           );
         }
@@ -199,12 +232,58 @@ class BookingService {
     return false;
   }
 
-  static Future<void> clear({bool releaseRemote = false}) async {
-    if (releaseRemote) {
+  /// Release single seat via official Railway release API
+  static Future<bool> releaseSeat({
+    required int ticketId,
+    int? routeId,
+    AuthSession? auth,
+  }) async {
+    return ApiService.releaseSeat(
+      ticketId: ticketId,
+      routeId: routeId,
+      authSession: auth,
+    );
+  }
+
+  /// Bulk release held seats
+  static Future<bool> bulkReleaseSeat({
+    required List<int> ticketIds,
+    int? routeId,
+    AuthSession? auth,
+  }) async {
+    return ApiService.bulkReleaseSeats(
+      ticketIds: ticketIds,
+      routeId: routeId,
+      authSession: auth,
+    );
+  }
+
+  /// Release pending held seats
+  static Future<bool> releasePendingHeldSeats([Map<String, dynamic>? pendingReservation]) async {
+    return releaseHeldSeats(reservation: pendingReservation);
+  }
+
+  static Future<void> clear({
+    bool releaseRemote = false,
+    bool releaseSeatsOnRailway = false,
+    List<int>? extraTicketIds,
+    int? routeId,
+  }) async {
+    if (releaseRemote || releaseSeatsOnRailway) {
       try {
         await releaseHeldSeats();
       } catch (_) {}
+      if (extraTicketIds != null && extraTicketIds.isNotEmpty) {
+        try {
+          await ApiService.bulkReleaseSeats(
+            ticketIds: extraTicketIds,
+            routeId: routeId,
+          );
+        } catch (_) {}
+      }
     }
+    _reserving = false;
+    _reservingStartedAt = null;
     await SecureStore.delete(storageKey);
     try {
       await NotificationService().clearAlerts();
@@ -293,10 +372,18 @@ class BookingService {
     BookingLayout? preparedLayout,
     bool allowVerificationPrompt = false,
   }) async {
+    final now = DateTime.now();
     if (_reserving) {
-      throw StateError('A reservation is already in progress. Please wait.');
+      if (_reservingStartedAt != null &&
+          now.difference(_reservingStartedAt!).inSeconds > 30) {
+        _reserving = false;
+        _reservingStartedAt = null;
+      } else {
+        throw StateError('A reservation is already in progress. Please wait.');
+      }
     }
     _reserving = true;
+    _reservingStartedAt = now;
     try {
       return await BookingActivity.instance.run(
         BookingActivityStage.reserving,
@@ -480,12 +567,23 @@ class BookingService {
               tripBody(state),
               auth,
             );
-            if (data['success'] != true) {
+            final bool isSuccess =
+                data['success'] == true ||
+                data['ack'] == 1 ||
+                data['status'] == 'success' ||
+                data['status'] == 'SUCCESS';
+            if (!isSuccess) {
               throw StateError(
                 'Railway did not confirm the passenger-details step.',
               );
             }
-            state['status'] = 'awaitingOtp';
+            final otpVerificationEnabled =
+                config['features']?['confirm_booking_otp_verification'] != false;
+            if (!otpVerificationEnabled) {
+              state['status'] = 'readyForPayment';
+            } else {
+              state['status'] = 'awaitingOtp';
+            }
             BookingActivity.instance.clearWorkerStage();
             state['seniorCitizenEligible'] =
                 data['senior_citizen_eligible'] == true;
@@ -548,7 +646,18 @@ class BookingService {
             return state;
           } catch (_) {
             // A timeout or rejection after some seats were held must retain the
-            // booking record. Replaying an auto-book could reserve seats twice.
+            // booking record and release held seats on Railway to avoid lockouts.
+            try {
+              final heldIds = List<int>.from(state['confirmedTicketIds'] ?? []);
+              final routeId = seat.tripRouteId;
+              if (heldIds.isNotEmpty && routeId != null) {
+                await ApiService.bulkReleaseSeats(
+                  ticketIds: heldIds,
+                  routeId: routeId,
+                  authSession: auth,
+                );
+              }
+            } catch (_) {}
             state['status'] = 'needsReview';
             await save(state);
             rethrow;
@@ -557,6 +666,7 @@ class BookingService {
       );
     } finally {
       _reserving = false;
+      _reservingStartedAt = null;
     }
   }
 
@@ -603,6 +713,9 @@ class BookingService {
       if (verifiedUser['name'] != null) {
         user['display_name'] = verifiedUser['name'];
       }
+      if (verifiedUser['email'] != null) {
+        user['email'] = verifiedUser['email'];
+      }
       final mobile = verifiedUser['mobile'] ?? verifiedUser['phone_number'];
       if (mobile != null && '$mobile'.isNotEmpty) {
         user['phone_number'] = '$mobile';
@@ -612,11 +725,8 @@ class BookingService {
     state['status'] = 'readyForPayment';
     state['otp'] = otp;
     state['verifiedAt'] = DateTime.now().toUtc().toIso8601String();
-    // Grant fresh 5-minute payment window after OTP verification
-    state['expiresAt'] = DateTime.now()
-        .add(Duration(minutes: reservationTimeoutMinutes))
-        .toUtc()
-        .toIso8601String();
+    // OTP verification does not renew the server's seat hold. Preserve the
+    // deadline established when Railway accepted the reservation.
     await save(state);
     // OTP verified: Status is ready for payment.
     // Remember: Credit is NOT deducted on OTP verification, only on successful booking!
@@ -741,9 +851,18 @@ class BookingService {
     final Map<String, dynamic> boardingPoint;
     if (boardingPoints != null && boardingPoints.isNotEmpty) {
       final first = Map<String, dynamic>.from(boardingPoints.first as Map);
-      first['station_name'] = first['station_name'] ?? first['location_name'] ?? state['from'] ?? '';
-      first['location_name'] = first['location_name'] ?? first['station_name'] ?? state['from'] ?? '';
-      first['trip_id'] = first['trip_id'] ?? state['seatClass']?['trip_id'] ?? 0;
+      first['station_name'] =
+          first['station_name'] ??
+          first['location_name'] ??
+          state['from'] ??
+          '';
+      first['location_name'] =
+          first['location_name'] ??
+          first['station_name'] ??
+          state['from'] ??
+          '';
+      first['trip_id'] =
+          first['trip_id'] ?? state['seatClass']?['trip_id'] ?? 0;
       first['trip_point_id'] = first['trip_point_id'] ?? 0;
       first['location_id'] = first['location_id'] ?? 0;
       first['location_time'] = first['location_time'] ?? state['date'] ?? '';
@@ -795,12 +914,12 @@ class BookingService {
     final exp = state['expiresAt'] != null
         ? DateTime.tryParse('${state['expiresAt']}')?.millisecondsSinceEpoch
         : null;
-    final nowMs = DateTime.now().millisecondsSinceEpoch;
-    // Always guarantee booking_continued_on is valid and in the future so Railway
-    // PurchaseModule never trips "Booking time limit is exceeded!" redirect.
-    final validExp = (exp != null && exp > nowMs + 60000)
-        ? exp
-        : nowMs + (reservationTimeoutMinutes * 60 * 1000);
+    // Keep the website countdown aligned with the actual seat hold, including
+    // the final minute. Reopening checkout cannot renew a server reservation.
+    if (state['status'] == 'readyForPayment' &&
+        (exp == null || exp <= DateTime.now().millisecondsSinceEpoch)) {
+      throw StateError('The reservation window has expired.');
+    }
 
     return {
       'initialPurchaseData$phone': purchaseData,
@@ -813,7 +932,7 @@ class BookingService {
       'initialPurchaseData': purchaseData,
       'initialPurchaseDataundefined': purchaseData,
       'initialPurchaseDatanull': purchaseData,
-      'booking_continued_on': '$validExp',
+      if (exp != null) 'booking_continued_on': '$exp',
       'is_senior_citizen': '${state['seniorCitizenEligible'] == true}',
       if (state['status'] == 'readyForPayment')
         'continue_booking_otp_verified': '1',
@@ -835,7 +954,8 @@ class BookingService {
         'Reservation fare is unavailable. Please reopen booking.',
       );
     }
-    final vatAmount = seat['vat_amount'] ?? state['seatClass']?['vat_amount'] ?? 0;
+    final vatAmount =
+        seat['vat_amount'] ?? state['seatClass']?['vat_amount'] ?? 0;
     return {
       ...seat,
       'fare': fare,
