@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 class WebSessionService {
   // Railway waits for location before submitting checkout. Its Promise catches
@@ -44,6 +45,37 @@ class WebSessionService {
         'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
       );
     }
+  }
+
+  /// Payment checkout browser. Gateways (bKash, SSLCommerz, banks) reject
+  /// requests that look like an embedded WebView or whose User-Agent does not
+  /// match the real engine version. Use the device's real WebView UA with the
+  /// WebView markers removed, and allow the third-party cookies that payment
+  /// redirects depend on. Login/session recovery keep using
+  /// [configureLoginBrowser] unchanged.
+  static Future<void> configurePaymentBrowser(
+    WebViewController controller,
+  ) async {
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final native = await controller.getUserAgent();
+        if (native != null && native.isNotEmpty) {
+          await controller.setUserAgent(
+            native
+                .replaceAll('; wv)', ')')
+                .replaceAll(RegExp(r'Version/\d+\.\d+\s'), ''),
+          );
+        }
+      } catch (_) {}
+    }
+    try {
+      final platform = controller.platform;
+      final cookies = WebViewCookieManager().platform;
+      if (platform is AndroidWebViewController &&
+          cookies is AndroidWebViewCookieManager) {
+        await cookies.setAcceptThirdPartyCookies(platform, true);
+      }
+    } catch (_) {}
   }
 
   static bool isRailwayUrl(String? value) {

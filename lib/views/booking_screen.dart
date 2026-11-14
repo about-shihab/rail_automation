@@ -12,7 +12,9 @@ import '../services/web_session_service.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/auth_session.dart';
 import '../utils/app_theme.dart';
@@ -130,6 +132,23 @@ class _BookingScreenState extends State<BookingScreen> {
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setNavigationDelegate(
           NavigationDelegate(
+            onNavigationRequest: (request) async {
+              final scheme =
+                  Uri.tryParse(request.url)?.scheme.toLowerCase() ?? '';
+              if (scheme == 'http' ||
+                  scheme == 'https' ||
+                  scheme == 'about' ||
+                  scheme == 'data' ||
+                  scheme == 'blob' ||
+                  scheme == 'javascript') {
+                return NavigationDecision.navigate;
+              }
+              // Payment apps (bKash, Nagad, Rocket, banks) redirect to
+              // intent:// or custom schemes. A WebView cannot load those, so
+              // hand them to the OS instead of failing with "Payment Cancelled".
+              await _openExternalPaymentLink(request.url);
+              return NavigationDecision.prevent;
+            },
             onPageStarted: (url) {
               if (mounted) setState(() => _loading = true);
               if (WebSessionService.isRailwayUrl(url) && storage.isNotEmpty) {
@@ -351,7 +370,7 @@ class _BookingScreenState extends State<BookingScreen> {
           ),
         );
 
-      await WebSessionService.configureLoginBrowser(controller);
+      await WebSessionService.configurePaymentBrowser(controller);
       if (!mounted) return;
       setState(() => _controller = controller);
       // A blank document on the Railway origin lets us restore storage before
@@ -379,6 +398,50 @@ class _BookingScreenState extends State<BookingScreen> {
           _loading = false;
           _bootstrapping = false;
         });
+      }
+    }
+  }
+
+  Future<void> _openExternalPaymentLink(String raw) async {
+    try {
+      var target = raw;
+      if (raw.toLowerCase().startsWith('intent:')) {
+        final fallback = RegExp(
+          r'S\.browser_fallback_url=([^;]+)',
+        ).firstMatch(raw)?.group(1);
+        final scheme = RegExp(r';scheme=([^;]+)').firstMatch(raw)?.group(1);
+        if (scheme != null) {
+          target = raw
+              .replaceFirst(RegExp(r'^intent:', caseSensitive: false), scheme + ':')
+              .split('#Intent')
+              .first;
+        } else if (fallback != null) {
+          target = Uri.decodeComponent(fallback);
+        }
+      }
+      final uri = Uri.tryParse(target);
+      if (uri == null) return;
+      if (uri.scheme == 'http' || uri.scheme == 'https') {
+        await _controller?.loadRequest(uri);
+        return;
+      }
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open the payment app. Install it or choose another payment method.',
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open the payment app.'),
+          ),
+        );
       }
     }
   }

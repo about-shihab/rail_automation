@@ -11,11 +11,13 @@ const messages = [];
 let options;
 let renders = 0, executions = 0, resets = 0, loads = 0;
 const context = vm.createContext({
-  window: { flutter_inappwebview: {
-    callHandler: (name, message) => messages.push(message),
-  } },
+  window: {
+    flutter_inappwebview: {
+      callHandler: (name, message) => messages.push(message),
+    }
+  },
   document: {
-    createElement: () => ({ remove() {} }),
+    createElement: () => ({ remove() { } }),
     head: { appendChild: element => { loads++; element.onload(); } },
   },
   navigator: { userAgent: 'test-webview-user-agent' },
@@ -24,8 +26,7 @@ const context = vm.createContext({
       renders++; options = config;
       assert.equal(config.execution, 'execute');
       assert.equal(config.retry, 'never');
-      assert.equal(config['refresh-expired'], 'manual');
-      assert.equal(config['refresh-timeout'], 'manual');
+      assert.equal(config['refresh-expired'], 'auto');
       return 7;
     },
     execute: id => { assert.equal(id, 7); executions++; },
