@@ -327,6 +327,16 @@ class TurnstileGate {
         !interactive.isCompleted) {
       interactive.complete();
     }
+    Timer? iosExposeTimer;
+    final exposeInteractive = Completer<({bool interactive, String? token})>();
+    if (_exposesBrowserOnIos(label, allowPrompt)) {
+      iosExposeTimer = Timer(_iosExposeAfter, () {
+        if (!exposeInteractive.isCompleted) {
+          exposeInteractive.complete((interactive: true, token: null));
+        }
+      });
+    }
+
     try {
       watchInteraction();
       final result = await Future.any<({bool interactive, String? token})>([
@@ -337,10 +347,7 @@ class TurnstileGate {
         // the seat-layout token just times out). If the silent solve has not
         // finished quickly, bring the verification card up so the browser is
         // exposed and can complete. Android never takes this branch.
-        if (_exposesBrowserOnIos(label, allowPrompt))
-          Future<void>.delayed(
-            _iosExposeAfter,
-          ).then((_) => (interactive: true, token: null)),
+        if (_exposesBrowserOnIos(label, allowPrompt)) exposeInteractive.future,
       ]);
       if (!result.interactive) {
         final token = result.token;
@@ -360,6 +367,7 @@ class TurnstileGate {
       }
       return await _showInteraction(label, request);
     } finally {
+      iosExposeTimer?.cancel();
       session.removeListener(watchInteraction);
     }
   }

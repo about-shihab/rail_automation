@@ -14,7 +14,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/auth_session.dart';
 import '../utils/app_theme.dart';
@@ -412,7 +411,7 @@ class _BookingScreenState extends State<BookingScreen> {
         final scheme = RegExp(r';scheme=([^;]+)').firstMatch(raw)?.group(1);
         if (scheme != null) {
           target = raw
-              .replaceFirst(RegExp(r'^intent:', caseSensitive: false), scheme + ':')
+              .replaceFirst(RegExp(r'^intent:', caseSensitive: false), '$scheme:')
               .split('#Intent')
               .first;
         } else if (fallback != null) {
