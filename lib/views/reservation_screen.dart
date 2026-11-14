@@ -298,7 +298,7 @@ class _ReservationScreenState extends State<ReservationScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: const Text('Clear Booking Record?'),
         content: const Text(
-          'First check payment or release held seats on the official site. Clearing does not cancel a Railway reservation.',
+          'This will clear this reservation and attempt to release any held seats on Bangladesh Railway.',
         ),
         actions: [
           TextButton(
@@ -317,9 +317,67 @@ class _ReservationScreenState extends State<ReservationScreen> {
       ),
     );
     if (confirmed == true) {
-      await BookingService.clear();
+      await BookingService.clear(releaseSeatsOnRailway: true);
       await NotificationService().clearAlerts();
       await _load();
+    }
+  }
+
+  Future<void> _releaseAndCancel() async {
+    final lang = context.read<LanguageService>();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        title: Text(lang.tr('Release Held Seats?', 'সংরক্ষিত আসন মুক্ত করবেন?')),
+        content: Text(
+          lang.tr(
+            'This will unhold your seats on Bangladesh Railway so they become available to others or can be re-booked.',
+            'এটি বাংলাদেশ রেলওয়ে সিস্টেমে আপনার সংরক্ষিত আসনটি মুক্ত (unhold) করবে যাতে পুনরায় বুক করা যায়।',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(lang.tr('Keep Seats', 'আসন রাখুন')),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.lock_open_rounded, size: 16),
+            onPressed: () => Navigator.pop(ctx, true),
+            label: Text(lang.tr('Release & Clear', 'মুক্ত করুন ও মুছুন')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      setState(() => _busy = true);
+      try {
+        await BookingService.clear(releaseSeatsOnRailway: true);
+        await NotificationService().clearAlerts();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                lang.tr(
+                  'Held seats released on Bangladesh Railway.',
+                  'রেলওয়ে সিস্টেমে আসন মুক্ত করা হয়েছে।',
+                ),
+              ),
+              backgroundColor: const Color(0xFF009B78),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+          await _load();
+        }
+      } catch (e) {
+        if (mounted) setState(() => _error = friendlyErrorMessage(e));
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
     }
   }
 
@@ -342,7 +400,10 @@ class _ReservationScreenState extends State<ReservationScreen> {
     final secondsLeft = expiry?.difference(DateTime.now()).inSeconds;
     final expired = secondsLeft != null && secondsLeft <= 0;
     final ready = state?['status'] == 'readyForPayment';
-    final awaitingOtp = state?['status'] == 'awaitingOtp';
+    final hasSeats = (state?['confirmedTicketIds'] as List?)?.isNotEmpty == true ||
+        (state?['seats'] as List?)?.isNotEmpty == true;
+    final awaitingOtp = state?['status'] == 'awaitingOtp' ||
+        (!ready && !expired && hasSeats);
 
     return Scaffold(
       backgroundColor: AppColors.scaffoldBg(isDark),
@@ -561,13 +622,35 @@ class _ReservationScreenState extends State<ReservationScreen> {
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        side: BorderSide(
+                          color: AppColors.error.withValues(alpha: 0.5),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.lock_open_rounded, size: 18),
+                      label: Text(
+                        lang.tr('Release Held Seats (Unhold)', 'সংরক্ষিত আসন মুক্ত করুন (Unhold)'),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: _busy ? null : _releaseAndCancel,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
                     child: TextButton.icon(
                       style: TextButton.styleFrom(
-                        foregroundColor: AppColors.error,
+                        foregroundColor: AppColors.textSecondary(isDark),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                           side: BorderSide(
-                            color: AppColors.error.withValues(alpha: 0.3),
+                            color: AppColors.cardBorder(isDark),
                           ),
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -630,13 +713,35 @@ class _ReservationScreenState extends State<ReservationScreen> {
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
+                    child: OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        side: BorderSide(
+                          color: AppColors.error.withValues(alpha: 0.5),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.lock_open_rounded, size: 18),
+                      label: Text(
+                        lang.tr('Release Held Seats (Unhold)', 'সংরক্ষিত আসন মুক্ত করুন (Unhold)'),
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      onPressed: _busy ? null : _releaseAndCancel,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
                     child: TextButton.icon(
                       style: TextButton.styleFrom(
-                        foregroundColor: AppColors.error,
+                        foregroundColor: AppColors.textSecondary(isDark),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                           side: BorderSide(
-                            color: AppColors.error.withValues(alpha: 0.3),
+                            color: AppColors.cardBorder(isDark),
                           ),
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 12),

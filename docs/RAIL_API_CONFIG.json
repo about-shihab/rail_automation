@@ -86,6 +86,31 @@
         "extras": "{{extras}}"
       }
     },
+    "release_seat": {
+      "enabled": true,
+      "method": "PATCH",
+      "timeout_seconds": 20,
+      "retries": 0,
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/release-seat",
+      "min_interval_seconds": 0,
+      "payload": {
+        "ticket_id": "{{ticket_id}}",
+        "route_id": "{{route_id}}"
+      }
+    },
+    "bulk_release_seat": {
+      "enabled": true,
+      "method": "PATCH",
+      "timeout_seconds": 20,
+      "retries": 0,
+      "url": "https://railspaapi.shohoz.com/v1.0/web/bookings/bulk-release-seat",
+      "min_interval_seconds": 0,
+      "payload": {
+        "ticket_id": "{{ticket_id}}",
+        "ticket_ids": "{{ticket_ids}}",
+        "route_id": "{{route_id}}"
+      }
+    },
     "passenger_details": {
       "enabled": true,
       "timeout_seconds": 20,

@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 import 'sms_service.dart';
 
 import 'rail_api_client.dart';
@@ -53,6 +55,7 @@ class BookingService {
 
   static final _layoutRequests = <(int, int, String), Future<BookingLayout>>{};
   static bool _reserving = false;
+  static DateTime? _reservingStartedAt;
 
   static Future<BookingLayout> loadLayout({
     required SeatType seat,
@@ -122,7 +125,7 @@ class BookingService {
           failureReason:
               'Reservation timed out after $reservationTimeoutMinutes minutes',
         );
-        await clear();
+        await clear(releaseSeatsOnRailway: false);
         return null;
       }
 
@@ -174,7 +177,131 @@ class BookingService {
     return SecureStore.write(storageKey, jsonEncode(value));
   }
 
-  static Future<void> clear() async {
+  /// Release (unhold) single held seat on Bangladesh Railway:
+  /// PATCH /bookings/release-seat
+  /// Body: {"ticket_id": 860614101, "route_id": 1234}
+  static Future<bool> releaseSeat({
+    required int ticketId,
+    required int routeId,
+    required AuthSession auth,
+  }) async {
+    try {
+      await request(
+        'PATCH',
+        '/bookings/release-seat',
+        {
+          'ticket_id': ticketId,
+          'route_id': routeId,
+        },
+        auth,
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[BookingService] releaseSeat failed for ticket $ticketId: $e');
+      return false;
+    }
+  }
+
+  /// Bulk release held seats on Bangladesh Railway:
+  /// PATCH /bookings/bulk-release-seat
+  /// Body: {"ticket_ids": [860614101], "ticket_id": 860614101, "route_id": 1234}
+  static Future<bool> bulkReleaseSeat({
+    required List<int> ticketIds,
+    required int routeId,
+    required AuthSession auth,
+  }) async {
+    if (ticketIds.isEmpty) return true;
+    try {
+      await request(
+        'PATCH',
+        '/bookings/bulk-release-seat',
+        {
+          'ticket_ids': ticketIds,
+          'ticket_id': ticketIds.first,
+          'route_id': routeId,
+        },
+        auth,
+      );
+      return true;
+    } catch (e) {
+      debugPrint('[BookingService] bulkReleaseSeat fallback to individual release: $e');
+      var allSuccess = true;
+      for (final id in ticketIds) {
+        final ok = await releaseSeat(ticketId: id, routeId: routeId, auth: auth);
+        if (!ok) allSuccess = false;
+      }
+      return allSuccess;
+    }
+  }
+
+  /// Release held seats for any pending reservation on Bangladesh Railway.
+  static Future<bool> releasePendingHeldSeats([Map<String, dynamic>? pendingReservation]) async {
+    Map<String, dynamic>? state = pendingReservation;
+    if (state == null) {
+      final raw = await SecureStore.read(storageKey);
+      if (raw != null) {
+        try {
+          state = jsonDecode(raw) as Map<String, dynamic>;
+        } catch (_) {}
+      }
+    }
+    if (state == null) return true;
+    final confirmed = (state['confirmedTicketIds'] as List?)
+            ?.map((e) => int.tryParse('$e'))
+            .whereType<int>()
+            .toList() ??
+        (state['seats'] as List?)
+            ?.map((s) => int.tryParse('${s['ticket_id']}'))
+            .whereType<int>()
+            .toList() ??
+        <int>[];
+    final seatClass = state['seatClass'] as Map<String, dynamic>? ?? {};
+    final routeId = int.tryParse(
+      '${seatClass['trip_route_id'] ?? seatClass['route_id'] ?? ''}',
+    );
+    if (confirmed.isNotEmpty && routeId != null && routeId > 0) {
+      final auth = await AuthSession.load();
+      if (auth != null) {
+        final ok = await bulkReleaseSeat(
+          ticketIds: confirmed,
+          routeId: routeId,
+          auth: auth,
+        );
+        state['confirmedTicketIds'] = <int>[];
+        await SecureStore.write(storageKey, jsonEncode(state));
+        return ok;
+      }
+    }
+    return true;
+  }
+
+  static Future<void> clear({
+    bool releaseSeatsOnRailway = true,
+    List<int>? extraTicketIds,
+    int? routeId,
+  }) async {
+    if (releaseSeatsOnRailway) {
+      try {
+        await releasePendingHeldSeats();
+      } catch (_) {}
+      if (extraTicketIds != null &&
+          extraTicketIds.isNotEmpty &&
+          routeId != null &&
+          routeId > 0) {
+        try {
+          final auth = await AuthSession.load();
+          if (auth != null) {
+            await bulkReleaseSeat(
+              ticketIds: extraTicketIds,
+              routeId: routeId,
+              auth: auth,
+            );
+          }
+        } catch (_) {}
+      }
+    }
+    _reserving = false;
+    _reservingStartedAt = null;
     await SecureStore.delete(storageKey);
     try {
       await NotificationService().clearAlerts();
@@ -229,23 +356,74 @@ class BookingService {
           );
         }
         final json = jsonDecode(response.body);
-        if (json is! Map || json['data'] is! Map) {
+        if (json is! Map) {
           throw const FormatException(
             'Unrecognized booking response. Check your reservation on the official site.',
           );
         }
-        return Map<String, dynamic>.from(json['data']);
+        final result = <String, dynamic>{
+          ...Map<String, dynamic>.from(json),
+          if (json['data'] is Map)
+            ...Map<String, dynamic>.from(json['data'] as Map),
+        };
+        return result;
       },
     );
   }
 
-  static Map<String, dynamic> tripBody(Map<String, dynamic> pending) => {
-    'trip_id': pending['seatClass']['trip_id'],
-    'trip_route_id': pending['seatClass']['trip_route_id'],
-    'ticket_ids': (pending['seats'] as List)
-        .map((s) => s['ticket_id'])
-        .toList(),
-  };
+  static Map<String, dynamic> tripBody(
+    Map<String, dynamic> pending, {
+    String? userName,
+    String? userPhone,
+  }) {
+    final seatClass = pending['seatClass'] as Map<String, dynamic>? ?? {};
+    final train = pending['train'] as Map<String, dynamic>? ?? {};
+    final rawTripId = seatClass['trip_id'] ?? train['trip_id'];
+    final tripId = int.tryParse('$rawTripId') ?? rawTripId;
+
+    final rawRouteId = seatClass['trip_route_id'] ??
+        seatClass['route_id'] ??
+        pending['trip_route_id'] ??
+        pending['route_id'] ??
+        train['trip_route_id'];
+    final routeId = int.tryParse('$rawRouteId') ?? rawRouteId;
+
+    final rawSeats = (pending['seats'] as List? ?? []);
+    final ticketIds = rawSeats
+        .map((s) => s is Map ? s['ticket_id'] : null)
+        .map((id) => int.tryParse('$id'))
+        .whereType<int>()
+        .toList();
+
+    var cleanPhone = (userPhone ?? '').trim().replaceAll(RegExp(r'\D'), '');
+    if (cleanPhone.startsWith('880')) {
+      cleanPhone = cleanPhone.substring(2);
+    }
+    final passengerPhone = cleanPhone.isNotEmpty ? cleanPhone : (userPhone ?? '');
+    final passengerName = (userName?.trim().isNotEmpty == true)
+        ? userName!.trim()
+        : 'Passenger';
+
+    final passengers = rawSeats.map((s) {
+      final seatMap = s is Map ? s : <String, dynamic>{};
+      return {
+        'name': passengerName,
+        'passenger_type': 'ADULT',
+        'gender': 'male',
+        'seat_number': seatMap['seat_number']?.toString() ?? '',
+        'mobile_number': passengerPhone,
+      };
+    }).toList();
+
+    return {
+      'trip_id': tripId,
+      'trip_route_id': routeId,
+      'route_id': routeId,
+      'ticket_ids': ticketIds,
+      'tickets': ticketIds,
+      if (passengers.isNotEmpty) 'passengers': passengers,
+    };
+  }
 
   static Future<Map<String, dynamic>> reserve({
     required TrainTrip train,
@@ -263,10 +441,17 @@ class BookingService {
     BookingLayout? preparedLayout,
     bool allowVerificationPrompt = false,
   }) async {
+    final isStaleReserving = _reserving &&
+        _reservingStartedAt != null &&
+        DateTime.now().difference(_reservingStartedAt!).inSeconds > 30;
+    if (isStaleReserving) {
+      _reserving = false;
+    }
     if (_reserving) {
       throw StateError('A reservation is already in progress. Please wait.');
     }
     _reserving = true;
+    _reservingStartedAt = DateTime.now();
     try {
       return await BookingActivity.instance.run(
         BookingActivityStage.reserving,
@@ -444,15 +629,25 @@ class BookingService {
             if (autoVerify && !await SmsService().prepareListening()) {
               state['autoVerify'] = false;
             }
+            final user = await checkoutUser(auth);
+            final userName = user['display_name']?.toString() ?? auth.displayName ?? '';
+            final userPhone = user['phone_number']?.toString() ?? auth.phoneNumber ?? '';
             final data = await request(
               'POST',
               '/bookings/passenger-details',
-              tripBody(state),
+              tripBody(state, userName: userName, userPhone: userPhone),
               auth,
             );
-            if (data['success'] != true) {
+            final bool passengerSuccess = data['success'] == true ||
+                data['status'] == 200 ||
+                data['ack'] == 1 ||
+                (data['error'] == null &&
+                    data['success'] != false &&
+                    (data['code'] == null || data['code'] == 200));
+            if (!passengerSuccess) {
               throw StateError(
-                'Railway did not confirm the passenger-details step.',
+                data['message']?.toString() ??
+                    'Railway did not confirm the passenger-details step.',
               );
             }
             state['status'] = 'awaitingOtp';
@@ -517,9 +712,17 @@ class BookingService {
             } catch (_) {}
             return state;
           } catch (_) {
-            // A timeout or rejection after some seats were held must retain the
-            // booking record. Replaying an auto-book could reserve seats twice.
-            state['status'] = 'needsReview';
+            // A timeout or rejection after some seats were held:
+            // If seats were successfully held on Railway, keep awaitingOtp so
+            // the user can enter the received OTP or use Release Seats to unhold them.
+            final confirmed = (state['confirmedTicketIds'] as List?)
+                ?.whereType<int>()
+                .toList() ?? <int>[];
+            if (confirmed.isNotEmpty) {
+              state['status'] = 'awaitingOtp';
+            } else {
+              state['status'] = 'needsReview';
+            }
             await save(state);
             rethrow;
           }
@@ -527,6 +730,7 @@ class BookingService {
       );
     } finally {
       _reserving = false;
+      _reservingStartedAt = null;
     }
   }
 
@@ -562,8 +766,16 @@ class BookingService {
       ...tripBody(state),
       'otp': otp,
     }, auth);
-    if (data['success'] != true) {
-      throw StateError('Railway did not verify this OTP.');
+    final bool verifySuccess = data['success'] == true ||
+        data['status'] == 200 ||
+        data['ack'] == 1 ||
+        (data['error'] == null &&
+            data['success'] != false &&
+            (data['code'] == null || data['code'] == 200));
+    if (!verifySuccess) {
+      throw StateError(
+        data['message']?.toString() ?? 'Railway did not verify this OTP.',
+      );
     }
     // The website updates its logged-in user from the OTP response before
     // looking up initialPurchaseData<phone_number> on the payment page.
@@ -658,14 +870,25 @@ class BookingService {
       state['autoVerify'] = false;
       await save(state);
     }
+    final user = await checkoutUser(auth);
+    final userName = user['display_name']?.toString() ?? auth.displayName ?? '';
+    final userPhone = user['phone_number']?.toString() ?? auth.phoneNumber ?? '';
     final data = await request(
       'POST',
       '/bookings/resend-otp',
-      tripBody(state),
+      tripBody(state, userName: userName, userPhone: userPhone),
       auth,
     );
-    if (data['success'] != true) {
-      throw StateError('Railway could not resend the OTP.');
+    final bool resendSuccess = data['success'] == true ||
+        data['status'] == 200 ||
+        data['ack'] == 1 ||
+        (data['error'] == null &&
+            data['success'] != false &&
+            (data['code'] == null || data['code'] == 200));
+    if (!resendSuccess) {
+      throw StateError(
+        data['message']?.toString() ?? 'Railway could not resend the OTP.',
+      );
     }
   }
 

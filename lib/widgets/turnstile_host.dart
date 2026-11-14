@@ -161,13 +161,21 @@ class _TurnstileHostState extends State<TurnstileHost>
             child: SizedBox(width: 150, height: 170, child: browser),
           ),
           builder: (context, child) {
-            final visible = session.phase == TurnstilePhase.interactive;
+            final interactive = session.phase == TurnstilePhase.interactive;
+            // iOS: while the verification card is up, paint the WKWebView
+            // even before Cloudflare asks for interaction, and keep it
+            // (almost) painted at other times so it stays in the window.
+            final iosExposed =
+                _isIos &&
+                session.exposed &&
+                (session.phase == TurnstilePhase.connecting || interactive);
+            final visible = interactive || iosExposed;
             return IgnorePointer(
               ignoring: !visible,
               child: ExcludeSemantics(
                 excluding: !visible,
                 child: Opacity(
-                  opacity: visible ? 1 : 0,
+                  opacity: visible ? 1 : (_isIos ? 0.011 : 0),
                   child: CompositedTransformFollower(
                     link: session.challengeLink,
                     showWhenUnlinked: true,

@@ -23,6 +23,18 @@ class TurnstileSession extends ChangeNotifier {
   String? userAgent;
   String _siteKey = defaultSiteKey;
 
+  bool _exposed = false;
+
+  /// iOS only: the verification card is on screen and hosts the browser.
+  /// A WKWebView that is not painted never finishes the Turnstile check.
+  bool get exposed => _exposed;
+  void setExposed(bool value) {
+    if (_exposed == value) return;
+    _exposed = value;
+    // May be called while the widget tree is locked (init/dispose).
+    scheduleMicrotask(notifyListeners);
+  }
+
   bool get attached => _evaluate != null;
   bool get generating => _pending != null;
 

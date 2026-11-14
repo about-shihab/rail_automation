@@ -67,6 +67,7 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
     super.initState();
     _suppliedRequest = widget.tokenRequest;
     _session.addListener(_onSessionChanged);
+    if (_isIos) _session.setExposed(true);
   }
 
   @override
@@ -92,6 +93,7 @@ class _TicketProcessingOverlayState extends State<TicketProcessingOverlay>
   @override
   void dispose() {
     _session.removeListener(_onSessionChanged);
+    if (_isIos) _session.setExposed(false);
     if (_hasPendingRequest) _session.cancel();
     _loop.dispose();
     _pulse.dispose();
