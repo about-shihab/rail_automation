@@ -137,17 +137,21 @@ void main() {
   );
 
   for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
-    testWidgets('checkout retains login browser identity: $platform', (
+    testWidgets('checkout sets unified browser identity for payment: $platform', (
       tester,
     ) async {
       debugDefaultTargetPlatformOverride = platform;
       try {
-        final login = WebViewController();
-        await WebSessionService.configureLoginBrowser(login);
-        final loginIdentity = List.of(webview.controller.userAgentOverrides);
         final checkout = WebViewController();
         await WebSessionService.configurePaymentBrowser(checkout);
-        expect(webview.controller.userAgentOverrides, loginIdentity);
+        if (platform == TargetPlatform.android) {
+          expect(
+            webview.controller.userAgentOverrides.last,
+            WebSessionService.checkoutUserAgent,
+          );
+        } else {
+          expect(webview.controller.userAgentOverrides, isEmpty);
+        }
       } finally {
         debugDefaultTargetPlatformOverride = null;
       }
@@ -297,7 +301,7 @@ void main() {
     }
   });
 
-  testWidgets('Android opens the gateway once and verifies payment on return', (
+  testWidgets('Android keeps the payment gateway in-app so bKash pops up', (
     tester,
   ) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -326,29 +330,9 @@ void main() {
           expect(launches, isEmpty);
           expect(
             await navigate(NavigationRequest(url: gateway, isMainFrame: true)),
-            NavigationDecision.prevent,
+            NavigationDecision.navigate,
           );
-          expect(
-            await navigate(NavigationRequest(url: gateway, isMainFrame: true)),
-            NavigationDecision.prevent,
-          );
-          expect(launches, hasLength(1));
-          expect((launches.single.arguments as Map)['url'], gateway);
-          await tester.pump(const Duration(milliseconds: 50));
-          expect(find.text('Check payment'), findsOneWidget);
-          tester.binding.handleAppLifecycleStateChanged(
-            AppLifecycleState.inactive,
-          );
-          tester.binding.handleAppLifecycleStateChanged(
-            AppLifecycleState.resumed,
-          );
-          await tester.pump(const Duration(milliseconds: 50));
-          expect(
-            (await BookingService.pending())?['status'],
-            'readyForPayment',
-            reason: 'Returning from a browser is not proof of payment',
-          );
-          await tester.tap(find.text('Check payment'));
+          expect(launches, isEmpty, reason: 'bKash should pop up in-app without opening another tab');
           await tester.pump(const Duration(milliseconds: 50));
           expect(
             (await BookingService.pending())?['status'],
@@ -367,29 +351,17 @@ void main() {
     }
   });
 
-  test('browser handoff matches only the secure official Android gateway', () {
+  test('payment gateways stay in-app so bKash pops up without opening another tab', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     try {
-      expect(
-        WebSessionService.usesAndroidPaymentBrowser(
-          'https://train-pay.shohoz.com/bkash/order',
-        ),
-        isTrue,
-      );
       for (final url in [
+        'https://train-pay.shohoz.com/bkash/order',
         BookingService.tripInfoUrl,
         'http://train-pay.shohoz.com/bkash/order',
         'https://train-pay.shohoz.com.example.org/bkash/order',
       ]) {
         expect(WebSessionService.usesAndroidPaymentBrowser(url), isFalse);
       }
-      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-      expect(
-        WebSessionService.usesAndroidPaymentBrowser(
-          'https://train-pay.shohoz.com/bkash/order',
-        ),
-        isFalse,
-      );
     } finally {
       debugDefaultTargetPlatformOverride = null;
     }

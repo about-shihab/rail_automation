@@ -66,6 +66,7 @@ void main() {
           );
           await tester.pump(const Duration(milliseconds: 100));
           await tester.enterText(find.byType(TextField), '123456');
+          await tester.pump(const Duration(milliseconds: 100));
           await tester.ensureVisible(find.text('Verify OTP'));
           await tester.tap(find.text('Verify OTP'));
           await tester.pump(const Duration(milliseconds: 100));

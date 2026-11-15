@@ -588,38 +588,32 @@ class _ReservationScreenState extends State<ReservationScreen> {
                     ],
                   ),
                 ] else if (awaitingOtp) ...[
-                  PrimaryButton(
-                    label: lang.tr(
-                      'Verify OTP & Proceed to Payment',
-                      'ওটিপি যাচাই ও পেমেন্টে যান',
-                    ),
-                    icon: Icons.check_circle_rounded,
-                    loading: _busy,
-                    onPressed: _busy ? null : _verify,
-                  ),
-                  const SizedBox(height: 10),
-                  TextButton.icon(
-                    style: TextButton.styleFrom(
-                      foregroundColor: AppColors.primary,
-                      padding: const EdgeInsets.symmetric(vertical: 8),
-                    ),
-                    icon: const Icon(Icons.open_in_browser_rounded, size: 16),
-                    label: Text(
-                      lang.tr(
-                        'Open Railway Booking Page',
-                        'রেলওয়ে বুকিং পেজ খুলুন',
+                  // The OTP card already has the primary "Verify OTP" and "Resend" buttons.
+                  // Only provide the link to open Railway and the release option here.
+                  Center(
+                    child: TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.primary,
+                        padding: const EdgeInsets.symmetric(vertical: 8),
                       ),
-                      style: const TextStyle(fontSize: 13),
-                    ),
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) =>
-                            BookingScreen(url: BookingService.tripInfoUrl),
+                      icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+                      label: Text(
+                        lang.tr(
+                          'Open Railway Booking Page',
+                          'রেলওয়ে বুকিং পেজ খুলুন',
+                        ),
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                      onPressed: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              BookingScreen(url: BookingService.tripInfoUrl),
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -639,25 +633,6 @@ class _ReservationScreenState extends State<ReservationScreen> {
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       onPressed: _busy ? null : _releaseAndCancel,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary(isDark),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(
-                            color: AppColors.cardBorder(isDark),
-                          ),
-                        ),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                      icon: const Icon(Icons.delete_outline_rounded, size: 18),
-                      label: Text(lang.tr('Clear record', 'রেকর্ড মুছুন')),
-                      onPressed: _clearBooking,
                     ),
                   ),
                 ] else ...[

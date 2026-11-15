@@ -115,13 +115,10 @@ class WebSessionService {
     return uri?.scheme == 'https' && uri?.host == 'train-pay.shohoz.com';
   }
 
-  /// Preserved for platform verification tests and gateway identification.
-  static bool usesAndroidPaymentBrowser(String value) {
-    final uri = Uri.tryParse(value);
-    return defaultTargetPlatform == TargetPlatform.android &&
-        uri?.scheme == 'https' &&
-        uri?.host == 'train-pay.shohoz.com';
-  }
+  /// Payment gateways (train-pay.shohoz.com) stay inside the app WebView
+  /// using [checkoutUserAgent], allowing bKash / payment modals to pop up
+  /// directly within the page instead of opening in a separate browser tab.
+  static bool usesAndroidPaymentBrowser(String value) => false;
 
   static Future<void> clear() async {
     final controller = WebViewController();
