@@ -2,15 +2,17 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:webview_flutter_platform_interface/webview_flutter_platform_interface.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'package:rail_automation/models/auth_session.dart';
 import 'package:rail_automation/services/api_service.dart';
 import 'package:rail_automation/services/booking_service.dart';
+import 'package:rail_automation/services/language_service.dart';
 import 'package:rail_automation/services/sms_service.dart';
 import 'package:rail_automation/services/secure_store.dart';
 import 'package:rail_automation/services/web_session_service.dart';
@@ -24,7 +26,8 @@ void main() {
   late FakeWebViewPlatform webview;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'app_language_code': 'en'});
+    await LanguageService.instance.setLanguage(AppLanguage.en);
     FlutterSecureStorage.setMockInitialValues({});
     webview = FakeWebViewPlatform();
     WebViewPlatform.instance = webview;
@@ -134,6 +137,22 @@ void main() {
   );
 
   for (final platform in [TargetPlatform.iOS, TargetPlatform.android]) {
+    testWidgets('checkout retains login browser identity: $platform', (
+      tester,
+    ) async {
+      debugDefaultTargetPlatformOverride = platform;
+      try {
+        final login = WebViewController();
+        await WebSessionService.configureLoginBrowser(login);
+        final loginIdentity = List.of(webview.controller.userAgentOverrides);
+        final checkout = WebViewController();
+        await WebSessionService.configurePaymentBrowser(checkout);
+        expect(webview.controller.userAgentOverrides, loginIdentity);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+
     testWidgets('checkout location timeout is scoped to iOS: $platform', (
       tester,
     ) async {
@@ -182,6 +201,199 @@ void main() {
       }
     });
   }
+
+  testWidgets('gateway return cannot restore consumed checkout tokens', (
+    tester,
+  ) async {
+    await http.runWithClient(
+      () async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: BookingScreen(url: BookingService.tripInfoUrl),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        final controller = webview.controller;
+        expect(
+          controller.scripts.first,
+          isNot(contains('sessionStorage.removeItem =')),
+        );
+        final count = controller.scripts.length;
+        controller.delegate!.pageStarted!(BookingService.tripInfoUrl);
+        controller.delegate!.pageFinished!(BookingService.tripInfoUrl);
+        await tester.pump();
+        expect(
+          controller.scripts.length,
+          count + 1,
+          reason: 'The website owns action-token rotation after bootstrap',
+        );
+        expect(
+          controller.scripts.last,
+          WebSessionService.checkoutAppearanceScript,
+        );
+        await controller.delegate!.navigationRequest!(
+          NavigationRequest(
+            url: 'https://payment.example/checkout',
+            isMainFrame: false,
+          ),
+        );
+        await controller.delegate!.navigationRequest!(
+          NavigationRequest(
+            url: 'https://payment.example/checkout',
+            isMainFrame: true,
+          ),
+        );
+        controller.delegate!.pageFinished!(
+          'https://eticket.railway.gov.bd/booking/train/search',
+        );
+        await tester.pump();
+        expect(
+          controller.scripts.length,
+          count + 1,
+          reason: 'Do not resurrect a consumed reservation on gateway return',
+        );
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+      () =>
+          MockClient((_) async => http.Response(jsonEncode({'data': []}), 200)),
+    );
+  });
+
+  testWidgets('missing payment app uses the intent web fallback', (
+    tester,
+  ) async {
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async => false);
+    try {
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            const MaterialApp(
+              home: BookingScreen(url: BookingService.tripInfoUrl),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+          final decision =
+              await webview.controller.delegate!.navigationRequest!(
+                NavigationRequest(
+                  url:
+                      'intent://pay#Intent;scheme=bkash;'
+                      'S.browser_fallback_url=https%3A%2F%2Fpayment.example%2Fcheckout;end',
+                  isMainFrame: true,
+                ),
+              );
+          expect(decision, NavigationDecision.prevent);
+          expect(webview.controller.url, 'https://payment.example/checkout');
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient(
+          (_) async => http.Response(jsonEncode({'data': []}), 200),
+        ),
+      );
+    } finally {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
+  });
+
+  testWidgets('Android opens the gateway once and verifies payment on return', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    final launches = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          launches.add(call);
+          return true;
+        });
+    try {
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            const MaterialApp(
+              home: BookingScreen(url: BookingService.tripInfoUrl),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+          final navigate = webview.controller.delegate!.navigationRequest!;
+          const gateway = 'https://train-pay.shohoz.com/bkash/test-order';
+          expect(
+            await navigate(NavigationRequest(url: gateway, isMainFrame: false)),
+            NavigationDecision.navigate,
+          );
+          expect(launches, isEmpty);
+          expect(
+            await navigate(NavigationRequest(url: gateway, isMainFrame: true)),
+            NavigationDecision.prevent,
+          );
+          expect(
+            await navigate(NavigationRequest(url: gateway, isMainFrame: true)),
+            NavigationDecision.prevent,
+          );
+          expect(launches, hasLength(1));
+          expect((launches.single.arguments as Map)['url'], gateway);
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(find.text('Check payment'), findsOneWidget);
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.inactive,
+          );
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(
+            (await BookingService.pending())?['status'],
+            'readyForPayment',
+            reason: 'Returning from a browser is not proof of payment',
+          );
+          await tester.tap(find.text('Check payment'));
+          await tester.pump(const Duration(milliseconds: 50));
+          expect(
+            (await BookingService.pending())?['status'],
+            'readyForPayment',
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient(
+          (_) async => http.Response(jsonEncode({'data': []}), 200),
+        ),
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    }
+  });
+
+  test('browser handoff matches only the secure official Android gateway', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      expect(
+        WebSessionService.usesAndroidPaymentBrowser(
+          'https://train-pay.shohoz.com/bkash/order',
+        ),
+        isTrue,
+      );
+      for (final url in [
+        BookingService.tripInfoUrl,
+        'http://train-pay.shohoz.com/bkash/order',
+        'https://train-pay.shohoz.com.example.org/bkash/order',
+      ]) {
+        expect(WebSessionService.usesAndroidPaymentBrowser(url), isFalse);
+      }
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      expect(
+        WebSessionService.usesAndroidPaymentBrowser(
+          'https://train-pay.shohoz.com/bkash/order',
+        ),
+        isFalse,
+      );
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
 
   test(
     'checkout normalizes mobile-only identity and preserves the profile',

@@ -33,15 +33,21 @@ import 'services/app_update_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await AppUpdateService.instance.initialize();
-  unawaited(AppUpdateService.instance.refresh());
-
-  // Initialize notifications
   final notificationService = NotificationService();
-  await notificationService.initialize();
-  await notificationService.requestPermissions();
-  // Request overlay (SYSTEM_ALERT_WINDOW) permission
-  await OverlayService.requestPermission();
+  final tripHistoryService = TripHistoryService();
+  final creditService = CreditService();
+
+  // Run independent early initializations concurrently for faster startup
+  await Future.wait([
+    AppUpdateService.instance.initialize(),
+    notificationService.initialize(),
+    tripHistoryService.initialize(),
+    AppConfig.instance.initialize(),
+    creditService.initialize(),
+  ]);
+  unawaited(AppUpdateService.instance.refresh());
+  unawaited(notificationService.requestPermissions());
+  unawaited(OverlayService.requestPermission());
 
   final session = await AuthSession.load();
   final isLoggedIn = session != null && session.isLoggedIn;
@@ -50,19 +56,10 @@ void main() async {
   final themeService = ThemeService();
   final languageService = LanguageService();
   final monitor = MonitorService(proService: proService);
-  final tripHistoryService = TripHistoryService();
-  await tripHistoryService.initialize();
-
-  // Initialize AppConfig early so configured default credits are loaded
-  await AppConfig.instance.initialize();
-
-  final creditService = CreditService();
-  await creditService.initialize();
 
   // Initialize Firebase User Service and sync active user
   final firebaseUserService = FirebaseUserService();
   await firebaseUserService.initialize(proService: proService);
-  await AppConfig.instance.initialize();
   unawaited(
     AdminPushService.instance.initialize(
       phone: isLoggedIn ? session.phoneNumber : null,

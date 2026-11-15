@@ -22,6 +22,7 @@ import '../utils/friendly_error.dart';
 import 'booking_screen.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
+import '../widgets/skeleton_loader.dart';
 
 class SeatBookingScreen extends StatefulWidget {
   final TrainTrip train;
@@ -544,28 +545,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
           // ── Body ─────────────────────────────────────────────────────
           Expanded(
             child: _busy && _layout == null
-                ? Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        CircularProgressIndicator(
-                          valueColor: const AlwaysStoppedAnimation(
-                            AppColors.primary,
-                          ),
-                          backgroundColor: AppColors.primary.withValues(
-                            alpha: 0.1,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Loading seat layout...',
-                          style: TextStyle(
-                            color: AppColors.textSecondary(isDark),
-                          ),
-                        ),
-                      ],
-                    ),
-                  )
+                ? const SkeletonSeatGrid()
                 : _error != null && _layout == null
                 ? _buildErrorState(isDark)
                 : ListView(

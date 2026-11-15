@@ -3,6 +3,36 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 class WebSessionService {
+  // Presentation only, scoped by the caller to Railway's trip-info page.
+  // Keep all official fields, terms, validation and payment handlers intact.
+  static const checkoutAppearanceScript = r'''
+    (() => {
+      if (location.hostname !== 'eticket.railway.gov.bd' ||
+          location.pathname !== '/booking/train/trip-info') return;
+      let style = document.getElementById('rail-checkout-appearance');
+      if (!style) {
+        style = document.createElement('style');
+        style.id = 'rail-checkout-appearance';
+        document.head.appendChild(style);
+      }
+      style.textContent = `
+        body { background:#f5f8f7 !important; font-family:system-ui,sans-serif !important; }
+        #main_wrapper { padding-bottom:24px; }
+        #content { max-width:860px; }
+        input:not([type=checkbox]):not([type=radio]), select, textarea {
+          min-height:46px; border-radius:10px !important; font-size:16px !important;
+        }
+        .passenger-info-box { border-radius:16px !important; padding:16px !important; }
+        .payment-icon-holder { border-radius:12px !important; min-height:52px; }
+        .selected_box { border:2px solid #009b78 !important; background-color:#ecfdf5 !important; }
+        #payment_options { border-radius:16px; overflow:hidden; }
+        button { border-radius:10px !important; }
+        button:focus-visible, input:focus-visible, select:focus-visible {
+          outline:2px solid #009b78; outline-offset:2px;
+        }
+      `;
+    })();
+  ''';
   // Railway waits for location before submitting checkout. Its Promise catches
   // errors, but getCurrentPosition has an infinite default timeout in WKWebView.
   static const iosCheckoutLocationScript = r'''
@@ -35,38 +65,32 @@ class WebSessionService {
     })();
   ''';
 
-  /// Use the same browser identity for visible login and session recovery.
+  static const loginUserAgent =
+      'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
+
+  /// The desktop Windows Chrome identity used for all Railway API calls.
+  /// Using the same UA in WebViews prevents session-fingerprint mismatches
+  /// that cause payment gateways (bKash, Nagad) to deny the request.
+  static const checkoutUserAgent =
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+      '(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36';
+
+  /// Use Android mobile identity for visible login and session recovery.
   /// WKWebView must retain its native iOS identity throughout verification.
   static Future<void> configureLoginBrowser(
     WebViewController controller,
   ) async {
     if (defaultTargetPlatform == TargetPlatform.android) {
-      await controller.setUserAgent(
-        'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36',
-      );
+      await controller.setUserAgent(loginUserAgent);
     }
   }
 
-  /// Payment checkout browser. Gateways (bKash, SSLCommerz, banks) reject
-  /// requests that look like an embedded WebView or whose User-Agent does not
-  /// match the real engine version. Use the device's real WebView UA with the
-  /// WebView markers removed, and allow the third-party cookies that payment
-  /// redirects depend on. Login/session recovery keep using
-  /// [configureLoginBrowser] unchanged.
+  /// Keep checkout identity (Windows Chrome/154) throughout payment and allow gateway cookies.
   static Future<void> configurePaymentBrowser(
     WebViewController controller,
   ) async {
     if (defaultTargetPlatform == TargetPlatform.android) {
-      try {
-        final native = await controller.getUserAgent();
-        if (native != null && native.isNotEmpty) {
-          await controller.setUserAgent(
-            native
-                .replaceAll('; wv)', ')')
-                .replaceAll(RegExp(r'Version/\d+\.\d+\s'), ''),
-          );
-        }
-      } catch (_) {}
+      await controller.setUserAgent(checkoutUserAgent);
     }
     try {
       final platform = controller.platform;
@@ -81,6 +105,22 @@ class WebSessionService {
   static bool isRailwayUrl(String? value) {
     final uri = Uri.tryParse(value ?? '');
     return uri?.scheme == 'https' && uri?.host == 'eticket.railway.gov.bd';
+  }
+
+  /// Returns true for Shohoz payment gateway URLs (train-pay.shohoz.com).
+  /// These are now loaded inside the app WebView (which uses checkoutUserAgent)
+  /// so that the browser fingerprint matches the reservation request.
+  static bool isPaymentGatewayUrl(String? value) {
+    final uri = Uri.tryParse(value ?? '');
+    return uri?.scheme == 'https' && uri?.host == 'train-pay.shohoz.com';
+  }
+
+  /// Preserved for platform verification tests and gateway identification.
+  static bool usesAndroidPaymentBrowser(String value) {
+    final uri = Uri.tryParse(value);
+    return defaultTargetPlatform == TargetPlatform.android &&
+        uri?.scheme == 'https' &&
+        uri?.host == 'train-pay.shohoz.com';
   }
 
   static Future<void> clear() async {

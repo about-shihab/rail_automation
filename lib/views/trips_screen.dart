@@ -18,6 +18,7 @@ import '../services/booking_service.dart';
 import '../services/notification_service.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
+import '../widgets/skeleton_loader.dart';
 
 enum _TripFilter { all, successful, failed }
 enum _MainTab { purchased, autoBook }
@@ -531,25 +532,7 @@ class _TripsScreenState extends State<TripsScreen> {
 
   Widget _buildPurchasedTicketsView(bool isDark, LanguageService lang) {
     if (_loadingPurchased) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const CircularProgressIndicator(color: AppColors.primary),
-            const SizedBox(height: 16),
-            Text(
-              lang.tr(
-                'Fetching official tickets from Bangladesh Railway...',
-                'রেলওয়ে সার্ভার থেকে টিকেট লোড হচ্ছে...',
-              ),
-              style: TextStyle(
-                color: AppColors.textSecondary(isDark),
-                fontSize: 12.5,
-              ),
-            ),
-          ],
-        ),
-      );
+      return const SkeletonTicketList();
     }
 
     if (_purchasedError == 'not_logged_in') {

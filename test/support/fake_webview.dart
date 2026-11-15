@@ -115,7 +115,13 @@ class FakeNavigationDelegate extends PlatformNavigationDelegate {
   FakeNavigationDelegate(super.params) : super.implementation();
   PageEventCallback? pageFinished;
   PageEventCallback? pageStarted;
+  ProgressCallback? progress;
   NavigationRequestCallback? navigationRequest;
+
+  @override
+  Future<void> setOnProgress(ProgressCallback callback) async {
+    progress = callback;
+  }
 
   @override
   Future<void> setOnPageFinished(PageEventCallback callback) async {
