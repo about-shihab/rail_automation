@@ -10,8 +10,8 @@ import '../models/purchased_ticket.dart';
 import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -206,6 +206,12 @@ class _BookingScreenState extends State<BookingScreen>
                 // check whether the booking was confirmed.
                 if (WebSessionService.isPaymentGatewayUrl(url)) {
                   _gatewayOpened = true;
+                  // Inject the bKash fix script immediately after the page loads
+                  // so it can intercept the error redirect before bKash JS runs.
+                  try {
+                    await _controller
+                        ?.runJavaScript(WebSessionService.bkashGatewayFixScript);
+                  } catch (_) {}
                 } else {
                   await _checkPaymentSuccess(url);
                 }

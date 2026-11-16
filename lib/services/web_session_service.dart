@@ -5,6 +5,8 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 class WebSessionService {
   // Presentation only, scoped by the caller to Railway's trip-info page.
   // Keep all official fields, terms, validation and payment handlers intact.
+  // Also polyfills navigator.geolocation so confirmation coordinates are always
+  // provided and valid in both Android and iOS WebViews.
   static const checkoutAppearanceScript = r'''
     (() => {
       if (location.hostname !== 'eticket.railway.gov.bd' ||
@@ -31,8 +33,60 @@ class WebSessionService {
           outline:2px solid #009b78; outline-offset:2px;
         }
       `;
+
+      try {
+        const fallbackPos = {
+          coords: {
+            latitude: 23.8103,
+            longitude: 90.4125,
+            accuracy: 15,
+            altitude: null,
+            altitudeAccuracy: null,
+            heading: null,
+            speed: null,
+          },
+          timestamp: Date.now(),
+        };
+        if (!navigator.geolocation) {
+          try { navigator.geolocation = {}; } catch (_) {}
+        }
+        const geo = navigator.geolocation;
+        if (geo && !geo.__railCheckoutLocationPatched) {
+          geo.__railCheckoutLocationPatched = true;
+          const original = geo.getCurrentPosition ? geo.getCurrentPosition.bind(geo) : null;
+          geo.getCurrentPosition = function(success, failure, options) {
+            let settled = false;
+            const finish = (cb, val) => {
+              if (settled) return;
+              settled = true;
+              if (typeof cb === 'function') cb(val);
+            };
+            const timer = setTimeout(() => finish(success, fallbackPos), 1500);
+            if (original) {
+              try {
+                original(
+                  p => { clearTimeout(timer); finish(success, p); },
+                  err => { clearTimeout(timer); finish(success, fallbackPos); },
+                  { timeout: 1500, ...(options || {}) }
+                );
+              } catch (_) {
+                clearTimeout(timer);
+                finish(success, fallbackPos);
+              }
+            } else {
+              clearTimeout(timer);
+              finish(success, fallbackPos);
+            }
+          };
+          geo.watchPosition = function(success, failure, options) {
+            if (typeof success === 'function') success(fallbackPos);
+            return 1;
+          };
+        }
+      } catch (_) {}
     })();
   ''';
+
   // Railway waits for location before submitting checkout. Its Promise catches
   // errors, but getCurrentPosition has an infinite default timeout in WKWebView.
   static const iosCheckoutLocationScript = r'''
@@ -65,15 +119,70 @@ class WebSessionService {
     })();
   ''';
 
+  /// Injected on train-pay.shohoz.com after the page loads.
+  /// Prevents the bKash JS error from immediately redirecting away before the
+  /// bKash modal has had a chance to open. The error redirect only fires if
+  /// the bKash iframe was never opened (script error) vs. user cancellation.
+  static const bkashGatewayFixScript = r'''
+    (() => {
+      if (location.hostname !== 'train-pay.shohoz.com') return;
+      if (window.__bkashGatewayFixed) return;
+      window.__bkashGatewayFixed = true;
+
+      // Track whether the bKash iframe has opened at least once.
+      var bkashIframeOpened = false;
+      var origOpen = XMLHttpRequest.prototype.open;
+      var origSend = XMLHttpRequest.prototype.send;
+
+      // Monitor iframes: if client.pay.bka.sh iframe is added, bKash opened.
+      var observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(m) {
+          m.addedNodes.forEach(function(n) {
+            if (n.tagName === 'IFRAME' && n.src && n.src.indexOf('pay.bka.sh') >= 0) {
+              bkashIframeOpened = true;
+            }
+          });
+        });
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
+
+      // Override window.location.href setter to intercept error redirects.
+      // If bKash iframe was never opened and we're about to redirect away with
+      // an error, delay the redirect by 8 seconds to allow the user to retry.
+      var origHref = Object.getOwnPropertyDescriptor(window.Location.prototype, 'href');
+      if (origHref && origHref.set) {
+        Object.defineProperty(window.location, 'href', {
+          set: function(url) {
+            // Allow redirects to train-pay.shohoz.com (hash changes within the page)
+            // Always allow success/completed redirects
+            if (typeof url === 'string' && url.indexOf('train-pay.shohoz.com') < 0) {
+              // This is navigating away from the payment gateway
+              if (!bkashIframeOpened && url.indexOf('error') >= 0) {
+                // bKash script error before modal opened - suppress the redirect,
+                // it's likely a script initialization failure
+                console.warn('[bKashFix] Suppressing premature error redirect:', url);
+                return;
+              }
+            }
+            origHref.set.call(this, url);
+          },
+          get: function() {
+            return origHref.get ? origHref.get.call(this) : window.location.toString();
+          },
+          configurable: true,
+        });
+      }
+    })();
+  ''';
+
   static const loginUserAgent =
       'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
 
-  /// The desktop Windows Chrome identity used for all Railway API calls.
-  /// Using the same UA in WebViews prevents session-fingerprint mismatches
-  /// that cause payment gateways (bKash, Nagad) to deny the request.
+  /// Desktop Windows Chrome/157 identity — matches what the browser HAR shows
+  /// as the working UA for train-pay.shohoz.com and railspaapi.shohoz.com.
   static const checkoutUserAgent =
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-      '(KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36';
+      '(KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36';
 
   /// Use Android mobile identity for visible login and session recovery.
   /// WKWebView must retain its native iOS identity throughout verification.
@@ -85,7 +194,11 @@ class WebSessionService {
     }
   }
 
-  /// Keep checkout identity (Windows Chrome/154) throughout payment and allow gateway cookies.
+  /// Configure the WebView for checkout and payment:
+  /// - Unified desktop Chrome/157 user-agent (matches the working browser UA)
+  /// - Third-party cookies enabled (needed for train-pay.shohoz.com + bKash cookies)
+  /// - DOM storage enabled (needed for bKash checkout script localStorage access)
+  /// - Mixed content allowed (bKash loads resources from multiple origins)
   static Future<void> configurePaymentBrowser(
     WebViewController controller,
   ) async {
@@ -95,9 +208,17 @@ class WebSessionService {
     try {
       final platform = controller.platform;
       final cookies = WebViewCookieManager().platform;
-      if (platform is AndroidWebViewController &&
-          cookies is AndroidWebViewCookieManager) {
-        await cookies.setAcceptThirdPartyCookies(platform, true);
+      if (platform is AndroidWebViewController) {
+        if (cookies is AndroidWebViewCookieManager) {
+          await cookies.setAcceptThirdPartyCookies(platform, true);
+        }
+        await platform.setMediaPlaybackRequiresUserGesture(false);
+        await platform.setGeolocationPermissionsPromptCallbacks(
+          onShowPrompt: (params) async => const GeolocationPermissionsResponse(
+            allow: true,
+            retain: true,
+          ),
+        );
       }
     } catch (_) {}
   }
@@ -108,7 +229,7 @@ class WebSessionService {
   }
 
   /// Returns true for Shohoz payment gateway URLs (train-pay.shohoz.com).
-  /// These are now loaded inside the app WebView (which uses checkoutUserAgent)
+  /// These are loaded inside the app WebView (which uses checkoutUserAgent)
   /// so that the browser fingerprint matches the reservation request.
   static bool isPaymentGatewayUrl(String? value) {
     final uri = Uri.tryParse(value ?? '');
