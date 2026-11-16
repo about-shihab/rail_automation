@@ -65,7 +65,7 @@ void main() {
             ),
           );
           await tester.pump(const Duration(milliseconds: 100));
-          await tester.enterText(find.byType(TextField), '123456');
+          await tester.enterText(find.byType(TextField), '1234');
           await tester.pump(const Duration(milliseconds: 100));
           await tester.ensureVisible(find.text('Verify OTP'));
           await tester.tap(find.text('Verify OTP'));
@@ -93,7 +93,7 @@ void main() {
             isNotNull,
           );
           expect(sessionValues['continue_booking_otp_verified'], '1');
-          expect(sessionValues['confirm_booking_otp'], '123456');
+          expect(sessionValues['confirm_booking_otp'], '1234');
           expect(
             (await BookingService.pending())?['status'],
             'readyForPayment',

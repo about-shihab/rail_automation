@@ -484,5 +484,36 @@ void main() {
       ], 6),
       '123456',
     );
+    expect(
+      SmsService.extractOtp('', 'Bangladesh Railway OTP is 7549', [
+        'RAILWAY',
+      ], 4),
+      '7549',
+    );
+  });
+
+  test('isPaymentGatewayUrl recognizes bKash, Nagad, Rocket, Upay, and Cards', () {
+    for (final url in [
+      'https://train-pay.shohoz.com/bkash/order123',
+      'https://train-pay.shohoz.com/nagad/order123',
+      'https://train-pay.shohoz.com/rocket/order123',
+      'https://train-pay.shohoz.com/upay/order123',
+      'https://train-pay.shohoz.com/cards/order123',
+      'https://payment.mynagad.com/pay',
+      'https://client.pay.bka.sh/checkout',
+      'https://securepay.sslcommerz.com/gwprocess/v4',
+      'https://upaybd.com/payment',
+    ]) {
+      expect(WebSessionService.isPaymentGatewayUrl(url), isTrue, reason: url);
+    }
+
+    for (final nonGateway in [
+      'http://train-pay.shohoz.com/bkash/order',
+      'https://eticket.railway.gov.bd/booking/train/trip-info',
+      'https://example.com/checkout',
+      'https://train-pay.shohoz.com.example.org/bkash/order',
+    ]) {
+      expect(WebSessionService.isPaymentGatewayUrl(nonGateway), isFalse, reason: nonGateway);
+    }
   });
 }

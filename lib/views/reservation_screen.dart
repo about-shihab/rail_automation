@@ -588,32 +588,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
                     ],
                   ),
                 ] else if (awaitingOtp) ...[
-                  // The OTP card already has the primary "Verify OTP" and "Resend" buttons.
-                  // Only provide the link to open Railway and the release option here.
-                  Center(
-                    child: TextButton.icon(
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.primary,
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                      ),
-                      icon: const Icon(Icons.open_in_browser_rounded, size: 16),
-                      label: Text(
-                        lang.tr(
-                          'Open Railway Booking Page',
-                          'রেলওয়ে বুকিং পেজ খুলুন',
-                        ),
-                        style: const TextStyle(fontSize: 13),
-                      ),
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) =>
-                              BookingScreen(url: BookingService.tripInfoUrl),
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
+                  // The OTP card has the single primary "Verify OTP" and "Resend" actions.
+                  // Only provide the release/cancel option here.
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -1097,60 +1073,27 @@ class _ReservationScreenState extends State<ReservationScreen> {
               ),
               const Spacer(),
               if (isAutoVerify)
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF009B78).withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.check_circle_rounded, color: Color(0xFF009B78), size: 14),
-                          const SizedBox(width: 4),
-                          Text(
-                            lang.tr('Google Auto-Verify', 'গুগল অটো-যাচাই'),
-                            style: const TextStyle(
-                              color: Color(0xFF009B78),
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    InkWell(
-                      onTap: () async {
-                        final current = await BookingService.pending();
-                        if (current != null) {
-                          current['autoVerify'] = false;
-                          await BookingService.save(current);
-                          if (mounted) setState(() => _state = current);
-                        }
-                      },
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
-                        ),
-                        child: Text(
-                          lang.tr('Manual', 'ম্যানুয়াল'),
-                          style: const TextStyle(
-                            color: Colors.amber,
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                          ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF009B78).withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.check_circle_rounded, color: Color(0xFF009B78), size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        lang.tr('Google Auto-Verify', 'গুগল অটো-যাচাই'),
+                        style: const TextStyle(
+                          color: Color(0xFF009B78),
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 )
               else
                 InkWell(
@@ -1199,8 +1142,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
                   Expanded(
                     child: Text(
                       lang.tr(
-                        'Auto OTP verification unavailable. Enter the 6-digit OTP from your SMS manually below.',
-                        'স্বয়ংক্রিয় ওটিপি যাচাই সম্ভব নয়। অনুগ্রহ করে এসএমএস দেখে নিচে ৬ সংখ্যার ওটিপি লিখুন।',
+                        'Auto OTP verification unavailable. Enter the 4-digit OTP from your SMS manually below.',
+                        'স্বয়ংক্রিয় ওটিপি যাচাই সম্ভব নয়। অনুগ্রহ করে এসএমএস দেখে নিচে ৪ সংখ্যার ওটিপি লিখুন।',
                       ),
                       style: const TextStyle(
                         color: Colors.amber,
@@ -1215,8 +1158,8 @@ class _ReservationScreenState extends State<ReservationScreen> {
           else
             Text(
               lang.tr(
-                'Waiting for Railway OTP SMS... or enter code manually below.',
-                'রেলওয়ে ওটিপি এসএমএসের অপেক্ষায়... অথবা নিচে কোড লিখুন।',
+                'Waiting for Railway OTP SMS... or enter 4-digit code manually below.',
+                'রেলওয়ে ওটিপি এসএমএসের অপেক্ষায়... অথবা নিচে ৪ সংখ্যার কোড লিখুন।',
               ),
               style: TextStyle(
                 color: AppColors.textSecondary(isDark),
@@ -1255,9 +1198,9 @@ class _ReservationScreenState extends State<ReservationScreen> {
                 letterSpacing: 8,
               ),
               textAlign: TextAlign.center,
-              maxLength: 8,
+              maxLength: 4,
               decoration: InputDecoration(
-                hintText: '------',
+                hintText: '----',
                 hintStyle: TextStyle(
                   color: AppColors.textMuted(isDark),
                   letterSpacing: 8,

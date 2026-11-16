@@ -191,6 +191,11 @@ class _BookingScreenState extends State<BookingScreen>
                   _host = Uri.tryParse(url)?.host ?? _host;
                 });
               }
+              if (WebSessionService.isPaymentGatewayUrl(url)) {
+                _controller
+                    ?.runJavaScript(WebSessionService.paymentGatewayFixScript)
+                    .catchError((_) {});
+              }
             },
             onPageFinished: (url) async {
               if (!WebSessionService.isRailwayUrl(url)) {
@@ -206,11 +211,11 @@ class _BookingScreenState extends State<BookingScreen>
                 // check whether the booking was confirmed.
                 if (WebSessionService.isPaymentGatewayUrl(url)) {
                   _gatewayOpened = true;
-                  // Inject the bKash fix script immediately after the page loads
-                  // so it can intercept the error redirect before bKash JS runs.
+                  // Inject the payment gateway fix script immediately after the page loads
+                  // so it can intercept the error redirect before gateway JS runs.
                   try {
                     await _controller
-                        ?.runJavaScript(WebSessionService.bkashGatewayFixScript);
+                        ?.runJavaScript(WebSessionService.paymentGatewayFixScript);
                   } catch (_) {}
                 } else {
                   await _checkPaymentSuccess(url);

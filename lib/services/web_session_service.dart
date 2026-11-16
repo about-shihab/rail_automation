@@ -34,6 +34,21 @@ class WebSessionService {
         }
       `;
 
+      // Ensure window.open redirects to current window instead of dropping
+      // popups (common in card 3D-Secure, Nagad, Rocket, bank OTPs)
+      try {
+        if (!window.__origWindowOpen) {
+          window.__origWindowOpen = window.open;
+          window.open = function(url) {
+            if (url && typeof url === 'string') {
+              window.location.href = url;
+              return window;
+            }
+            return null;
+          };
+        }
+      } catch (_) {}
+
       try {
         const fallbackPos = {
           coords: {
@@ -119,48 +134,60 @@ class WebSessionService {
     })();
   ''';
 
-  /// Injected on train-pay.shohoz.com after the page loads.
-  /// Prevents the bKash JS error from immediately redirecting away before the
-  /// bKash modal has had a chance to open. The error redirect only fires if
-  /// the bKash iframe was never opened (script error) vs. user cancellation.
-  static const bkashGatewayFixScript = r'''
+  /// Injected on payment gateway pages (train-pay.shohoz.com and partner gateways).
+  /// Prevents script errors from immediately redirecting away before the
+  /// payment modal has had a chance to open, and ensures window.open popups
+  /// (such as card 3D-Secure, bank OTPs, Nagad, Rocket) load within the WebView.
+  static const paymentGatewayFixScript = r'''
     (() => {
+      if (window.__paymentGatewayFixed) return;
+      window.__paymentGatewayFixed = true;
+
+      // Polyfill window.open so popups (common in card 3D-Secure, bank OTPs, Nagad)
+      // open in the same WebView instead of being dropped by the mobile browser.
+      try {
+        if (!window.__origWindowOpen) {
+          window.__origWindowOpen = window.open;
+          window.open = function(url) {
+            if (url && typeof url === 'string') {
+              window.location.href = url;
+              return window;
+            }
+            if (typeof window.__origWindowOpen === 'function') {
+              return window.__origWindowOpen.apply(this, arguments);
+            }
+            return null;
+          };
+        }
+      } catch (_) {}
+
       if (location.hostname !== 'train-pay.shohoz.com') return;
-      if (window.__bkashGatewayFixed) return;
-      window.__bkashGatewayFixed = true;
 
-      // Track whether the bKash iframe has opened at least once.
-      var bkashIframeOpened = false;
-      var origOpen = XMLHttpRequest.prototype.open;
-      var origSend = XMLHttpRequest.prototype.send;
+      // Track whether any payment iframe/modal has opened (bKash, Nagad, SSLCommerz, cards)
+      var modalOpened = false;
 
-      // Monitor iframes: if client.pay.bka.sh iframe is added, bKash opened.
       var observer = new MutationObserver(function(mutations) {
         mutations.forEach(function(m) {
           m.addedNodes.forEach(function(n) {
-            if (n.tagName === 'IFRAME' && n.src && n.src.indexOf('pay.bka.sh') >= 0) {
-              bkashIframeOpened = true;
+            if (n.tagName === 'IFRAME') {
+              modalOpened = true;
             }
           });
         });
       });
-      observer.observe(document.documentElement, { childList: true, subtree: true });
+      if (document.documentElement) {
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+      }
 
-      // Override window.location.href setter to intercept error redirects.
-      // If bKash iframe was never opened and we're about to redirect away with
-      // an error, delay the redirect by 8 seconds to allow the user to retry.
+      // Override window.location.href setter to intercept premature error redirects on train-pay.shohoz.com.
       var origHref = Object.getOwnPropertyDescriptor(window.Location.prototype, 'href');
       if (origHref && origHref.set) {
         Object.defineProperty(window.location, 'href', {
           set: function(url) {
-            // Allow redirects to train-pay.shohoz.com (hash changes within the page)
-            // Always allow success/completed redirects
             if (typeof url === 'string' && url.indexOf('train-pay.shohoz.com') < 0) {
-              // This is navigating away from the payment gateway
-              if (!bkashIframeOpened && url.indexOf('error') >= 0) {
-                // bKash script error before modal opened - suppress the redirect,
-                // it's likely a script initialization failure
-                console.warn('[bKashFix] Suppressing premature error redirect:', url);
+              // Navigating away from the gateway with an error before modal even opened
+              if (!modalOpened && url.indexOf('error') >= 0) {
+                console.warn('[PaymentGatewayFix] Suppressing premature error redirect:', url);
                 return;
               }
             }
@@ -174,6 +201,9 @@ class WebSessionService {
       }
     })();
   ''';
+
+  /// Backwards compatibility alias for bKash tests
+  static const bkashGatewayFixScript = paymentGatewayFixScript;
 
   static const loginUserAgent =
       'Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
@@ -228,12 +258,37 @@ class WebSessionService {
     return uri?.scheme == 'https' && uri?.host == 'eticket.railway.gov.bd';
   }
 
-  /// Returns true for Shohoz payment gateway URLs (train-pay.shohoz.com).
+  /// Returns true for Railway / Shohoz payment gateway URLs (train-pay.shohoz.com
+  /// and any supported payment partner domains: bKash, Nagad, Rocket, Upay, Cards).
   /// These are loaded inside the app WebView (which uses checkoutUserAgent)
   /// so that the browser fingerprint matches the reservation request.
   static bool isPaymentGatewayUrl(String? value) {
     final uri = Uri.tryParse(value ?? '');
-    return uri?.scheme == 'https' && uri?.host == 'train-pay.shohoz.com';
+    if (uri == null || uri.scheme != 'https') return false;
+    final host = uri.host.toLowerCase();
+    if (host == 'train-pay.shohoz.com' ||
+        (host.endsWith('.shohoz.com') && host.startsWith('train-pay'))) {
+      return true;
+    }
+    const gatewayDomains = [
+      'bka.sh',
+      'bkash.com',
+      'mynagad.com',
+      'nagad.com.bd',
+      'upaybd.com',
+      'dutchbanglabank.com',
+      'sslcommerz.com',
+      'portwallet.com',
+      'citybank.com',
+      'bracbank.com',
+      'ebl.com.bd',
+    ];
+    for (final domain in gatewayDomains) {
+      if (host == domain || host.endsWith('.$domain')) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Payment gateways (train-pay.shohoz.com) stay inside the app WebView
