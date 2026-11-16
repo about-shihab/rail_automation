@@ -43,7 +43,7 @@ class AppConfig extends ChangeNotifier {
       'সহজ',
     ],
     'otp_length': 4,
-    'otp_window_seconds': 180,
+    'otp_window_seconds': 300,
     'login_retry_interval_seconds': 60,
     // Seat-search scheduling (see SearchScheduler).
     'search_jitter_percent': 10,

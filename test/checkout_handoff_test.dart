@@ -516,4 +516,84 @@ void main() {
       expect(WebSessionService.isPaymentGatewayUrl(nonGateway), isFalse, reason: nonGateway);
     }
   });
+
+  testWidgets(
+    'callback with /booking/train/status and trxid confirms booking via purchase history',
+    (tester) async {
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            const MaterialApp(
+              home: BookingScreen(url: BookingService.tripInfoUrl),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+
+          // Simulate gateway redirecting back to Railway status callback
+          webview.controller.delegate!.pageFinished!(
+            'https://eticket.railway.gov.bd/booking/train/status?booking_id=85520214&trxid=1M7H8V4F4B1ZFQFT',
+          );
+          await tester.pump(const Duration(milliseconds: 100));
+
+          expect(find.text('Your ticket is confirmed!'), findsOneWidget);
+          expect(find.text('View Ticket in Trips'), findsOneWidget);
+          expect(await BookingService.pending(), isNull);
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient((request) async {
+          if (request.url.path.contains('purchase-history')) {
+            return http.Response(
+              jsonEncode({
+                'data': [
+                  {
+                    'order_id': 85520214,
+                    'order_status': 1,
+                    'pnr': 'PNR998877',
+                    'trip_id': 8606141,
+                    'trip_number': 'SUBORNO EXPRESS (701)',
+                    'journey_date': '08-Oct-2026',
+                    'booking_date': '08-Oct-2026',
+                    'origin_city_id': 1,
+                    'user_id': 123,
+                    'refund_validity_info': {},
+                  }
+                ]
+              }),
+              200,
+            );
+          }
+          return http.Response(jsonEncode({'data': []}), 200);
+        }),
+      );
+    },
+  );
+
+  testWidgets(
+    'callback with /booking/train/status and error shows cancellation message',
+    (tester) async {
+      await http.runWithClient(
+        () async {
+          await tester.pumpWidget(
+            const MaterialApp(
+              home: BookingScreen(url: BookingService.tripInfoUrl),
+            ),
+          );
+          await tester.pump(const Duration(milliseconds: 50));
+
+          webview.controller.delegate!.pageFinished!(
+            'https://eticket.railway.gov.bd/booking/train/status?booking_id=85520214&error=User%20Cancel',
+          );
+          await tester.pump(const Duration(milliseconds: 100));
+
+          expect(find.text('User Cancel'), findsOneWidget);
+          expect(
+            (await BookingService.pending())?['status'],
+            'readyForPayment',
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        },
+        () => MockClient((_) async => http.Response(jsonEncode({'data': []}), 200)),
+      );
+    },
+  );
 }

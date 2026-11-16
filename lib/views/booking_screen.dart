@@ -1,6 +1,8 @@
 import '../services/login_flow.dart';
+import 'app_shell.dart';
 import 'webview_login_screen.dart';
 
+import 'dart:async';
 import 'dart:convert';
 
 import '../services/booking_service.dart';
@@ -190,11 +192,6 @@ class _BookingScreenState extends State<BookingScreen>
                   _progress = 0;
                   _host = Uri.tryParse(url)?.host ?? _host;
                 });
-              }
-              if (WebSessionService.isPaymentGatewayUrl(url)) {
-                _controller
-                    ?.runJavaScript(WebSessionService.paymentGatewayFixScript)
-                    .catchError((_) {});
               }
             },
             onPageFinished: (url) async {
@@ -472,6 +469,7 @@ class _BookingScreenState extends State<BookingScreen>
   }
 
   bool _completedHandled = false;
+  Timer? _pollTimer;
 
   Future<void> _checkPaymentSuccess(
     String url, {
@@ -479,43 +477,145 @@ class _BookingScreenState extends State<BookingScreen>
     bool userInitiated = false,
   }) async {
     if (_completedHandled || _checkingPayment) return;
-    final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
-    if (!checkHistory &&
-        !path.contains('success') &&
-        !path.contains('confirmation') &&
-        !path.contains('ticket-history')) {
+    final uri = Uri.tryParse(url);
+    final path = uri?.path.toLowerCase() ?? '';
+    final query = uri?.query.toLowerCase() ?? '';
+    final hasTrxId = uri?.queryParameters.containsKey('trxid') == true ||
+        uri?.queryParameters.containsKey('transaction_id') == true ||
+        query.contains('trxid=') ||
+        query.contains('transaction_id=');
+    final isStatusCallback = path.contains('status') ||
+        path.contains('success') ||
+        path.contains('confirmation') ||
+        path.contains('ticket-history');
+    final hasError = uri?.queryParameters.containsKey('error') == true ||
+        query.contains('error=') ||
+        query.contains('&error') ||
+        query.contains('cancelled') ||
+        query.contains('cancel');
+
+    if (!checkHistory && !isStatusCallback && !hasTrxId) {
       return;
     }
+
+    if (hasError && !hasTrxId) {
+      final rawError = uri?.queryParameters['error'];
+      final errorMsg = (rawError != null && rawError.isNotEmpty)
+          ? Uri.decodeComponent(rawError)
+          : 'Payment was cancelled or could not be completed.';
+      if (mounted) {
+        setState(() {
+          _paymentMessage = errorMsg;
+          _gatewayOpened = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+      return;
+    }
+
     _checkingPayment = true;
     if (mounted) setState(() => _paymentMessage = null);
     try {
       final before = await _historyBeforeCheckout;
       final session = await AuthSession.load();
       final reservation = await BookingService.pending();
-      if (before == null ||
-          session == null ||
-          reservation?['status'] != 'readyForPayment') {
+      if (session == null || reservation == null) {
         return;
       }
-      final tripId = int.tryParse('${reservation!['seatClass']['trip_id']}');
-      final tickets = await ApiService.getPurchaseHistory(authSession: session);
-      final oldIds = before.map((ticket) => ticket.orderId).toSet();
-      final paid = tickets.any(
-        (ticket) =>
-            ticket.isConfirmed &&
-            !ticket.isRefunded &&
-            ticket.pnr.isNotEmpty &&
-            ticket.tripId == tripId &&
-            !oldIds.contains(ticket.orderId),
+
+      final bookingIdStr = uri?.queryParameters['booking_id'] ??
+          uri?.queryParameters['order_id'];
+      final bookingId = int.tryParse(bookingIdStr ?? '');
+      final trxId = uri?.queryParameters['trxid'] ??
+          uri?.queryParameters['transaction_id'];
+
+      final tripId = int.tryParse(
+        '${reservation['seatClass']?['trip_id'] ?? reservation['trip_id'] ?? reservation['train']?['trip_id'] ?? ''}',
       );
-      if (!paid) {
-        if (mounted && userInitiated) {
-          setState(
-            () => _paymentMessage = 'Payment is not confirmed yet. Check again after completing payment.',
-          );
+      final trainName = (reservation['train']?['trip_number']?.toString() ??
+              reservation['train']?['train_name']?.toString() ??
+              '')
+          .trim()
+          .toLowerCase();
+
+      final oldIds = before?.map((ticket) => ticket.orderId).toSet() ?? <int>{};
+
+      // Poll up to 4 attempts to allow Railway API time to finalize ticket generation
+      PurchasedTicket? matchedTicket;
+      final maxAttempts = (hasTrxId || path.contains('status')) ? 4 : 1;
+      for (var attempt = 0; attempt < maxAttempts; attempt++) {
+        if (_completedHandled || !mounted) return;
+        if (attempt > 0) {
+          if (!mounted) return;
+          final completer = Completer<void>();
+          _pollTimer = Timer(const Duration(milliseconds: 1500), () {
+            if (!completer.isCompleted) completer.complete();
+          });
+          await completer.future;
+          _pollTimer = null;
+          if (!mounted) return;
+        }
+
+        try {
+          final tickets = await ApiService.getPurchaseHistory(authSession: session);
+          for (final ticket in tickets) {
+            if (!ticket.isConfirmed || ticket.isRefunded || ticket.pnr.isEmpty) {
+              continue;
+            }
+            // Direct booking_id match from callback query params
+            if (bookingId != null && ticket.orderId == bookingId) {
+              matchedTicket = ticket;
+              break;
+            }
+            // New ticket not in before-history matching trip or train
+            if (!oldIds.contains(ticket.orderId)) {
+              if (tripId != null && tripId > 0 && ticket.tripId == tripId) {
+                matchedTicket = ticket;
+                break;
+              }
+              if (trainName.isNotEmpty &&
+                  ticket.trainName.toLowerCase().contains(trainName)) {
+                matchedTicket = ticket;
+                break;
+              }
+              if (oldIds.isNotEmpty) {
+                matchedTicket = ticket;
+                break;
+              }
+            }
+          }
+          if (matchedTicket != null) break;
+        } catch (_) {}
+      }
+
+      if (matchedTicket == null) {
+        if (mounted) {
+          if (hasTrxId) {
+            setState(
+              () => _paymentMessage =
+                  'Payment received (TrxID: $trxId). Railway is issuing your ticket. Tap "Check payment" in a moment.',
+            );
+          } else if (userInitiated) {
+            setState(
+              () => _paymentMessage =
+                  'Payment is not confirmed yet. Check again after completing payment.',
+            );
+          }
         }
         return;
       }
+
+      reservation['pnr'] = matchedTicket.pnr;
+      reservation['order_id'] = matchedTicket.orderId;
+      if (trxId != null && trxId.isNotEmpty) {
+        reservation['trxid'] = trxId;
+      }
+
       final done = await BookingService.completeSuccessfulBooking(
         reservation: reservation,
       );
@@ -523,11 +623,12 @@ class _BookingScreenState extends State<BookingScreen>
       if (mounted) setState(() {});
       if (done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
+          SnackBar(
             content: Text(
-              'Railway confirmed your payment. Ticket ready in Trips.',
+              'Railway confirmed your payment! PNR: ${matchedTicket.pnr}',
             ),
-            backgroundColor: Color(0xFF059669),
+            backgroundColor: const Color(0xFF059669),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -547,6 +648,8 @@ class _BookingScreenState extends State<BookingScreen>
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
     WidgetsBinding.instance.removeObserver(this);
     BookingScreen._openScreens--;
     super.dispose();
@@ -722,10 +825,15 @@ class _BookingScreenState extends State<BookingScreen>
                   if (_controller != null)
                     Offstage(
                       offstage:
-                          _paymentBrowserOpened || _failed || _bootstrapping,
+                          _paymentBrowserOpened ||
+                          _failed ||
+                          _bootstrapping ||
+                          _completedHandled,
                       child: WebViewWidget(controller: _controller!),
                     ),
-                  if (_paymentBrowserOpened)
+                  if (_completedHandled)
+                    _successPanel(dark, lang)
+                  else if (_paymentBrowserOpened)
                     _paymentReturn(dark, lang)
                   else if (_failed)
                     _statusPanel(
@@ -796,6 +904,25 @@ class _BookingScreenState extends State<BookingScreen>
         ),
       ),
     ],
+  );
+
+  Widget _successPanel(bool dark, LanguageService lang) => _statusPanel(
+    dark: dark,
+    icon: Icons.check_circle_outline_rounded,
+    title: lang.tr('Your ticket is confirmed!', 'আপনার টিকিট নিশ্চিত হয়েছে!'),
+    description: lang.tr(
+      'Payment was successful and Railway has confirmed your ticket. You can view your ticket in Trips.',
+      'পেমেন্ট সফল হয়েছে এবং রেলওয়ে আপনার টিকিট নিশ্চিত করেছে। ট্রিপস পাতায় আপনার টিকিট দেখুন।',
+    ),
+    action: lang.tr('View Ticket in Trips', 'ট্রিপসে টিকিট দেখুন'),
+    onPressed: () {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(
+          builder: (_) => const AppShell(initialTab: AppShell.tabTrips),
+        ),
+        (route) => false,
+      );
+    },
   );
 
   Widget _paymentReturn(bool dark, LanguageService lang) => _statusPanel(

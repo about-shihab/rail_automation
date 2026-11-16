@@ -307,7 +307,7 @@ void main() {
     expect(find.text('Resend'), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
     expect(
-      find.text('Auto OTP verification unavailable. Enter the 6-digit OTP from your SMS manually below.'),
+      find.text('Auto OTP verification unavailable. Enter the 4-digit OTP from your SMS manually below.'),
       findsOneWidget,
     );
   });
