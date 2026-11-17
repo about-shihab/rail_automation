@@ -22,7 +22,6 @@ import '../utils/friendly_error.dart';
 import 'booking_screen.dart';
 import 'reservation_screen.dart';
 import 'webview_login_screen.dart';
-import '../widgets/skeleton_loader.dart';
 
 class SeatBookingScreen extends StatefulWidget {
   final TrainTrip train;
@@ -89,14 +88,6 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
     SeatBookingScreen._openContinuations[_continuation.id] =
         _retryFromForeground;
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      final pending = await BookingService.pending();
-      if (pending != null && mounted) {
-        setState(() {
-          _error = 'A reservation is already in progress. Please enter your OTP or release held seats.';
-        });
-      }
-    });
     _load();
   }
 
@@ -288,55 +279,6 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
     });
     try {
       await context.read<MonitorService>().clearSearch();
-      final pendingReservation = await BookingService.pending();
-      if (!mounted) return;
-      if (pendingReservation != null) {
-        final existingTrain =
-            pendingReservation['train']?['trip_number']?.toString() ??
-            pendingReservation['train']?['train_name']?.toString() ??
-            'Train';
-        final choice = await showDialog<String>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-            ),
-            title: const Text('Existing Reservation Active'),
-            content: Text(
-              'A reservation for $existingTrain is currently active. Would you like to enter its OTP, or release the held seats and reserve your new selection?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('Cancel'),
-              ),
-              OutlinedButton.icon(
-                icon: const Icon(Icons.lock_open_rounded, size: 16),
-                label: const Text('Release & Reserve New'),
-                onPressed: () => Navigator.pop(ctx, 'release'),
-              ),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.sms_rounded, size: 16),
-                label: const Text('Enter OTP'),
-                onPressed: () => Navigator.pop(ctx, 'otp'),
-              ),
-            ],
-          ),
-        );
-        if (choice == 'otp') {
-          if (mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ReservationScreen()),
-            );
-          }
-          return;
-        } else if (choice == 'release') {
-          await BookingService.clear(releaseSeatsOnRailway: true);
-        } else {
-          return;
-        }
-      }
       final state = await BookingService.reserve(
         train: widget.train,
         seat: _effectiveSeatType,
@@ -358,124 +300,9 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
         );
       }
     } catch (e) {
-      if (!mounted) return;
-      // Check if seats were held or a pending reservation exists despite the error
-      final pendingRes = await BookingService.pending();
-      final confirmed = (pendingRes?['confirmedTicketIds'] as List?)?.isNotEmpty == true ||
-          (pendingRes?['seats'] as List?)?.isNotEmpty == true;
-      if (confirmed && mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const ReservationScreen()),
-        );
-        return;
-      }
-      final errStr = e.toString().toLowerCase();
-      final isProgressError = errStr.contains('already in progress') ||
-          errStr.contains('existing reservation') ||
-          errStr.contains('attention');
-      if (isProgressError && mounted) {
-        final choice = await showDialog<String>(
-          context: context,
-          builder: (ctx) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-            ),
-            title: const Row(
-              children: [
-                Icon(Icons.info_outline_rounded, color: AppColors.primary),
-                SizedBox(width: 8),
-                Expanded(child: Text('Reservation In Progress')),
-              ],
-            ),
-            content: const Text(
-              'A reservation is currently active on Bangladesh Railway.\n\n'
-              '• If you received an SMS OTP, open the reservation to enter it and proceed to payment.\n'
-              '• Or release the held seats immediately to make a fresh seat selection.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(ctx, 'cancel'),
-                child: const Text('Cancel'),
-              ),
-              OutlinedButton.icon(
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: AppColors.error,
-                  side: BorderSide(color: AppColors.error.withValues(alpha: 0.5)),
-                ),
-                icon: const Icon(Icons.lock_open_rounded, size: 16),
-                label: const Text('Release Held Seats'),
-                onPressed: () => Navigator.pop(ctx, 'release'),
-              ),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  foregroundColor: Colors.white,
-                ),
-                icon: const Icon(Icons.sms_rounded, size: 16),
-                label: const Text('Enter OTP'),
-                onPressed: () => Navigator.pop(ctx, 'otp'),
-              ),
-            ],
-          ),
-        );
-        if (choice == 'otp') {
-          if (mounted) {
-            Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const ReservationScreen()),
-            );
-          }
-          return;
-        } else if (choice == 'release') {
-          await _releaseHeldSeats();
-          return;
-        }
-      }
       if (mounted) setState(() => _error = friendlyErrorMessage(e));
     } finally {
       if (mounted) setState(() => _busy = false);
-    }
-  }
-
-  Future<void> _releaseHeldSeats() async {
-    final messenger = ScaffoldMessenger.of(context);
-    setState(() => _busy = true);
-    try {
-      final selectedTicketIds = _selected
-          .map((s) => s.ticketId)
-          .where((id) => id > 0)
-          .toList();
-      final routeId = _effectiveSeatType.tripRouteId ?? _effectiveSeatType.routeId;
-      await BookingService.clear(
-        releaseSeatsOnRailway: true,
-        extraTicketIds: selectedTicketIds,
-        routeId: routeId,
-      );
-      if (mounted) {
-        setState(() {
-          _error = null;
-          _selected.clear();
-          _busy = false;
-        });
-        messenger.showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Held seats released on Railway. You can now select seats and reserve.',
-            ),
-            backgroundColor: Color(0xFF009B78),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-        await _load();
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = friendlyErrorMessage(e);
-        });
-      }
     }
   }
 
@@ -545,7 +372,28 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
           // ── Body ─────────────────────────────────────────────────────
           Expanded(
             child: _busy && _layout == null
-                ? const SkeletonSeatGrid()
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(
+                          valueColor: const AlwaysStoppedAnimation(
+                            AppColors.primary,
+                          ),
+                          backgroundColor: AppColors.primary.withValues(
+                            alpha: 0.1,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Loading seat layout...',
+                          style: TextStyle(
+                            color: AppColors.textSecondary(isDark),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
                 : _error != null && _layout == null
                 ? _buildErrorState(isDark)
                 : ListView(
@@ -570,7 +418,7 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
                                   const Icon(
                                     Icons.error_outline_rounded,
                                     color: AppColors.error,
-                                    size: 18,
+                                    size: 16,
                                   ),
                                   const SizedBox(width: 8),
                                   Expanded(
@@ -578,74 +426,13 @@ class _SeatBookingScreenState extends State<SeatBookingScreen>
                                       _error!,
                                       style: const TextStyle(
                                         color: AppColors.error,
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
+                                        fontSize: 12,
                                       ),
                                     ),
                                   ),
                                 ],
                               ),
-                              if (_error!.contains('already in progress') ||
-                                  _error!.contains('existing reservation') ||
-                                  _error!.contains('attention')) ...[
-                                const SizedBox(height: 10),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: ElevatedButton.icon(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: const Color(0xFF009B78),
-                                          foregroundColor: Colors.white,
-                                          padding: const EdgeInsets.symmetric(vertical: 10),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                          elevation: 0,
-                                        ),
-                                        icon: const Icon(Icons.sms_rounded, size: 16),
-                                        label: const Text(
-                                          'Enter OTP',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        onPressed: () => Navigator.push(
-                                          context,
-                                          MaterialPageRoute(
-                                            builder: (_) => const ReservationScreen(),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: OutlinedButton.icon(
-                                        style: OutlinedButton.styleFrom(
-                                          foregroundColor: AppColors.error,
-                                          side: BorderSide(
-                                            color: AppColors.error.withValues(alpha: 0.5),
-                                          ),
-                                          padding: const EdgeInsets.symmetric(vertical: 10),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(10),
-                                          ),
-                                        ),
-                                        icon: const Icon(Icons.lock_open_rounded, size: 16),
-                                        label: const Text(
-                                          'Release Seats',
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                        onPressed: _releaseHeldSeats,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                              const SizedBox(height: 6),
+                              const SizedBox(height: 8),
                               Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [

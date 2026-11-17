@@ -42,8 +42,8 @@ class AppConfig extends ChangeNotifier {
       'রেলওয়ে',
       'সহজ',
     ],
-    'otp_length': 4,
-    'otp_window_seconds': 300,
+    'otp_length': 6,
+    'otp_window_seconds': 180,
     'login_retry_interval_seconds': 60,
     // Seat-search scheduling (see SearchScheduler).
     'search_jitter_percent': 10,

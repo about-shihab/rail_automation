@@ -327,7 +327,6 @@ class TurnstileGate {
         !interactive.isCompleted) {
       interactive.complete();
     }
-    Timer? iosTimer;
     try {
       watchInteraction();
       final result = await Future.any<({bool interactive, String? token})>([
@@ -339,15 +338,9 @@ class TurnstileGate {
         // finished quickly, bring the verification card up so the browser is
         // exposed and can complete. Android never takes this branch.
         if (_exposesBrowserOnIos(label, allowPrompt))
-          () {
-            final completer = Completer<({bool interactive, String? token})>();
-            iosTimer = Timer(_iosExposeAfter, () {
-              if (!completer.isCompleted) {
-                completer.complete((interactive: true, token: null));
-              }
-            });
-            return completer.future;
-          }(),
+          Future<void>.delayed(
+            _iosExposeAfter,
+          ).then((_) => (interactive: true, token: null)),
       ]);
       if (!result.interactive) {
         final token = result.token;
@@ -367,7 +360,6 @@ class TurnstileGate {
       }
       return await _showInteraction(label, request);
     } finally {
-      iosTimer?.cancel();
       session.removeListener(watchInteraction);
     }
   }

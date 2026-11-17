@@ -1,8 +1,6 @@
 import '../services/login_flow.dart';
-import 'app_shell.dart';
 import 'webview_login_screen.dart';
 
-import 'dart:async';
 import 'dart:convert';
 
 import '../services/booking_service.dart';
@@ -12,15 +10,16 @@ import '../models/purchased_ticket.dart';
 import '../services/secure_store.dart';
 import '../services/web_session_service.dart';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../models/auth_session.dart';
-import '../services/language_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/friendly_error.dart';
+import '../widgets/fancy_train_loader.dart';
 
 class BookingScreen extends StatefulWidget {
   static int _openScreens = 0;
@@ -32,8 +31,7 @@ class BookingScreen extends StatefulWidget {
   State<BookingScreen> createState() => _BookingScreenState();
 }
 
-class _BookingScreenState extends State<BookingScreen>
-    with WidgetsBindingObserver {
+class _BookingScreenState extends State<BookingScreen> {
   WebViewController? _controller;
   bool _loading = true;
   bool _bootstrapping = true;
@@ -44,31 +42,17 @@ class _BookingScreenState extends State<BookingScreen>
   Future<List<PurchasedTicket>?>? _historyBeforeCheckout;
   bool _checkingPayment = false;
   int _searchRecoveryAttempts = 0;
-  bool _gatewayOpened = false;
-  bool _paymentBrowserOpened = false;
-  bool _openingPaymentBrowser = false;
-  bool _initializing = false;
-  int _progress = 0;
-  String _host = 'eticket.railway.gov.bd';
-  String? _paymentMessage;
 
   @override
   void initState() {
     super.initState();
     BookingScreen._openScreens++;
-    WidgetsBinding.instance.addObserver(this);
     _initWebView();
   }
 
   Future<void> _initWebView() async {
-    if (_initializing || _gatewayOpened) return;
-    _initializing = true;
     try {
-      final initial = await Future.wait<Object?>([
-        AuthSession.load(),
-        BookingService.pending(),
-      ]);
-      var loadedSession = initial[0] as AuthSession?;
+      var loadedSession = await AuthSession.load();
       if (loadedSession == null) {
         throw StateError("Please log in again before checkout.");
       }
@@ -80,7 +64,7 @@ class _BookingScreenState extends State<BookingScreen>
       if (!WebSessionService.isRailwayUrl(widget.url)) {
         throw StateError('Invalid Railway booking link');
       }
-      final reservation = initial[1] as Map<String, dynamic>?;
+      final reservation = await BookingService.pending();
       bool bootstrapped = false;
       _historyBeforeCheckout ??=
           ApiService.getPurchaseHistory(authSession: session)
@@ -118,13 +102,8 @@ class _BookingScreenState extends State<BookingScreen>
           ? BookingService.tripInfoUrl
           : widget.url;
 
-      final checkoutData = await Future.wait<Object?>([
-        BookingService.checkoutUser(session),
-        SecureStore.read('rail_cft_token'),
-        SecureStore.read('rail_action_token'),
-      ]);
-      final user = checkoutData[0] as Map<String, dynamic>;
-      final cftToken = checkoutData[1] as String?;
+      final user = await BookingService.checkoutUser(session);
+      final cftToken = await SecureStore.read('rail_cft_token');
       final values = <String, String>{
         'token': session.token.startsWith('Bearer ')
             ? session.token.substring(7)
@@ -146,31 +125,16 @@ class _BookingScreenState extends State<BookingScreen>
       if (isReadyForPayment && storage.isEmpty) {
         throw StateError('Reservation phone or checkout data is missing.');
       }
-      final actionToken = checkoutData[2] as String?;
+      final actionToken = await SecureStore.read('rail_action_token');
       if (actionToken?.isNotEmpty == true) storage['atk'] = actionToken;
 
       final controller = WebViewController()
         ..setJavaScriptMode(JavaScriptMode.unrestricted)
         ..setNavigationDelegate(
           NavigationDelegate(
-            onProgress: (progress) {
-              if (mounted && progress != _progress) {
-                setState(() => _progress = progress);
-              }
-            },
             onNavigationRequest: (request) async {
               final scheme =
                   Uri.tryParse(request.url)?.scheme.toLowerCase() ?? '';
-              if (request.isMainFrame &&
-                  (scheme == 'http' || scheme == 'https') &&
-                  !WebSessionService.isRailwayUrl(request.url)) {
-                _gatewayOpened = true;
-              }
-              if (request.isMainFrame &&
-                  WebSessionService.usesAndroidPaymentBrowser(request.url)) {
-                await _openPaymentBrowser(Uri.parse(request.url));
-                return NavigationDecision.prevent;
-              }
               if (scheme == 'http' ||
                   scheme == 'https' ||
                   scheme == 'about' ||
@@ -186,36 +150,55 @@ class _BookingScreenState extends State<BookingScreen>
               return NavigationDecision.prevent;
             },
             onPageStarted: (url) {
-              if (mounted) {
-                setState(() {
-                  _loading = true;
-                  _progress = 0;
-                  _host = Uri.tryParse(url)?.host ?? _host;
-                });
+              if (mounted) setState(() => _loading = true);
+              if (WebSessionService.isRailwayUrl(url) && storage.isNotEmpty) {
+                _controller?.runJavaScript('''
+                  (function() {
+                    try {
+                      var vals = ${jsonEncode(values)};
+                      for (var k in vals) {
+                        try { localStorage.setItem(k, vals[k]); } catch(e){}
+                        try { sessionStorage.setItem(k, vals[k]); } catch(e){}
+                      }
+                      var stor = ${jsonEncode(storage)};
+                      for (var s in stor) {
+                        try { localStorage.setItem(s, String(stor[s])); } catch(e){}
+                        try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
+                      }
+                      var pData = stor['initialPurchaseData'] || '';
+                      if (!window.__railStorageGuarded) {
+                        window.__railStorageGuarded = true;
+                        var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                        sessionStorage.getItem = function(k) {
+                          var v = origSGet(k);
+                          if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                          if (stor[k] !== undefined) return String(stor[k]);
+                          if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                          if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                          if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                          return v;
+                        };
+                        var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                        sessionStorage.removeItem = function(k) {
+                          if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                            return;
+                          }
+                          return origSRemove(k);
+                        };
+                      }
+                    } catch(e) {}
+                  })();
+                ''');
               }
             },
             onPageFinished: (url) async {
               if (!WebSessionService.isRailwayUrl(url)) {
-                // Payment gateway (train-pay.shohoz.com) or other external pages
-                // load inside the WebView. Keep them visible.
+                // Payment providers must remain visible during checkout.
                 if (mounted) {
                   setState(() {
                     _loading = false;
                     _bootstrapping = false;
                   });
-                }
-                // If we returned from the payment gateway to a success page,
-                // check whether the booking was confirmed.
-                if (WebSessionService.isPaymentGatewayUrl(url)) {
-                  _gatewayOpened = true;
-                  // Inject the payment gateway fix script immediately after the page loads
-                  // so it can intercept the error redirect before gateway JS runs.
-                  try {
-                    await _controller
-                        ?.runJavaScript(WebSessionService.paymentGatewayFixScript);
-                  } catch (_) {}
-                } else {
-                  await _checkPaymentSuccess(url);
                 }
                 return;
               }
@@ -238,7 +221,30 @@ class _BookingScreenState extends State<BookingScreen>
                         sessionStorage.setItem(k, String(v));
                         try { localStorage.setItem(k, String(v)); } catch(e){}
                       });
-
+                      try {
+                        var stor = ${jsonEncode(storage)};
+                        var pData = stor['initialPurchaseData'] || '';
+                        if (!window.__railStorageGuarded) {
+                          window.__railStorageGuarded = true;
+                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                          sessionStorage.getItem = function(k) {
+                            var v = origSGet(k);
+                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                            if (stor[k] !== undefined) return String(stor[k]);
+                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                            return v;
+                          };
+                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                          sessionStorage.removeItem = function(k) {
+                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                              return;
+                            }
+                            return origSRemove(k);
+                          };
+                        }
+                      } catch(e) {}
                     })();
                   ''');
                     await _controller?.runJavaScript(
@@ -258,10 +264,51 @@ class _BookingScreenState extends State<BookingScreen>
                 }
               }
 
+              // Keep storage warm on any Railway page so sessionStorage is preserved
+              if (session.isValid && storage.isNotEmpty) {
+                try {
+                  await _controller?.runJavaScript('''
+                    (function() {
+                      try {
+                        var vals = ${jsonEncode(values)};
+                        for (var k in vals) {
+                          try { localStorage.setItem(k, vals[k]); } catch(e){}
+                          try { sessionStorage.setItem(k, vals[k]); } catch(e){}
+                        }
+                        var stor = ${jsonEncode(storage)};
+                        for (var s in stor) {
+                          try { localStorage.setItem(s, String(stor[s])); } catch(e){}
+                          try { sessionStorage.setItem(s, String(stor[s])); } catch(e){}
+                        }
+                        var pData = stor['initialPurchaseData'] || '';
+                        if (!window.__railStorageGuarded) {
+                          window.__railStorageGuarded = true;
+                          var origSGet = sessionStorage.getItem.bind(sessionStorage);
+                          sessionStorage.getItem = function(k) {
+                            var v = origSGet(k);
+                            if (v !== null && v !== undefined && v !== 'null' && v !== 'undefined') return v;
+                            if (stor[k] !== undefined) return String(stor[k]);
+                            if (k && k.indexOf('initialPurchaseData') === 0) return pData || null;
+                            if (k === 'booking_continued_on') return stor['booking_continued_on'] || String(Date.now() + 300000);
+                            if (k === 'continue_booking_otp_verified') return stor['continue_booking_otp_verified'] || '1';
+                            return v;
+                          };
+                          var origSRemove = sessionStorage.removeItem.bind(sessionStorage);
+                          sessionStorage.removeItem = function(k) {
+                            if (k && (k.indexOf('initialPurchaseData') === 0 || k === 'booking_continued_on' || k === 'continue_booking_otp_verified' || k === 'confirm_booking_otp')) {
+                              return;
+                            }
+                            return origSRemove(k);
+                          };
+                        }
+                      } catch(e) {}
+                    })();
+                  ''');
+                } catch (_) {}
+              }
+
               final uri = Uri.tryParse(url);
-              final isSearchRedirect =
-                  !_gatewayOpened &&
-                  isReadyForPayment &&
+              final isSearchRedirect = isReadyForPayment &&
                   (uri?.path == '/booking/train/search' ||
                       uri?.path == '/' ||
                       uri?.path.isEmpty == true);
@@ -299,12 +346,6 @@ class _BookingScreenState extends State<BookingScreen>
                 );
               }
 
-              if (uri?.path == '/booking/train/trip-info') {
-                await _controller?.runJavaScript(
-                  WebSessionService.checkoutAppearanceScript,
-                );
-              }
-
               // Finished loading target booking / payment page
               if (mounted) {
                 setState(() {
@@ -332,13 +373,10 @@ class _BookingScreenState extends State<BookingScreen>
       await WebSessionService.configurePaymentBrowser(controller);
       if (!mounted) return;
       setState(() => _controller = controller);
-      // Restore once; the website then owns token rotation and reservation
-      // cleanup when it creates the payment order.
       // A blank document on the Railway origin lets us restore storage before
       // the site's router executes. Loading /login first races its redirects.
       await controller.loadHtmlString(
-        '<!doctype html><html><head><meta name="viewport" '
-        'content="width=device-width, initial-scale=1"></head><body></body></html>',
+        '''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><script>(function(){try{var vals=${jsonEncode(values)};for(var k in vals){if(vals.hasOwnProperty(k)){localStorage.setItem(k,vals[k]);try{sessionStorage.setItem(k,vals[k]);}catch(e){}}}var stor=${jsonEncode(storage)};for(var s in stor){if(stor.hasOwnProperty(s)){sessionStorage.setItem(s,String(stor[s]));try{localStorage.setItem(s,String(stor[s]));}catch(e){}}}window.location.replace(${jsonEncode(targetUrl)});}catch(e){window.location.href=${jsonEncode(targetUrl)};}})();</script></head><body></body></html>''',
         baseUrl: 'https://eticket.railway.gov.bd/rail-pro-checkout-bootstrap',
       );
     } catch (error) {
@@ -361,73 +399,20 @@ class _BookingScreenState extends State<BookingScreen>
           _bootstrapping = false;
         });
       }
-    } finally {
-      _initializing = false;
-    }
-  }
-
-  Future<void> _openPaymentBrowser(Uri uri) async {
-    // An order URL must not be opened twice by overlapping navigation events.
-    if (_openingPaymentBrowser || _paymentBrowserOpened) return;
-    _openingPaymentBrowser = true;
-    try {
-      final opened = await launchUrl(uri, mode: LaunchMode.inAppBrowserView);
-      if (!mounted) return;
-      setState(() {
-        _paymentBrowserOpened = opened;
-        _loading = false;
-        _bootstrapping = false;
-        if (!opened) {
-          _failed = true;
-          _failureMessage =
-              'Could not open the payment browser. '
-              'Check payment status before trying again.';
-        }
-      });
-    } catch (_) {
-      if (mounted) {
-        setState(() {
-          _failed = true;
-          _loading = false;
-          _bootstrapping = false;
-          _failureMessage =
-              'Could not open the payment browser. '
-              'Check payment status before trying again.';
-        });
-      }
-    } finally {
-      _openingPaymentBrowser = false;
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && _paymentBrowserOpened) {
-      _checkPaymentSuccess('', checkHistory: true);
     }
   }
 
   Future<void> _openExternalPaymentLink(String raw) async {
     try {
       var target = raw;
-      Uri? browserFallback;
       if (raw.toLowerCase().startsWith('intent:')) {
-        final fallback = RegExp(r'S\.browser_fallback_url=([^;]+)')
-            .firstMatch(raw)
-            ?.group(1);
-        if (fallback != null) {
-          final candidate = Uri.tryParse(Uri.decodeComponent(fallback));
-          if (candidate?.scheme == 'https' || candidate?.scheme == 'http') {
-            browserFallback = candidate;
-          }
-        }
+        final fallback = RegExp(
+          r'S\.browser_fallback_url=([^;]+)',
+        ).firstMatch(raw)?.group(1);
         final scheme = RegExp(r';scheme=([^;]+)').firstMatch(raw)?.group(1);
         if (scheme != null) {
           target = raw
-              .replaceFirst(
-                RegExp(r'^intent:', caseSensitive: false),
-                '$scheme:',
-              )
+              .replaceFirst(RegExp(r'^intent:', caseSensitive: false), scheme + ':')
               .split('#Intent')
               .first;
         } else if (fallback != null) {
@@ -440,16 +425,7 @@ class _BookingScreenState extends State<BookingScreen>
         await _controller?.loadRequest(uri);
         return;
       }
-      var opened = false;
-      try {
-        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      } catch (_) {
-        // Android throws when the provider's app is not installed.
-      }
-      if (!opened && browserFallback != null) {
-        await _controller?.loadRequest(browserFallback);
-        return;
-      }
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
       if (!opened && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -462,595 +438,205 @@ class _BookingScreenState extends State<BookingScreen>
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not open the payment app.')),
+          const SnackBar(
+            content: Text('Could not open the payment app.'),
+          ),
         );
       }
     }
   }
 
   bool _completedHandled = false;
-  Timer? _pollTimer;
 
-  Future<void> _checkPaymentSuccess(
-    String url, {
-    bool checkHistory = false,
-    bool userInitiated = false,
-  }) async {
+  Future<void> _checkPaymentSuccess(String url) async {
     if (_completedHandled || _checkingPayment) return;
-    final uri = Uri.tryParse(url);
-    final path = uri?.path.toLowerCase() ?? '';
-    final query = uri?.query.toLowerCase() ?? '';
-    final hasTrxId = uri?.queryParameters.containsKey('trxid') == true ||
-        uri?.queryParameters.containsKey('transaction_id') == true ||
-        query.contains('trxid=') ||
-        query.contains('transaction_id=');
-    final isStatusCallback = path.contains('status') ||
-        path.contains('success') ||
-        path.contains('confirmation') ||
-        path.contains('ticket-history');
-    final hasError = uri?.queryParameters.containsKey('error') == true ||
-        query.contains('error=') ||
-        query.contains('&error') ||
-        query.contains('cancelled') ||
-        query.contains('cancel');
-
-    if (!checkHistory && !isStatusCallback && !hasTrxId) {
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? '';
+    if (!path.contains('success') &&
+        !path.contains('confirmation') &&
+        !path.contains('ticket-history')) {
       return;
     }
-
-    if (hasError && !hasTrxId) {
-      final rawError = uri?.queryParameters['error'];
-      final errorMsg = (rawError != null && rawError.isNotEmpty)
-          ? Uri.decodeComponent(rawError)
-          : 'Payment was cancelled or could not be completed.';
-      if (mounted) {
-        setState(() {
-          _paymentMessage = errorMsg;
-          _gatewayOpened = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMsg),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-      }
-      return;
-    }
-
     _checkingPayment = true;
-    if (mounted) setState(() => _paymentMessage = null);
     try {
       final before = await _historyBeforeCheckout;
       final session = await AuthSession.load();
       final reservation = await BookingService.pending();
-      if (session == null || reservation == null) {
+      if (before == null ||
+          session == null ||
+          reservation?['status'] != 'readyForPayment') {
         return;
       }
-
-      final bookingIdStr = uri?.queryParameters['booking_id'] ??
-          uri?.queryParameters['order_id'];
-      final bookingId = int.tryParse(bookingIdStr ?? '');
-      final trxId = uri?.queryParameters['trxid'] ??
-          uri?.queryParameters['transaction_id'];
-
-      final tripId = int.tryParse(
-        '${reservation['seatClass']?['trip_id'] ?? reservation['trip_id'] ?? reservation['train']?['trip_id'] ?? ''}',
+      final tripId = int.tryParse('${reservation!['seatClass']['trip_id']}');
+      final tickets = await ApiService.getPurchaseHistory(authSession: session);
+      final oldIds = before.map((ticket) => ticket.orderId).toSet();
+      final paid = tickets.any(
+        (ticket) =>
+            ticket.isConfirmed &&
+            !ticket.isRefunded &&
+            ticket.pnr.isNotEmpty &&
+            ticket.tripId == tripId &&
+            !oldIds.contains(ticket.orderId),
       );
-      final trainName = (reservation['train']?['trip_number']?.toString() ??
-              reservation['train']?['train_name']?.toString() ??
-              '')
-          .trim()
-          .toLowerCase();
-
-      final oldIds = before?.map((ticket) => ticket.orderId).toSet() ?? <int>{};
-
-      // Poll up to 4 attempts to allow Railway API time to finalize ticket generation
-      PurchasedTicket? matchedTicket;
-      final maxAttempts = (hasTrxId || path.contains('status')) ? 4 : 1;
-      for (var attempt = 0; attempt < maxAttempts; attempt++) {
-        if (_completedHandled || !mounted) return;
-        if (attempt > 0) {
-          if (!mounted) return;
-          final completer = Completer<void>();
-          _pollTimer = Timer(const Duration(milliseconds: 1500), () {
-            if (!completer.isCompleted) completer.complete();
-          });
-          await completer.future;
-          _pollTimer = null;
-          if (!mounted) return;
-        }
-
-        try {
-          final tickets = await ApiService.getPurchaseHistory(authSession: session);
-          for (final ticket in tickets) {
-            if (!ticket.isConfirmed || ticket.isRefunded || ticket.pnr.isEmpty) {
-              continue;
-            }
-            // Direct booking_id match from callback query params
-            if (bookingId != null && ticket.orderId == bookingId) {
-              matchedTicket = ticket;
-              break;
-            }
-            // New ticket not in before-history matching trip or train
-            if (!oldIds.contains(ticket.orderId)) {
-              if (tripId != null && tripId > 0 && ticket.tripId == tripId) {
-                matchedTicket = ticket;
-                break;
-              }
-              if (trainName.isNotEmpty &&
-                  ticket.trainName.toLowerCase().contains(trainName)) {
-                matchedTicket = ticket;
-                break;
-              }
-              if (oldIds.isNotEmpty) {
-                matchedTicket = ticket;
-                break;
-              }
-            }
-          }
-          if (matchedTicket != null) break;
-        } catch (_) {}
-      }
-
-      if (matchedTicket == null) {
-        if (mounted) {
-          if (hasTrxId) {
-            setState(
-              () => _paymentMessage =
-                  'Payment received (TrxID: $trxId). Railway is issuing your ticket. Tap "Check payment" in a moment.',
-            );
-          } else if (userInitiated) {
-            setState(
-              () => _paymentMessage =
-                  'Payment is not confirmed yet. Check again after completing payment.',
-            );
-          }
-        }
-        return;
-      }
-
-      reservation['pnr'] = matchedTicket.pnr;
-      reservation['order_id'] = matchedTicket.orderId;
-      if (trxId != null && trxId.isNotEmpty) {
-        reservation['trxid'] = trxId;
-      }
-
+      if (!paid) return;
       final done = await BookingService.completeSuccessfulBooking(
         reservation: reservation,
       );
       _completedHandled = done;
-      if (mounted) setState(() {});
       if (done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text(
-              'Railway confirmed your payment! PNR: ${matchedTicket.pnr}',
+              'Railway confirmed your payment. Ticket ready in Trips.',
             ),
-            backgroundColor: const Color(0xFF059669),
-            duration: const Duration(seconds: 4),
+            backgroundColor: Color(0xFF059669),
           ),
         );
       }
     } catch (_) {
       // Keep the reservation available when confirmation cannot be established.
-      if (mounted && userInitiated) {
-        setState(
-          () => _paymentMessage =
-              'Could not check payment. Please try again shortly.',
-        );
-      }
     } finally {
       _checkingPayment = false;
-      if (mounted) setState(() {});
     }
   }
 
   @override
   void dispose() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    WidgetsBinding.instance.removeObserver(this);
     BookingScreen._openScreens--;
     super.dispose();
   }
 
-  void _retry() {
-    if (_gatewayOpened) {
-      _checkPaymentSuccess('', checkHistory: true, userInitiated: true);
-      return;
-    }
-    setState(() {
-      _failed = false;
-      _checkoutRedirected = false;
-      _loading = true;
-      _bootstrapping = true;
-      _progress = 0;
-    });
-    _initWebView();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final lang = LanguageService.of(context);
-    // LanguageService can also be used without a Provider (notification routes).
-    final ink = AppColors.textPrimary(dark);
-    final muted = AppColors.textSecondary(dark);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
-      backgroundColor: AppColors.scaffoldBg(dark),
-      appBar: AppBar(
-        backgroundColor: AppColors.surface(dark),
-        foregroundColor: ink,
-        elevation: 0,
-        titleSpacing: 0,
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              lang.tr('Secure checkout', 'নিরাপদ চেকআউট'),
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
-            ),
-            Text(
-              lang.tr('Complete your journey', 'আপনার যাত্রা নিশ্চিত করুন'),
-              style: TextStyle(color: muted, fontSize: 11),
-            ),
-          ],
+      backgroundColor: AppColors.scaffoldBg(isDark),
+      appBar: GradientAppBar(
+        title: 'Complete Booking',
+        subtitle: 'Secure payment via Bangladesh Railway',
+        leading: IconButton(
+          icon: const Icon(
+            Icons.arrow_back_ios_new_rounded,
+            color: Colors.white,
+            size: 20,
+          ),
+          onPressed: () => Navigator.pop(context),
         ),
         actions: [
-          PopupMenuButton<String>(
-            tooltip: lang.tr('Checkout options', 'চেকআউটের বিকল্প'),
-            onSelected: (_) => _retry(),
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'refresh',
-                child: Text(
-                  _gatewayOpened
-                      ? lang.tr('Check payment', 'পেমেন্ট যাচাই করুন')
-                      : lang.tr('Reload checkout', 'চেকআউট আবার খুলুন'),
-                ),
-              ),
-            ],
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            onPressed: () {
+              if (_controller != null) {
+                setState(() {
+                  _loading = true;
+                  _failed = false;
+                });
+                _controller!.reload();
+              }
+            },
           ),
         ],
       ),
-      body: SafeArea(
-        top: false,
-        child: Column(
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                color: AppColors.surface(dark),
-                border: Border(
-                  bottom: BorderSide(color: AppColors.cardBorder(dark)),
+      body: Column(
+        children: [
+          if (_checkoutRedirected)
+            MaterialBanner(
+              content: const Text(
+                'Railway returned to search. Your reservation is still saved. Retry checkout; if it has expired, reserve seats again.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _checkoutRedirected = false;
+                      _bootstrapping = true;
+                      _loading = true;
+                      _failed = false;
+                    });
+                    _initWebView();
+                  },
+                  child: const Text('Retry checkout'),
                 ),
-              ),
-              padding: const EdgeInsets.fromLTRB(20, 12, 20, 14),
-              child: Row(
-                children: [
-                  _step('1', lang.tr('Review', 'তথ্য'), true, dark),
-                  Expanded(
-                    child: Divider(
-                      indent: 12,
-                      endIndent: 12,
-                      color: AppColors.cardBorder(dark),
-                    ),
-                  ),
-                  _step(
-                    '2',
-                    lang.tr('Payment', 'পেমেন্ট'),
-                    _gatewayOpened,
-                    dark,
-                  ),
-                  Expanded(
-                    child: Divider(
-                      indent: 12,
-                      endIndent: 12,
-                      color: AppColors.cardBorder(dark),
-                    ),
-                  ),
-                  _step(
-                    '3',
-                    lang.tr('Ticket', 'টিকিট'),
-                    _completedHandled,
-                    dark,
-                  ),
-                ],
-              ),
+              ],
             ),
-            if (!_paymentBrowserOpened && !_failed)
-              Container(
-                color: AppColors.surface(dark),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 20,
-                  vertical: 10,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.lock_outline_rounded,
-                      color: AppColors.primaryDark,
-                      size: 14,
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        _host == 'eticket.railway.gov.bd'
-                            ? 'Bangladesh Railway'
-                            : _host,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: muted, fontSize: 12),
-                      ),
-                    ),
-                    Text(
-                      lang.tr('OFFICIAL CHECKOUT', 'অফিশিয়াল চেকআউট'),
-                      style: TextStyle(
-                        color: muted,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: .7,
-                      ),
-                    ),
-                  ],
-                ),
+          // Progress bar
+          if (_loading)
+            LinearProgressIndicator(
+              backgroundColor: AppColors.primary.withValues(alpha: 0.1),
+              valueColor: const AlwaysStoppedAnimation<Color>(
+                AppColors.primary,
               ),
-            if (_loading && !_paymentBrowserOpened && !_failed)
-              LinearProgressIndicator(
-                value: _progress == 0 ? null : _progress / 100,
-                minHeight: 2,
-                color: AppColors.primaryDark,
-                backgroundColor: AppColors.cardBorder(dark),
-              ),
-            if (_checkoutRedirected)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: MaterialBanner(
-                  content: Text(
-                    lang.tr(
-                      'Railway returned to search. Reopen checkout if your seat hold is still active.',
-                      'রেলওয়ে অনুসন্ধান পাতায় ফিরিয়েছে। আসন সংরক্ষিত থাকলে চেকআউট আবার খুলুন।',
-                    ),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: _retry,
-                      child: Text(lang.tr('Retry checkout', 'আবার খুলুন')),
-                    ),
-                  ],
-                ),
-              ),
-            Expanded(
-              child: Stack(
-                children: [
-                  if (_controller != null)
-                    Offstage(
-                      offstage:
-                          _paymentBrowserOpened ||
-                          _failed ||
-                          _bootstrapping ||
-                          _completedHandled,
-                      child: WebViewWidget(controller: _controller!),
-                    ),
-                  if (_completedHandled)
-                    _successPanel(dark, lang)
-                  else if (_paymentBrowserOpened)
-                    _paymentReturn(dark, lang)
-                  else if (_failed)
-                    _statusPanel(
-                      dark: dark,
-                      icon: Icons.wifi_off_rounded,
-                      title: lang.tr('Let’s reconnect.', 'আবার সংযোগ করুন।'),
-                      description: _failureMessage,
-                      action: lang.tr(
-                        _gatewayOpened ? 'Check payment' : 'Try Again',
-                        _gatewayOpened
-                            ? 'পেমেন্ট যাচাই করুন'
-                            : 'আবার চেষ্টা করুন',
-                      ),
-                      onPressed: _retry,
-                    )
-                  else if (_bootstrapping || _controller == null)
-                    _statusPanel(
-                      dark: dark,
-                      icon: Icons.lock_outline_rounded,
-                      title: lang.tr(
-                        'Preparing your checkout',
-                        'চেকআউট প্রস্তুত হচ্ছে',
-                      ),
-                      description: lang.tr(
-                        'Connecting your reservation to Bangladesh Railway…',
-                        'আপনার সংরক্ষণ বাংলাদেশ রেলওয়ের সাথে যুক্ত হচ্ছে…',
-                      ),
-                      loading: true,
-                    ),
-                ],
-              ),
+              minHeight: 3,
             ),
-          ],
-        ),
+          Expanded(
+            child: _failed || _controller == null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.wifi_off_rounded,
+                            size: 72,
+                            color: AppColors.error.withValues(alpha: 0.7),
+                          ),
+                          const SizedBox(height: 20),
+                          Text(
+                            'Unable to load page',
+                            style: TextStyle(
+                              color: AppColors.textPrimary(isDark),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            _failureMessage,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppColors.textSecondary(isDark),
+                              fontSize: 13,
+                            ),
+                          ),
+                          const SizedBox(height: 28),
+                          PrimaryButton(
+                            label: 'Try Again',
+                            icon: Icons.refresh_rounded,
+                            onPressed: () {
+                              setState(() {
+                                _failed = false;
+                                _loading = true;
+                                _bootstrapping = true;
+                              });
+                              _initWebView();
+                            },
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                : Stack(
+                    children: [
+                      WebViewWidget(controller: _controller!),
+                      if (_loading || _bootstrapping)
+                        Positioned.fill(
+                          child: Container(
+                            color: isDark
+                                ? const Color(0xFF09090B)
+                                : Colors.white,
+                            child: const FancyTrainLoader(
+                              message: 'Opening secure checkout…',
+                              subMessage: '',
+                              stage: JourneyAnimationStage.payment,
+                              showCard: true,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
-
-  Widget _step(String number, String label, bool active, bool dark) => Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Container(
-        width: 24,
-        height: 24,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: active ? AppColors.primaryDark : AppColors.cardBorder(dark),
-          shape: BoxShape.circle,
-        ),
-        child: Text(
-          number,
-          style: TextStyle(
-            color: active ? Colors.white : AppColors.textSecondary(dark),
-            fontSize: 11,
-            fontWeight: FontWeight.w800,
-          ),
-        ),
-      ),
-      const SizedBox(width: 6),
-      Text(
-        label,
-        style: TextStyle(
-          color: active
-              ? AppColors.textPrimary(dark)
-              : AppColors.textMuted(dark),
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    ],
-  );
-
-  Widget _successPanel(bool dark, LanguageService lang) => _statusPanel(
-    dark: dark,
-    icon: Icons.check_circle_outline_rounded,
-    title: lang.tr('Your ticket is confirmed!', 'আপনার টিকিট নিশ্চিত হয়েছে!'),
-    description: lang.tr(
-      'Payment was successful and Railway has confirmed your ticket. You can view your ticket in Trips.',
-      'পেমেন্ট সফল হয়েছে এবং রেলওয়ে আপনার টিকিট নিশ্চিত করেছে। ট্রিপস পাতায় আপনার টিকিট দেখুন।',
-    ),
-    action: lang.tr('View Ticket in Trips', 'ট্রিপসে টিকিট দেখুন'),
-    onPressed: () {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(
-          builder: (_) => const AppShell(initialTab: AppShell.tabTrips),
-        ),
-        (route) => false,
-      );
-    },
-  );
-
-  Widget _paymentReturn(bool dark, LanguageService lang) => _statusPanel(
-    dark: dark,
-    icon: _completedHandled
-        ? Icons.check_circle_outline_rounded
-        : Icons.open_in_browser_rounded,
-    title: _completedHandled
-        ? lang.tr('Your ticket is confirmed.', 'আপনার টিকিট নিশ্চিত হয়েছে।')
-        : lang.tr('Finish in your browser.', 'ব্রাউজারে পেমেন্ট শেষ করুন।'),
-    description: _completedHandled
-        ? lang.tr(
-            'Your ticket is ready in Trips.',
-            'ট্রিপস থেকে আপনার টিকিট দেখুন।',
-          )
-        : lang.tr(
-            'Complete payment in the secure browser tab, then return here. We’ll confirm your ticket with Railway.',
-            'নিরাপদ ব্রাউজার ট্যাবে পেমেন্ট শেষ করে এখানে ফিরুন। আমরা রেলওয়ে থেকে আপনার টিকিট যাচাই করব।',
-          ),
-    action: _completedHandled
-        ? null
-        : lang.tr('Check payment', 'পেমেন্ট যাচাই করুন'),
-    onPressed: () =>
-        _checkPaymentSuccess('', checkHistory: true, userInitiated: true),
-    loading: _checkingPayment,
-    message: _paymentMessage,
-  );
-
-  Widget _statusPanel({
-    required bool dark,
-    required IconData icon,
-    required String title,
-    required String description,
-    String? action,
-    VoidCallback? onPressed,
-    bool loading = false,
-    String? message,
-  }) => Center(
-    child: SingleChildScrollView(
-      padding: const EdgeInsets.all(28),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 400),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                color: AppColors.primary.withValues(alpha: .12),
-                borderRadius: BorderRadius.circular(26),
-              ),
-              child: Icon(icon, size: 36, color: AppColors.primaryDark),
-            ),
-            const SizedBox(height: 26),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppColors.textPrimary(dark),
-                fontSize: 26,
-                height: 1.15,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -.6,
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              description,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: AppColors.textSecondary(dark),
-                fontSize: 14,
-                height: 1.6,
-              ),
-            ),
-            if (message != null) ...[
-              const SizedBox(height: 16),
-              Text(
-                message,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: AppColors.textSecondary(dark),
-                  fontSize: 13,
-                ),
-              ),
-            ],
-            const SizedBox(height: 26),
-            if (action != null)
-              SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: FilledButton(
-                  onPressed: loading ? null : onPressed,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.primaryDark,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                  ),
-                  child: loading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : Text(
-                          action,
-                          style: const TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                ),
-              )
-            else if (loading)
-              const SizedBox(
-                width: 24,
-                height: 24,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppColors.primaryDark,
-                ),
-              ),
-          ],
-        ),
-      ),
-    ),
-  );
 }

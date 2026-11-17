@@ -429,10 +429,10 @@ class ApiService {
         'Accept-Language': 'en-US,en;q=0.9',
         'Origin': 'https://eticket.railway.gov.bd',
         'Referer': 'https://eticket.railway.gov.bd/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'X-Requested-With': 'XMLHttpRequest',
         'sec-ch-ua':
-            '"Not-A.Brand";v="99", "Google Chrome";v="157", "Chromium";v="157"',
+            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
         'sec-ch-ua-platform': '"Windows"',
         'sec-ch-ua-mobile': '?0',
         'Sec-Fetch-Site': 'same-site',
@@ -1107,10 +1107,10 @@ class ApiService {
         'Content-Type': 'application/json',
         'Origin': 'https://eticket.railway.gov.bd',
         'Referer': 'https://eticket.railway.gov.bd/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36',
         'X-Requested-With': 'XMLHttpRequest',
         'sec-ch-ua':
-            '"Not-A.Brand";v="99", "Google Chrome";v="157", "Chromium";v="157"',
+            '"Chromium";v="154", "Google Chrome";v="154", "Not A(Brand";v="99"',
         'sec-ch-ua-platform': '"Windows"',
         'sec-ch-ua-mobile': '?0',
       };
@@ -1165,10 +1165,10 @@ class ApiService {
         'Accept': 'application/pdf, application/json, */*',
         'Origin': 'https://eticket.railway.gov.bd',
         'Referer': 'https://eticket.railway.gov.bd/',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'X-Requested-With': 'XMLHttpRequest',
         'sec-ch-ua':
-            '"Not-A.Brand";v="99", "Google Chrome";v="157", "Chromium";v="157"',
+            '"Chromium";v="120", "Google Chrome";v="120", "Not-A.Brand";v="99"',
         'sec-ch-ua-platform': '"Windows"',
         'sec-ch-ua-mobile': '?0',
       };

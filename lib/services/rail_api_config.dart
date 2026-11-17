@@ -17,8 +17,6 @@ class RailApiConfig {
     'download_ticket': '/trips/download-ticket/{order_id}',
     'handshake': '/handshake',
     'reserve_seat': '/bookings/reserve-seat',
-    'release_seat': '/bookings/release-seat',
-    'bulk_release_seat': '/bookings/bulk-release-seat',
     'passenger_details': '/bookings/passenger-details',
     'verify_otp': '/bookings/verify-otp',
     'resend_otp': '/bookings/resend-otp',
